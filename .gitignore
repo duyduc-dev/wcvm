@@ -1,0 +1,9 @@
+node_modules
+dist
+.turbo
+.claude/settings.local.json
+examples/playground/public
+examples/playground/test-results
+examples/playground/playwright-report
+apps/docs/public/dwc-preview-sw.js
+apps/studio/public/dwc-preview-sw.js

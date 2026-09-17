@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "composite": false,
+    // Vendored Node builtins under runtime/node/ are plain, untyped JS by
+    // design (real Node lib/ source, kept verbatim; see runtime/node/loader.ts).
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": [
+    "src"
+  ]
+}
