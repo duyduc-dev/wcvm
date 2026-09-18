@@ -6,10 +6,15 @@ export default defineConfig([
     format: ["esm"],
     dts: true,
     sourcemap: true,
-    clean: true,
+    // No `clean` here: the configs build in parallel, so this one's clean
+    // can delete the worker output the other just wrote. The `build` script
+    // clears dist/ before tsup starts instead.
+    clean: false,
   },
   {
-    entry: {},
+    entry: {
+      "workers/kernel/worker": "src/workers/kernel/worker.ts",
+    },
     format: ["esm"],
     sourcemap: true,
     clean: false,
