@@ -54,7 +54,7 @@ describe("process handlers", () => {
       {
         type: "process:exit",
         processId: 5,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: "Kernel isn't ready",
       },
     ]);

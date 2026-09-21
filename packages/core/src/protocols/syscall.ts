@@ -51,6 +51,7 @@ export const STATE_RESPONSE_ERR = 3;
 
 export const FLAG_NONE = 0;
 export const FLAG_RECURSIVE = 1;
+export const FLAG_NO_FOLLOW = 2;
 
 export const ERR_MSG_SIZE = "EMSGSIZE";
 
@@ -284,6 +285,10 @@ export const respondOk = (
 //   OP_FD_WRITE   u32 fd, f64 pos, bytes        -> u32 written (pos < 0: use cursor)
 //   OP_FSTAT      u32 fd                        -> JSON IStat
 //   OP_FTRUNCATE  u32 fd, f64 length            -> empty
+//   OP_LINK       existing, path                -> empty
+//   OP_UTIMES     path, f64 atimeMs, f64 mtimeMs [FLAG_NO_FOLLOW] -> empty
+//   OP_FUTIMES    u32 fd, f64 atimeMs, f64 mtimeMs -> empty
+//   OP_READDIR_KINDS path                       -> JSON [name, "file"|"dir"|"symlink"][]
 export const OP_READ_FILE = 1;
 export const OP_WRITE_FILE = 2;
 export const OP_EXISTS = 3;
@@ -305,6 +310,10 @@ export const OP_FTRUNCATE = 18;
 export const OP_REALPATH = 19;
 export const OP_RM = 20;
 export const OP_CHMOD = 21;
+export const OP_LINK = 22;
+export const OP_UTIMES = 23;
+export const OP_FUTIMES = 24;
+export const OP_READDIR_KINDS = 25;
 
 export const FS_OPCODE_MAX = 63;
 export const KERNEL_OPCODE_MIN = 64;

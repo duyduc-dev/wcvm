@@ -44,12 +44,12 @@ describe("process api", () => {
     emit({ type: "process:stdout", processId: 1, chunk: bytes("a") });
     emit({ type: "process:stderr", processId: 1, chunk: bytes("E") });
     emit({ type: "process:stdout", processId: 1, chunk: bytes("b") });
-    emit({ type: "process:exit", processId: 1, errorCode: 0 });
+    emit({ type: "process:exit", processId: 1, exitCode: 0 });
 
     expect(await text(proc.stdout)).toBe("ab");
     expect(await text(proc.stderr)).toBe("E");
     expect(await proc.exit).toEqual({
-      errorCode: 0,
+      exitCode: 0,
       errorMessage: undefined,
       signal: undefined,
     });
@@ -59,10 +59,10 @@ describe("process api", () => {
     const { bridge, emit } = setup();
     const proc = createProcessApi(bridge, 1, "x", []);
     emit({ type: "process:stdout", processId: 2, chunk: bytes("nope") });
-    emit({ type: "process:exit", processId: 2, errorCode: 9 });
-    emit({ type: "process:exit", processId: 1, errorCode: 0 });
+    emit({ type: "process:exit", processId: 2, exitCode: 9 });
+    emit({ type: "process:exit", processId: 1, exitCode: 0 });
     expect(await text(proc.stdout)).toBe("");
-    expect((await proc.exit).errorCode).toBe(0);
+    expect((await proc.exit).exitCode).toBe(0);
   });
 
   it("reports the signal and message from the kernel", async () => {
@@ -71,12 +71,12 @@ describe("process api", () => {
     emit({
       type: "process:exit",
       processId: 1,
-      errorCode: 143,
+      exitCode: 143,
       signal: "SIGTERM",
       errorMessage: "m",
     });
     expect(await proc.exit).toEqual({
-      errorCode: 143,
+      exitCode: 143,
       signal: "SIGTERM",
       errorMessage: "m",
     });
@@ -86,7 +86,7 @@ describe("process api", () => {
     const { bridge, emit, listenerCount } = setup();
     const proc = createProcessApi(bridge, 1, "x", []);
     expect(listenerCount()).toBe(3);
-    emit({ type: "process:exit", processId: 1, errorCode: 0 });
+    emit({ type: "process:exit", processId: 1, exitCode: 0 });
     await proc.exit;
     expect(listenerCount()).toBe(0);
   });

@@ -15,7 +15,7 @@ const withKernel = (
       onPostMessage({
         type: "process:exit",
         processId: data.processId,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: "Kernel isn't ready",
       });
       return;

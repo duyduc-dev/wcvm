@@ -39,8 +39,10 @@ interface IInodeBase {
   ino: number;
   mode: number;
   nlink: number;
+  atimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  birthtimeMs: number;
 }
 interface IFileInode extends IInodeBase {
   kind: "file";
@@ -64,8 +66,10 @@ export interface IStat {
   mode: number;
   size: number;
   nlink: number;
+  atimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  birthtimeMs: number;
 }
 
 interface IFdEntry {
@@ -109,7 +113,7 @@ export class Vfs {
 
   private stamp() {
     const now = Date.now();
-    return { mtimeMs: now, ctimeMs: now };
+    return { atimeMs: now, mtimeMs: now, ctimeMs: now, birthtimeMs: now };
   }
 
   private newDir(mode: number): IDirInode {
@@ -152,7 +156,7 @@ export class Vfs {
     node.ctimeMs = now;
   }
 
-  private link(parent: IDirInode, name: string, node: Inode) {
+  private link_(parent: IDirInode, name: string, node: Inode) {
     parent.entries.set(name, node);
     this.touch(parent);
   }
@@ -264,8 +268,10 @@ export class Vfs {
       mode: typeBits | node.mode,
       size: sizeOf(node),
       nlink: node.nlink,
+      atimeMs: node.atimeMs,
       mtimeMs: node.mtimeMs,
       ctimeMs: node.ctimeMs,
+      birthtimeMs: node.birthtimeMs,
     };
   }
 
@@ -300,7 +306,7 @@ export class Vfs {
     if (!recursive) {
       const { parent, name, node } = this.walk(path, false);
       if (node || !parent) throw new VfsError("EEXIST", path);
-      this.link(parent, name, this.newDir(mode));
+      this.link_(parent, name, this.newDir(mode));
       return;
     }
 
@@ -316,7 +322,7 @@ export class Vfs {
         }
         return;
       }
-      this.link(parent as IDirInode, name, this.newDir(mode));
+      this.link_(parent as IDirInode, name, this.newDir(mode));
     });
   }
 
@@ -343,7 +349,7 @@ export class Vfs {
     if (!parent) throw new VfsError("EISDIR", path);
     const file = this.newFile(options.mode ?? 0o644);
     this.putBytes(file, 0, data);
-    this.link(parent, name, file);
+    this.link_(parent, name, file);
   }
 
   unlink(path: string) {
@@ -397,7 +403,7 @@ export class Vfs {
 
     source.parent.entries.delete(source.name);
     this.touch(source.parent);
-    this.link(target.parent, target.name, source.node);
+    this.link_(target.parent, target.name, source.node);
     source.node.ctimeMs = Date.now();
   }
 
@@ -413,7 +419,7 @@ export class Vfs {
   symlink(target: string, path: string) {
     const { parent, name, node } = this.walk(path, false);
     if (node || !parent) throw new VfsError("EEXIST", path);
-    this.link(parent, name, this.newSymlink(target));
+    this.link_(parent, name, this.newSymlink(target));
   }
 
   readlink(path: string): string {
@@ -426,6 +432,38 @@ export class Vfs {
     const node = this.lookup(path, true);
     node.mode = mode & 0o7777;
     node.ctimeMs = Date.now();
+  }
+
+  /** Hard link: `path` becomes another name for the same file. Directories cannot be linked. */
+  link(existing: string, path: string) {
+    const source = this.lookup(existing, false);
+    if (source.kind === "dir") throw new VfsError("EPERM", existing);
+    const { parent, name, node } = this.walk(path, false);
+    if (node || !parent) throw new VfsError("EEXIST", path);
+    source.nlink++;
+    this.link_(parent, name, source);
+  }
+
+  /** Sets access and modification times (milliseconds since the epoch). */
+  utimes(path: string, atimeMs: number, mtimeMs: number, followLink = true) {
+    this.setTimes(this.lookup(path, followLink), atimeMs, mtimeMs);
+  }
+
+  futimes(fd: number, atimeMs: number, mtimeMs: number) {
+    this.setTimes(this.entry(fd).node, atimeMs, mtimeMs);
+  }
+
+  private setTimes(node: Inode, atimeMs: number, mtimeMs: number) {
+    node.atimeMs = atimeMs;
+    node.mtimeMs = mtimeMs;
+    node.ctimeMs = Date.now();
+  }
+
+  /** Like readdir, but each name comes with its kind, in one call. */
+  readdirKinds(path: string): Array<[string, NodeKind]> {
+    return Array.from(this.lookupDir(path).entries)
+      .map(([name, node]): [string, NodeKind] => [name, node.kind])
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
 
   // ---- file bytes ----------------------------------------------------------
@@ -469,7 +507,7 @@ export class Vfs {
       if (!(flags & O_CREAT)) throw new VfsError("ENOENT", path);
       if (!parent) throw new VfsError("EISDIR", path);
       const file = this.newFile(mode & 0o7777);
-      this.link(parent, name, file);
+      this.link_(parent, name, file);
       target = file;
     }
 

@@ -1,4 +1,5 @@
 import { createInternalBinding } from "./bindings";
+import { createLoopbackFs } from "../testing/loopbackFs";
 import { EventLoop } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
 import { createPrimordials } from "./primordials";
@@ -23,14 +24,17 @@ export const createTestLoader = (processOverrides: Record<string, unknown> = {})
   };
   let loader: ReturnType<typeof createBuiltinLoader>;
   const loop = new EventLoop();
+  const { fs, vfs } = createLoopbackFs();
   const internalBinding = createInternalBinding({
     requireBuiltin: (id) => loader.requireBuiltin(id),
     loop,
+    fs,
+    process,
   });
   loader = createBuiltinLoader({
     process,
     internalBinding,
     primordials: createPrimordials(),
   });
-  return { loader, process, warnings, loop, require: loader.requireBuiltin };
+  return { loader, process, warnings, loop, fs, vfs, require: loader.requireBuiltin };
 };

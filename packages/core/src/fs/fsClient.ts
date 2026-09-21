@@ -10,6 +10,7 @@ import {
   DATA_BYTES,
   ERR_MSG_SIZE,
   FD_CHUNK,
+  FLAG_NO_FOLLOW,
   FLAG_NONE,
   FLAG_RECURSIVE,
   OP_CHMOD,
@@ -19,10 +20,13 @@ import {
   OP_FD_WRITE,
   OP_FSTAT,
   OP_FTRUNCATE,
+  OP_FUTIMES,
+  OP_LINK,
   OP_LSTAT,
   OP_MKDIR,
   OP_OPEN,
   OP_READDIR,
+  OP_READDIR_KINDS,
   OP_READLINK,
   OP_READ_FILE,
   OP_REALPATH,
@@ -32,6 +36,7 @@ import {
   OP_STAT,
   OP_SYMLINK,
   OP_UNLINK,
+  OP_UTIMES,
   OP_WRITE_FILE,
   SyscallError,
   bytesToU32,
@@ -54,8 +59,10 @@ export interface IFsStat {
   mode: number;
   size: number;
   nlink: number;
+  atimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  birthtimeMs: number;
 }
 
 export interface IFsClient {
@@ -63,6 +70,10 @@ export interface IFsClient {
   writeFile(path: string, data: Uint8Array | string): void;
   exists(path: string): boolean;
   readdir(path: string): string[];
+  readdirKinds(path: string): Array<[string, IFsStat["kind"]]>;
+  link(existing: string, path: string): void;
+  utimes(path: string, atimeMs: number, mtimeMs: number, options?: { noFollow?: boolean }): void;
+  futimes(fd: number, atimeMs: number, mtimeMs: number): void;
   mkdir(path: string, options?: { recursive?: boolean }): void;
   stat(path: string): IFsStat;
   lstat(path: string): IFsStat;
@@ -95,11 +106,31 @@ export const createFsClient = ({ call }: ISyscallClient): IFsClient => {
   };
   const fstat = (fd: number): IFsStat =>
     parse(call(OP_FSTAT, encodeRequest([u32ToBytes(fd)])));
-  const read = (fd: number, length: number, position = -1): Uint8Array =>
+  const readOnce = (fd: number, length: number, position: number): Uint8Array =>
     call(
       OP_FD_READ,
       encodeRequest([u32ToBytes(fd), u32ToBytes(length), f64ToBytes(position)]),
     );
+  // A read larger than the syscall window is split; `position < 0` keeps using the cursor.
+  const read = (fd: number, length: number, position = -1): Uint8Array => {
+    if (length <= FD_CHUNK) return readOnce(fd, length, position);
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    while (total < length) {
+      const wanted = Math.min(FD_CHUNK, length - total);
+      const part = readOnce(fd, wanted, position < 0 ? -1 : position + total);
+      parts.push(part);
+      total += part.length;
+      if (part.length < wanted) break; // short read: end of file
+    }
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of parts) {
+      out.set(part, offset);
+      offset += part.length;
+    }
+    return out;
+  };
   const write = (fd: number, data: Uint8Array, position = -1): number =>
     bytesToU32(
       call(
@@ -161,6 +192,22 @@ export const createFsClient = ({ call }: ISyscallClient): IFsClient => {
     },
     exists: (path) => call(OP_EXISTS, encodeRequest([b(path)]))[0] === 1,
     readdir: (path) => parse(call(OP_READDIR, encodeRequest([b(path)]))),
+    readdirKinds: (path) => parse(call(OP_READDIR_KINDS, encodeRequest([b(path)]))),
+    link: (existing, path) => {
+      call(OP_LINK, encodeRequest([b(existing), b(path)]));
+    },
+    utimes: (path, atimeMs, mtimeMs, options) => {
+      call(
+        OP_UTIMES,
+        encodeRequest(
+          [b(path), f64ToBytes(atimeMs), f64ToBytes(mtimeMs)],
+          options?.noFollow ? FLAG_NO_FOLLOW : FLAG_NONE,
+        ),
+      );
+    },
+    futimes: (fd, atimeMs, mtimeMs) => {
+      call(OP_FUTIMES, encodeRequest([u32ToBytes(fd), f64ToBytes(atimeMs), f64ToBytes(mtimeMs)]));
+    },
     mkdir: (path, options) => {
       call(
         OP_MKDIR,

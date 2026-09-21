@@ -34,9 +34,16 @@ const encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
+/**
+ * A real copy. `bytes.slice()` is not: on a Node Buffer (which callers here often
+ * pass) slice() returns a VIEW of the same memory, Buffer overriding the
+ * Uint8Array behaviour, so go through the prototype explicitly.
+ */
+export const copyBytes = (bytes: Bytes): Bytes => Uint8Array.prototype.slice.call(bytes);
+
 // Browsers reject TextDecoder on views over SharedArrayBuffer.
 const unshared = (bytes: Bytes): Bytes =>
-  bytes.buffer instanceof SharedArrayBuffer ? bytes.slice() : bytes;
+  bytes.buffer instanceof SharedArrayBuffer ? copyBytes(bytes) : bytes;
 
 const CHUNK = 8192;
 const fromCharCodes = (codes: ArrayLike<number>): string => {

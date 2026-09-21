@@ -1,11 +1,14 @@
 import { WcvmError } from "../../errors/WcvmError";
+import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
 import { createConstantsBinding } from "./constants";
+import { createFsBinding, createFsDirBinding, createFsEventWrapBinding } from "./fs";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
 import {
   createAsyncContextFrameBinding,
   createConfigBinding,
+  createCredentialsBinding,
   createDiagnosticsChannelBinding,
   createErrorsBinding,
   createMessagingBinding,
@@ -13,11 +16,12 @@ import {
   createOptionsBinding,
   createOsBinding,
   createPerformanceBinding,
+  createPermissionBinding,
   createProfilerBinding,
-  createStringDecoderBinding,
   createTraceEventsBinding,
   createUvBinding,
 } from "./misc";
+import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
 import { createSymbolsBinding, createUtilBinding } from "./util";
 
@@ -25,6 +29,12 @@ interface IBindingContext {
   /** For bindings that call back into Node's own modules (defineLazyProperties). */
   requireBuiltin(id: string): any;
   loop: EventLoop;
+  /** The process object, for bindings that read its environment. */
+  process?: any;
+  /** The sync fs client; without it the `fs` binding is unavailable. */
+  fs?: IFsClient;
+  /** Where fd 1 / fd 2 writes go. */
+  writeStdio?: (fd: 1 | 2, chunk: Uint8Array) => void;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -37,10 +47,15 @@ const factories: Record<string, BindingFactory> = {
   constants: () => createConstantsBinding(),
   diagnostics_channel: () => createDiagnosticsChannelBinding(),
   errors: () => createErrorsBinding(),
+  fs: (ctx) => createFsBindingFor(ctx),
+  fs_dir: (ctx) => createFsDirBinding(createFsBindingFor(ctx)),
+  fs_event_wrap: () => createFsEventWrapBinding(),
   messaging: () => createMessagingBinding(),
   mksnapshot: () => createMksnapshotBinding(),
   options: () => createOptionsBinding(),
-  os: () => createOsBinding(),
+  credentials: (ctx) => createCredentialsBinding({ env: () => ctx.process?.env ?? {} }),
+  os: (ctx) => createOsBinding({ env: () => ctx.process?.env ?? {} }),
+  permission: () => createPermissionBinding(),
   performance: () => createPerformanceBinding(),
   profiler: () => createProfilerBinding(),
   string_decoder: () => createStringDecoderBinding(),
@@ -51,6 +66,28 @@ const factories: Record<string, BindingFactory> = {
   types: () => createTypesBinding(),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),
+};
+
+// One fs binding per realm: fs and fs_dir must share file handles and state.
+const fsBindings = new WeakMap<IBindingContext, ReturnType<typeof createFsBinding>>();
+const createFsBindingFor = (ctx: IBindingContext) => {
+  let binding = fsBindings.get(ctx);
+  if (!binding) {
+    if (!ctx.fs) {
+      throw new WcvmError("ERR_NOT_IMPLEMENTED", "internalBinding('fs') needs a filesystem", {
+        code: "ERR_INTERNAL_BINDING_NOT_IMPLEMENTED",
+      });
+    }
+    binding = createFsBinding({
+      fs: ctx.fs,
+      cwd: () => ctx.process?.cwd?.() ?? "/",
+      loop: ctx.loop,
+      requireBuiltin: ctx.requireBuiltin,
+      writeStdio: ctx.writeStdio ?? (() => {}),
+    });
+    fsBindings.set(ctx, binding);
+  }
+  return binding;
 };
 
 /**

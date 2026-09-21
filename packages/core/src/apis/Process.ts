@@ -43,7 +43,7 @@ const createProcessApi = (
         controllers.stdout?.close();
         controllers.stderr?.close();
         resolve({
-          errorCode: e.errorCode as number,
+          exitCode: e.exitCode as number,
           errorMessage: e.errorMessage as string | undefined,
           signal: e.signal as IProcessExit["signal"],
         });

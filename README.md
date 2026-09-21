@@ -5,8 +5,8 @@ Web Workers, with no backend. Inspired by
 [StackBlitz WebContainers](https://webcontainers.io/).
 
 > **Status: early rewrite.** A virtual filesystem, real processes, and a Node.js
-> runtime (`node script.js`, `require`, timers, streams, console) work; `require("fs")`,
-> a shell and networking do not exist yet. See
+> runtime (`node script.js`, `require`, `fs`, timers, streams, console) work; ESM, a
+> shell and networking do not exist yet. See
 > [`PLAN.md`](PLAN.md) for the roadmap. [`PROGRESS.md`](PROGRESS.md) is the
 > archive of the earlier, much larger `duckwc` implementation.
 
@@ -25,7 +25,7 @@ await wc.fs.writeFile("/work/hello.txt", "hi from the host\n");
 
 const proc = await wc.spawn("cat", ["hello.txt"], { cwd: "/work" });
 console.log(await new Response(proc.stdout).text()); // "hi from the host\n"
-const { errorCode } = await proc.exit;                // 0
+const { exitCode } = await proc.exit;                // 0
 
 const sleeper = await wc.spawn("sleep", ["60"]);
 sleeper.kill();                                       // exit status 143 (SIGTERM)

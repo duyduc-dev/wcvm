@@ -75,7 +75,7 @@ describe("process table", () => {
     expect(t.events.at(-1)).toEqual({
       type: "process:exit",
       processId: 1,
-      errorCode: 3,
+      exitCode: 3,
     });
     expect(worker.terminated).toBe(true);
     expect(t.detach).toHaveBeenCalledWith(1);
@@ -95,8 +95,8 @@ describe("process table", () => {
 
     const exits = t.events.filter((e) => e.type === "process:exit");
     expect(exits).toEqual([
-      { type: "process:exit", processId: 1, errorCode: 143, signal: "SIGTERM" },
-      { type: "process:exit", processId: 2, errorCode: 137, signal: "SIGKILL" },
+      { type: "process:exit", processId: 1, exitCode: 143, signal: "SIGTERM" },
+      { type: "process:exit", processId: 2, exitCode: 137, signal: "SIGKILL" },
     ]);
     expect(t.workers.every((w) => w.terminated)).toBe(true);
   });
@@ -104,7 +104,7 @@ describe("process table", () => {
   it("treats an unknown signal name as SIGTERM", () => {
     t.table.spawn({ processId: 1, command: "x", args: [] });
     t.table.kill(1, "SIGWHATEVER");
-    expect(t.events.at(-1)).toMatchObject({ errorCode: 143, signal: "SIGTERM" });
+    expect(t.events.at(-1)).toMatchObject({ exitCode: 143, signal: "SIGTERM" });
   });
 
   it("kill on an unknown or already-exited process does nothing", () => {
@@ -121,7 +121,7 @@ describe("process table", () => {
     expect(t.events.at(-1)).toEqual({
       type: "process:exit",
       processId: 1,
-      errorCode: 1,
+      exitCode: 1,
       errorMessage: "Process worker error: out of memory",
     });
     expect(t.detach).toHaveBeenCalledWith(1);
@@ -135,7 +135,7 @@ describe("process table", () => {
       {
         type: "process:exit",
         processId: 1,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: "Process 1 already exists",
       },
     ]);
@@ -158,7 +158,7 @@ describe("process table", () => {
       {
         type: "process:exit",
         processId: 1,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: "Failed to start process: no workers left",
       },
     ]);

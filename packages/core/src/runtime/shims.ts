@@ -127,7 +127,23 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
   };
 
+  /** Node's Blob is native (blob binding); the platform's is the same standard. */
+  const internalBlob: BuiltinFactory = (_exports, _require, module) => {
+    const BlobCtor = globalThis.Blob;
+    module.exports = {
+      Blob: BlobCtor,
+      ClonedBlob: undefined,
+      isBlob: (value: unknown) => value instanceof BlobCtor,
+      kHandle: Symbol("kHandle"),
+      resolveObjectURL: () => undefined,
+      // fs.openAsBlob(path): a Blob over the file's current contents.
+      createBlobFromFilePath: (path: string, options?: { type?: string }) =>
+        new BlobCtor([ctx.internalBinding("fs").__readForBlob(path)], options),
+    };
+  };
+
   return {
+    "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
     "internal/bootstrap/realm": (_exports, _require, module) => {

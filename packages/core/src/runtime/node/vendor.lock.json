@@ -59,6 +59,26 @@
     "internal/console/constructor": "6cdad6113815cecbe8c914af86835499dbf2b3bbd617babec9e24af779c8aeaa",
     "diagnostics_channel": "d26df2e24a591389675b9e09404793497251e6677f71e6eac7c53b6d34898d28",
     "internal/process/warning": "b3abe35b1f8c98d6fb7ff34649d422fe4ae8b700968a533a5e20ade7bc471ee8",
-    "internal/util/colors": "f6b6702f24abe359726f05115767142148bcd5f87b84896dab47488db08af516"
+    "internal/util/colors": "f6b6702f24abe359726f05115767142148bcd5f87b84896dab47488db08af516",
+    "fs": "9442d0c9969da2fa4a48cecdbf4b7f00dc73ddb9630f4821a499044bf5197ac4",
+    "fs/promises": "f18e640c98afa9c2cac0541e7d281fd9ec65a802bd396eca6a3afb0a34480d8e",
+    "internal/fs/utils": "a47d9b1f38bd21771eb4a93b4e1730b8f158ec0fb07097d638fb5436fb945770",
+    "internal/fs/promises": "6a3d853657112c197bab3b06d1d179840310eb1ec10205ab84d2a2c7eced2dd1",
+    "internal/fs/streams": "f43ccd6f33688e4fe585428dba8d9b47e8f5e95358dbffe850c998e09ed4b78e",
+    "internal/fs/read/context": "d8744eae3bf4c65496683116df7dc177745cb13483c4356f32cea27629f2e81d",
+    "internal/fs/dir": "4ca7e25d1cd8703a75159937d6886bfeb50034914e989ce61cf01d1eb4f0c36c",
+    "internal/fs/watchers": "a8fd248545105d6628df4e27bc009d1c357c75d1b9737c40cdb92de235207ca8",
+    "internal/fs/rimraf": "28b66be8e76c7bff19c0cbb215134a7728bb9546848666fa21dae7d20895979d",
+    "internal/fs/cp/cp": "1519e09b5129cc66f6eae0448e9e860c9cc9ae83dcde721efb7f818e4324a196",
+    "internal/fs/cp/cp-sync": "cfa9592d9d11b1791282373a1de86d422ec4562203e7edf5b5a72abcc979dfc6",
+    "internal/fs/glob": "b3b3ebcf41f691438f8d91555bbabb9cd22d04ed434448daa11e90198c7d732e",
+    "internal/fs/sync_write_stream": "297bc092a46bcb314c19274300ac5acfaaf379ce99d28dfe17848e1091730a5a",
+    "internal/fs/recursive_watch": "8ca7ba9196dc562e5905bb382c5310c988d5e1a7cb1560418273838384f16139",
+    "internal/process/permission": "10b6b5457b9678c7d2484cc84fb5e16ce62189d44a657ed21f317050a757ab2c",
+    "internal/readline/interface": "d10af47bb8d1393c6fb1de3a3faa253ffb7f7ee8ec1c36e697eccff607d778e5",
+    "internal/readline/utils": "a0b8b7cb13da3df61bade053aebdd15d031ca8767399f726f047bcb5692d0faf",
+    "internal/readline/callbacks": "af9b691f147976bca019361b7be1095c7ef8c059353cd948e518327f2b3d6f8f",
+    "internal/repl/history": "19069b28f75bb9925170ef8e14aee7351214a5d06a3270024d237bdb1b804b7f",
+    "os": "5b14b21284e19382708f588ff7fa5a212c5335a84b1d9ae6ebdf626244f8fde9"
   }
 }

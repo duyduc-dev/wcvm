@@ -7,8 +7,9 @@
 // the Vfs, writes the answer back into that SAB and wakes the parked caller.
 
 import {
-  ISyscallViews,
+  type ISyscallViews,
   SyscallError,
+  FLAG_NO_FOLLOW,
   FLAG_RECURSIVE,
   OP_CHMOD,
   OP_CLOSE,
@@ -17,10 +18,13 @@ import {
   OP_FD_WRITE,
   OP_FSTAT,
   OP_FTRUNCATE,
+  OP_FUTIMES,
+  OP_LINK,
   OP_LSTAT,
   OP_MKDIR,
   OP_OPEN,
   OP_READDIR,
+  OP_READDIR_KINDS,
   OP_READLINK,
   OP_READ_FILE,
   OP_REALPATH,
@@ -30,6 +34,7 @@ import {
   OP_STAT,
   OP_SYMLINK,
   OP_UNLINK,
+  OP_UTIMES,
   OP_WRITE_FILE,
   bytesToF64,
   bytesToU32,
@@ -55,13 +60,18 @@ const at = (fields: Uint8Array[], index: number): Uint8Array => {
   return field;
 };
 
-type Handler = (fields: Uint8Array[], flags: number) => Uint8Array;
+type Handler = (fields: Uint8Array[], flags: number, clientId: number) => Uint8Array;
 
 class FsServer {
   private readonly clients = new Map<number, ISyscallViews>();
+  /** fds each client opened, so a client that dies without closing them cannot leak them. */
+  private readonly openFds = new Map<number, Set<number>>();
   private readonly handlers: Map<number, Handler>;
 
-  constructor(readonly vfs: Vfs = new Vfs()) {
+  readonly vfs: Vfs;
+
+  constructor(vfs: Vfs = new Vfs()) {
+    this.vfs = vfs;
     const path = (fields: Uint8Array[], i = 0) => decodeBytes(at(fields, i));
 
     this.handlers = new Map<number, Handler>([
@@ -130,15 +140,50 @@ class FsServer {
       ],
       [
         OP_OPEN,
-        (f) => u32ToBytes(vfs.open(path(f), bytesToU32(at(f, 1)), bytesToU32(at(f, 2)))),
+        (f, _flags, client) => {
+          const fd = vfs.open(path(f), bytesToU32(at(f, 1)), bytesToU32(at(f, 2)));
+          let set = this.openFds.get(client);
+          if (!set) this.openFds.set(client, (set = new Set()));
+          set.add(fd);
+          return u32ToBytes(fd);
+        },
       ],
       [
         OP_CLOSE,
-        (f) => {
-          vfs.close(bytesToU32(at(f, 0)));
+        (f, _flags, client) => {
+          const fd = bytesToU32(at(f, 0));
+          vfs.close(fd);
+          this.openFds.get(client)?.delete(fd);
           return EMPTY;
         },
       ],
+      [
+        OP_LINK,
+        (f) => {
+          vfs.link(path(f, 0), path(f, 1));
+          return EMPTY;
+        },
+      ],
+      [
+        OP_UTIMES,
+        (f, flags) => {
+          vfs.utimes(
+            path(f),
+            bytesToF64(at(f, 1)),
+            bytesToF64(at(f, 2)),
+            (flags & FLAG_NO_FOLLOW) === 0,
+          );
+          return EMPTY;
+        },
+      ],
+      [
+        OP_FUTIMES,
+        (f) => {
+          vfs.futimes(bytesToU32(at(f, 0)), bytesToF64(at(f, 1)), bytesToF64(at(f, 2)));
+          return EMPTY;
+        },
+      ],
+      [OP_READDIR_KINDS, (f) => json(vfs.readdirKinds(path(f)))],
       [
         OP_FD_READ,
         (f) => vfs.read(bytesToU32(at(f, 0)), bytesToU32(at(f, 1)), bytesToF64(at(f, 2))),
@@ -165,6 +210,14 @@ class FsServer {
 
   unregisterClient(clientId: number): void {
     this.clients.delete(clientId);
+    for (const fd of this.openFds.get(clientId) ?? []) {
+      try {
+        this.vfs.close(fd);
+      } catch {
+        // already closed
+      }
+    }
+    this.openFds.delete(clientId);
   }
 
   /** Answers `clientId`'s pending request, if it still has one. */
@@ -179,7 +232,7 @@ class FsServer {
         respondErr(views, "ENOSYS");
         return;
       }
-      respondOk(views, handler(fields, flags));
+      respondOk(views, handler(fields, flags, clientId));
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       respondErr(views, typeof code === "string" ? code : "EIO");
