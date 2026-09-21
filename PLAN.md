@@ -1,8 +1,8 @@
 # wcvm implementation plan
 
 Reference design: `~/workspace/duck/vivari` (MIT). See its `ARCHITECTURE.md`.
-`PROGRESS.md` describes the OLD `duckwc` implementation, which no longer exists
-in this tree; treat it as history.
+An older, much larger implementation (`duckwc`) once lived in this repo; it is gone from the
+tree but recoverable from git history (see `git show 5e7e388:PROGRESS.md`).
 
 ## Current state
 
@@ -79,8 +79,8 @@ module: `Thing.test.ts`).
 ### Phase 0 - Housekeeping  (DONE)
 - Commit the `boot:exit` -> `ready` rename; expose `ready: Promise<void>` from
   `boot()`, with a boot timeout (`ERR_BOOT_TIMEOUT` already exists).
-- Settle the public name; fix or remove stale docs; trim `PROGRESS.md` to an
-  archive note and track new work here.
+- Settle the public name; fix or remove stale docs (the old `PROGRESS.md` was removed) and
+  track new work here.
 - Confirm the worker URL in `bridges/service.ts` resolves from both `src/`
   (playground) and `dist/`.
 - Add tests: router, state, bridge request/reject, diagnostics.

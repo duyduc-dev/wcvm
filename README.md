@@ -7,8 +7,7 @@ Web Workers, with no backend. Inspired by
 > **Status: early rewrite.** A virtual filesystem, real processes, and a Node.js
 > runtime (`node script.js`, `require`, `fs`, timers, streams, console) work; ESM, a
 > shell and networking do not exist yet. See
-> [`PLAN.md`](PLAN.md) for the roadmap. [`PROGRESS.md`](PROGRESS.md) is the
-> archive of the earlier, much larger `duckwc` implementation.
+> [`PLAN.md`](PLAN.md) for the roadmap.
 
 ## Usage
 
