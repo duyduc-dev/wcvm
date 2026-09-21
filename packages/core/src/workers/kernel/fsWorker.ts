@@ -1,4 +1,5 @@
 import type { IFsWorkerLike } from "../../kernel";
+import type { IProcessWorkerLike } from "../../kernel/processes";
 
 // Resolved against the bundled kernel worker (dist/workers/kernel/worker.js),
 // which sits next to dist/workers/fs/worker.js. Loaded standalone by URL, like
@@ -9,4 +10,12 @@ const createFsWorker = (): IFsWorkerLike =>
     name: "FsWorker",
   });
 
-export { createFsWorker };
+// One worker per process, named after its PID so DevTools' worker list maps
+// each entry to a process.
+const createProcessWorker = (pid: number): IProcessWorkerLike =>
+  new Worker(new URL("../process/worker.js", import.meta.url), {
+    type: "module",
+    name: `Process Worker PID ${pid}`,
+  });
+
+export { createFsWorker, createProcessWorker };

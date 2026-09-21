@@ -84,10 +84,105 @@ test("files larger than the 1 MiB syscall window survive a round trip", async ({
   expect(ok).toBe(true);
 });
 
-test("spawn still resolves (stub until Phase 3)", async ({ page }) => {
-  const exit = await page.evaluate(async () => {
-    const proc = await (window as unknown as WcWindow).wc.spawn("echo", ["hi"]);
-    return proc.exit;
+type Result = { code: number; out: string; err: string; signal?: string };
+
+// Runs a command in the page and collects everything it produced.
+const spawn = (page: import("@playwright/test").Page, command: string, args: string[] = [], cwd?: string) =>
+  page.evaluate(
+    async ({ command, args, cwd }) => {
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn(command, args, { cwd });
+      const [out, err, exit] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exit,
+      ]);
+      return { code: exit.errorCode, out, err, signal: exit.signal } as Result;
+    },
+    { command, args, cwd },
+  );
+
+test("echo runs in its own worker and its stdout reaches the host", async ({ page }) => {
+  expect(await spawn(page, "echo", ["Hello,", "World!"])).toEqual({
+    code: 0,
+    out: "Hello, World!\n",
+    err: "",
   });
-  expect(exit.errorCode).toBe(0);
+});
+
+test("a process reads a file the host wrote, and the host sees what a process wrote", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { fs } = (window as unknown as WcWindow).wc;
+    await fs.mkdir("/work", { recursive: true });
+    await fs.writeFile("/work/note.txt", "written by the host\n");
+  });
+
+  const cat = await spawn(page, "cat", ["note.txt"], "/work");
+  expect(cat).toMatchObject({ code: 0, out: "written by the host\n" });
+
+  expect((await spawn(page, "mkdir", ["-p", "/work/a/b"])).code).toBe(0);
+  const ls = await spawn(page, "ls", ["/work"]);
+  expect(ls.out).toBe("a\nnote.txt\n");
+
+  const seen = await page.evaluate(() =>
+    (window as unknown as WcWindow).wc.fs.readdir("/work/a"),
+  );
+  expect(seen).toEqual(["b"]);
+});
+
+test("failures come back as exit codes and stderr", async ({ page }) => {
+  expect(await spawn(page, "nonesuch")).toMatchObject({ code: 127 });
+  const missing = await spawn(page, "cat", ["/missing"]);
+  expect(missing.code).toBe(1);
+  expect(missing.err).toBe("cat: /missing: No such file or directory\n");
+  expect((await spawn(page, "pwd", [], "/no/such/dir")).code).toBe(1);
+});
+
+test("concurrent processes are isolated and all complete", async ({ page }) => {
+  const results = await page.evaluate(async () => {
+    const wc = (window as unknown as WcWindow).wc;
+    const procs = await Promise.all(
+      ["one", "two", "three", "four"].map((word) => wc.spawn("echo", [word])),
+    );
+    return Promise.all(
+      procs.map(async (p) => ({
+        id: p.processId,
+        out: await new Response(p.stdout).text(),
+        code: (await p.exit).errorCode,
+      })),
+    );
+  });
+  expect(results.map((r) => r.out)).toEqual(["one\n", "two\n", "three\n", "four\n"]);
+  expect(results.every((r) => r.code === 0)).toBe(true);
+  expect(new Set(results.map((r) => r.id)).size).toBe(4);
+});
+
+test("kill stops a long-running process with SIGTERM's status", async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const wc = (window as unknown as WcWindow).wc;
+    const proc = await wc.spawn("sleep", ["60"]);
+    const started = performance.now();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    proc.kill();
+    const exit = await proc.exit;
+    return { exit, ms: performance.now() - started };
+  });
+  expect(result.exit).toMatchObject({ errorCode: 143, signal: "SIGTERM" });
+  expect(result.ms).toBeLessThan(5_000);
+});
+
+test("a killed process cannot corrupt the filesystem for the next one", async ({ page }) => {
+  await page.evaluate(async () => {
+    const wc = (window as unknown as WcWindow).wc;
+    const p = await wc.spawn("sleep", ["60"]);
+    p.kill("SIGKILL");
+    await p.exit;
+  });
+  expect((await spawn(page, "echo", ["still fine"])).out).toBe("still fine\n");
+  const big = await page.evaluate(async () => {
+    const { fs } = (window as unknown as WcWindow).wc;
+    await fs.writeFile("/after.txt", "ok");
+    return new TextDecoder().decode(await fs.readFile("/after.txt"));
+  });
+  expect(big).toBe("ok");
 });

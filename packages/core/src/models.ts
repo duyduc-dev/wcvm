@@ -8,13 +8,20 @@ export interface IState {
 }
 
 export interface IProcessExit {
+  /** The process's exit status (143 / 137 when killed by SIGTERM / SIGKILL). */
   errorCode: number;
   errorMessage?: string;
+  signal?: "SIGTERM" | "SIGKILL";
 }
 
 export interface IProcess {
   processId: number;
+  /** Bytes the process wrote; closes when it exits. Buffers until read. */
+  stdout: ReadableStream<Uint8Array>;
+  stderr: ReadableStream<Uint8Array>;
   exit: Promise<IProcessExit>;
+  /** Stops the process; a no-op once it has exited. Defaults to SIGTERM. */
+  kill(signal?: "SIGTERM" | "SIGKILL"): void;
 }
 
 export interface IFileNode {

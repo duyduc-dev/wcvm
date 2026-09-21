@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createState } from "../../../protocols/state";
 import { createFakeFsWorker } from "../../../testing/fakeFsWorker";
+import { createFakeProcessWorker } from "../../../testing/fakeProcessWorker";
 import { IWorkerState } from "../models";
 import { createBootHandler } from "./boot";
 
@@ -19,7 +20,10 @@ describe("boot handler", () => {
   it("installs the kernel and only then announces ready", async () => {
     const { worker } = createFakeFsWorker();
     const { stateManager, posted, done } = run(
-      createBootHandler({ createFsWorker: () => worker }),
+      createBootHandler({
+        createFsWorker: () => worker,
+        createProcessWorker: () => createFakeProcessWorker(),
+      }),
     );
     expect(posted).toEqual([]);
     await done;
@@ -30,7 +34,10 @@ describe("boot handler", () => {
   it("does not announce ready when the fs worker fails", async () => {
     const { worker } = createFakeFsWorker(undefined, { fail: "boom" });
     const { posted, done } = run(
-      createBootHandler({ createFsWorker: () => worker }),
+      createBootHandler({
+        createFsWorker: () => worker,
+        createProcessWorker: () => createFakeProcessWorker(),
+      }),
     );
     await expect(done).rejects.toThrow("boom");
     expect(posted).toEqual([]);

@@ -1,3 +1,0 @@
-const baseEnv = () => ({});
-
-export { baseEnv };
