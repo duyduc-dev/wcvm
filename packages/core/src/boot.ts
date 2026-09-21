@@ -1,3 +1,4 @@
+import { createFsApi } from "./apis/Fs";
 import { createProcessApi } from "./apis/Process";
 import { createKernelBridge } from "./bridges/kernel";
 import { WcvmError } from "./errors/WcvmError";
@@ -33,6 +34,7 @@ const boot = (options: IBootOptions = {}) => {
   const ready = new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       off();
+      offError();
       reject(
         new WcvmError(
           "ERR_BOOT_TIMEOUT",
@@ -43,7 +45,21 @@ const boot = (options: IBootOptions = {}) => {
     const off = kernelBridge.on("ready", () => {
       clearTimeout(timer);
       off();
+      offError();
       resolve();
+    });
+    // A failed boot never sends `ready`; surface why instead of timing out.
+    const offError = kernelBridge.on("kernel:error", (message) => {
+      if (message.messageType !== "boot") return;
+      clearTimeout(timer);
+      off();
+      offError();
+      reject(
+        new WcvmError(
+          "ERR_WORKER",
+          `Kernel failed to boot: ${String(message.errorMessage)}`,
+        ),
+      );
     });
   });
   // Nobody is required to await `ready`; keep an unobserved rejection from
@@ -72,8 +88,12 @@ const boot = (options: IBootOptions = {}) => {
     );
   };
 
-  return { spawn, diagnostics, ready };
+  const fs = createFsApi(kernelBridge, ready);
+
+  return { spawn, fs, diagnostics, ready };
 };
 
+type IWcvm = ReturnType<typeof boot>;
+
 export { boot };
-export type { IBootOptions };
+export type { IBootOptions, IWcvm };

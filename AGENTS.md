@@ -9,7 +9,9 @@ This pnpm workspace contains `wcvm`, a browser-based WebContainer-style runtime
   - `src/boot.ts`, `src/apis/`: public API (`boot()`, `spawn()`).
   - `src/bridges/`: main-thread side of the kernel worker (request/response, events).
   - `src/workers/kernel/`: kernel worker (message router + handlers).
-  - `src/kernel/`: kernel host (PID table, supervision) - being built out.
+  - `src/kernel/`: kernel host (owns the fs client; PID table/supervision still to come).
+  - `src/fs/`: `Vfs` (in-memory filesystem), `FsServer` (syscall servicer), `fsClient` (sync client).
+  - `src/workers/fs/`: File System Worker; `src/testing/`: test-only helpers.
   - `src/protocols/`: shared protocol code, incl. `syscall.ts` (the SAB syscall ABI),
     diagnostics and state.
 - `examples/playground/`: Vite integration demo and Playwright end-to-end coverage.
@@ -40,6 +42,10 @@ functions, `PascalCase` for types/classes, `I`-prefixed interfaces as in existin
 code. Keep browser-facing types exported deliberately from `packages/core/src`;
 don't leak worker internals. There is no repository-wide formatter: preserve the
 conventions of the file you edit.
+
+Node accepts some things browsers reject (e.g. `TextDecoder.decode` on a view over a
+SharedArrayBuffer). Changes to worker/SAB code must also pass `pnpm --filter playground e2e`
+(real Chromium), not just the Vitest suite.
 
 `protocols/syscall.ts` must stay dependency-free and use erasable TypeScript only
 (no enums, no parameter properties): tests import it directly from Node

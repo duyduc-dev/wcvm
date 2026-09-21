@@ -1,27 +1,21 @@
-import { KernelMessage } from "../../../bridges/models";
-import { createKernelHost, IKernelHost } from "../../../kernel";
+import { createKernelHost, IFsWorkerLike, IKernelHost } from "../../../kernel";
+import { createFsWorker } from "../fsWorker";
 import { RouteHandler } from "../router";
 
-interface IPrams {
-  setKernel: (kernel: IKernelHost) => void;
-  onPostMessage: (message: KernelMessage) => void;
+interface IBootParams {
+  createFsWorker: () => IFsWorkerLike;
 }
 
-const boot = ({ setKernel, onPostMessage }: IPrams) => {
-  const kernel = createKernelHost();
-  setKernel(kernel);
+const createBootHandler =
+  ({ createFsWorker }: IBootParams): RouteHandler =>
+  async ({ stateManager, onPostMessage }) => {
+    // Boot completes only once the fs worker is running: the kernel's first
+    // blocking syscall must not race the worker's startup.
+    const kernel: IKernelHost = await createKernelHost({ createFsWorker });
+    stateManager.setState({ kernel });
+    onPostMessage({ type: "ready" });
+  };
 
-  onPostMessage({
-    type: "ready",
-  });
-};
+const bootHandler = createBootHandler({ createFsWorker });
 
-const bootHandler: RouteHandler = ({ stateManager, onPostMessage }) => {
-  const setKernel = (kernel: IKernelHost) => stateManager.setState({ kernel });
-  boot({
-    setKernel,
-    onPostMessage,
-  });
-};
-
-export { bootHandler };
+export { bootHandler, createBootHandler };

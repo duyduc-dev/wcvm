@@ -1,9 +1,18 @@
 import { boot } from "wcvm";
 
-const app = boot();
+const wc = boot();
 
-app.diagnostics.onEvent((event) => {
+wc.diagnostics.onEvent((event) => {
   console.log(`[${event.timestamp}] ${event.type}`, event.payload);
 });
 
-app.spawn("echo", ["Hello, World!"]);
+// Exposed for the Playwright e2e and for poking around in DevTools.
+(window as unknown as { wc: typeof wc }).wc = wc;
+
+const app = document.querySelector("#app");
+if (app) app.textContent = "wcvm playground";
+
+wc.ready.then(
+  () => app && (app.textContent = "wcvm ready"),
+  (error: Error) => app && (app.textContent = `wcvm failed: ${error.message}`),
+);
