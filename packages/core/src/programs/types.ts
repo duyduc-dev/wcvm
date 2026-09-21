@@ -7,7 +7,10 @@ export interface IProgramContext {
   env: Record<string, string>;
   fs: IFsClient;
   stdout(data: string | Uint8Array): void;
-  stderr(text: string): void;
+  stderr(data: string | Uint8Array): void;
+  pid: number;
+  /** In a dedicated process worker, `self`: programs may install Node's globals on it. */
+  globalObject?: Record<string, any>;
   /** Injected so tests need not wait in real time. */
   sleep(ms: number): Promise<void>;
 }

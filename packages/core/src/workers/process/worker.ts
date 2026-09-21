@@ -21,6 +21,8 @@ const start = async (init: IProcessInit) => {
       cwd: init.cwd,
       env: init.env,
       fs,
+      pid: init.pid,
+      globalObject: self as unknown as Record<string, any>,
       write: (stream, chunk) => post({ type: stream, chunk }),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     });

@@ -1,8 +1,12 @@
 import { WcvmError } from "../../errors/WcvmError";
+import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
 import { createConstantsBinding } from "./constants";
+import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
 import {
+  createAsyncContextFrameBinding,
   createConfigBinding,
+  createDiagnosticsChannelBinding,
   createErrorsBinding,
   createMessagingBinding,
   createMksnapshotBinding,
@@ -20,14 +24,18 @@ import { createSymbolsBinding, createUtilBinding } from "./util";
 interface IBindingContext {
   /** For bindings that call back into Node's own modules (defineLazyProperties). */
   requireBuiltin(id: string): any;
+  loop: EventLoop;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
 
 const factories: Record<string, BindingFactory> = {
+  async_context_frame: () => createAsyncContextFrameBinding(),
+  async_wrap: () => createAsyncWrapBinding(),
   buffer: () => createBufferBinding(),
   config: () => createConfigBinding(),
   constants: () => createConstantsBinding(),
+  diagnostics_channel: () => createDiagnosticsChannelBinding(),
   errors: () => createErrorsBinding(),
   messaging: () => createMessagingBinding(),
   mksnapshot: () => createMksnapshotBinding(),
@@ -38,6 +46,8 @@ const factories: Record<string, BindingFactory> = {
   string_decoder: () => createStringDecoderBinding(),
   trace_events: () => createTraceEventsBinding(),
   symbols: () => createSymbolsBinding(),
+  task_queue: (ctx) => createTaskQueueBinding(ctx.loop),
+  timers: (ctx) => createTimersBinding(ctx.loop),
   types: () => createTypesBinding(),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),

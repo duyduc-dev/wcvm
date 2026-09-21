@@ -37,7 +37,8 @@ for (let round = 0; round < MAX_ROUNDS; round++) {
     import { createInternalBinding } from "./src/runtime/bindings/index.ts";
     const process = { versions: {}, env: {}, argv: [], platform: "linux", emitWarning() {}, cwd: () => "/", nextTick: (f, ...a) => queueMicrotask(() => f(...a)) };
     let loader;
-    const internalBinding = createInternalBinding({ requireBuiltin: (id) => loader.requireBuiltin(id) });
+    import { EventLoop } from "./src/runtime/eventLoop.ts";
+    const internalBinding = createInternalBinding({ requireBuiltin: (id) => loader.requireBuiltin(id), loop: new EventLoop() });
     loader = createBuiltinLoader({ process, internalBinding, primordials: createPrimordials() });
     try { for (const t of ${JSON.stringify(targets)}) loader.requireBuiltin(t); console.log("OK"); }
     catch (e) { console.log(e.code === "ERR_UNKNOWN_BUILTIN_MODULE" ? "MISSING " + /'([^']+)'/.exec(e.message)[1] : "ERROR " + (e.stack || e).toString().split("\\n").slice(0, 6).join(" | ")); }

@@ -73,3 +73,59 @@ describe("runProcess", () => {
     expect((await run("cat", ["/note.txt"], { fs })).out).toBe("from the host");
   });
 });
+
+describe("the node command", () => {
+  const runNode = async (args: string[], files: Record<string, string> = {}, cwd = "/") => {
+    const { fs } = createLoopbackFs();
+    for (const [path, contents] of Object.entries(files)) {
+      fs.mkdir(path.slice(0, path.lastIndexOf("/")) || "/", { recursive: true });
+      fs.writeFile(path, contents);
+    }
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runProcess({
+      command: "node",
+      args,
+      cwd,
+      env: { HOME: "/home/u" },
+      fs,
+      pid: 7,
+      write: (stream, chunk) =>
+        (stream === "stdout" ? out : err).push(new TextDecoder().decode(chunk)),
+      sleep: async () => {},
+    });
+    return { code, out: out.join(""), err: err.join("") };
+  };
+
+  it("runs a script relative to the cwd and passes arguments and pid through", async () => {
+    const r = await runNode(["main.js", "a", "b"], {
+      "/w/main.js": `console.log(process.argv.slice(2).join("+"), process.pid, process.env.HOME, process.cwd())`,
+    }, "/w");
+    expect(r).toEqual({ code: 0, out: "a+b 7 /home/u /w\n", err: "" });
+  });
+
+  it("node -e runs source text and require resolves from the cwd", async () => {
+    const r = await runNode(["-e", "console.log(require('./x'), __filename)"], { "/w/x.js": "module.exports = 'x!'" }, "/w");
+    expect(r).toEqual({ code: 0, out: "x! [eval]\n", err: "" });
+  });
+
+  it("returns the script's exit code and prints uncaught errors", async () => {
+    expect((await runNode(["-e", "process.exit(6)"])).code).toBe(6);
+    const r = await runNode(["-e", "throw new Error('kaboom')"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("Error: kaboom");
+  });
+
+  it("fails cleanly for a missing script, bad options and no arguments", async () => {
+    const missing = await runNode(["nope.js"]);
+    expect(missing.code).toBe(1);
+    expect(missing.err).toContain("Cannot find module");
+    expect((await runNode(["--bogus"])).code).toBe(9);
+    expect((await runNode(["-e"])).code).toBe(9);
+    expect((await runNode([])).code).toBe(9);
+  });
+
+  it("node --version prints the vendored Node version", async () => {
+    expect(await runNode(["--version"])).toEqual({ code: 0, out: "v24.18.0\n", err: "" });
+  });
+});
