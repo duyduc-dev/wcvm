@@ -1,3 +1,6 @@
+> **Outdated:** still refers to the old `duckwc` name and to scripts/workflows that do not
+> exist in this tree (`scripts/publish-github-package.mjs`, `apps/docs`). Revisit before publishing.
+
 # Publishing `duckwc` to npm
 
 Use this guide to release the public package in `packages/core`.

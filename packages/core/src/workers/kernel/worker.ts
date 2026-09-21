@@ -19,8 +19,6 @@ router.handle("process:spawn", processSpawnHandler);
 
 self.onmessage = (e: MessageEvent<KernelMessage>) => {
   const { type, reqId } = e.data;
-  // Only messages sent through `bridge.request()` carry a reqId and get a
-  // reply; everything else is fire-and-forget.
   const isRequest = reqId !== undefined;
 
   router
