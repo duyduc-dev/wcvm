@@ -33,6 +33,9 @@ export type Signal = "SIGTERM" | "SIGKILL";
 export interface IProcessTable {
   spawn(spec: ISpawnSpec): void;
   kill(pid: number, signal?: string): void;
+  /** Silently does nothing for an unknown or already-exited pid, like kill(). */
+  writeStdin(pid: number, chunk: Uint8Array): void;
+  endStdin(pid: number): void;
   has(pid: number): boolean;
   readonly size: number;
 }
@@ -85,6 +88,14 @@ const createProcessTable = ({
     else emit({ type: `process:${stream}`, processId: pid, chunk });
   };
 
+  const writeStdin = (pid: number, chunk: Uint8Array) => {
+    workers.get(pid)?.worker.postMessage({ type: "stdin", chunk });
+  };
+
+  const endStdin = (pid: number) => {
+    workers.get(pid)?.worker.postMessage({ type: "stdinEnd" });
+  };
+
   const spawn = (spec: ISpawnSpec) => {
     const { processId: pid, parentPid } = spec;
     if (workers.has(pid)) {
@@ -130,6 +141,12 @@ const createProcessTable = ({
         case "child:kill":
           kill(data.childPid, data.signal);
           break;
+        case "child:stdin":
+          writeStdin(data.childPid, data.chunk);
+          break;
+        case "child:stdinEnd":
+          endStdin(data.childPid);
+          break;
       }
     };
     worker.onerror = (event) => {
@@ -161,6 +178,8 @@ const createProcessTable = ({
   return {
     spawn,
     kill,
+    writeStdin,
+    endStdin,
     has: (pid) => workers.has(pid),
     get size() {
       return workers.size;

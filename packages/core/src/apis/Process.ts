@@ -22,6 +22,10 @@ const createProcessApi = (
     });
   const stdout = stream("stdout");
   const stderr = stream("stderr");
+  const stdin = new WritableStream<Uint8Array>({
+    write: (chunk) => kernelBridge.postMessage("process:stdin", { processId, chunk }),
+    close: () => kernelBridge.postMessage("process:stdinEnd", { processId }),
+  });
 
   // Subscribe before posting so nothing the kernel sends can be missed.
   for (const name of ["stdout", "stderr"] as const) {
@@ -63,6 +67,7 @@ const createProcessApi = (
     processId,
     stdout,
     stderr,
+    stdin,
     exit,
     kill: (signal) => kernelBridge.postMessage("process:kill", { processId, signal }),
   };

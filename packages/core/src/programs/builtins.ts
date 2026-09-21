@@ -53,10 +53,12 @@ const pwd: Program = ({ cwd, stdout }) => {
   return 0;
 };
 
-const cat: Program = ({ args, cwd, fs, stdout, stderr }) => {
+const cat: Program = ({ args, cwd, fs, stdout, stderr, stdin }) => {
   if (args.length === 0) {
-    stderr("cat: reading from stdin is not supported yet\n");
-    return 1;
+    if (!stdin) return 0;
+    return new Promise<number>((resolve) => {
+      stdin.onData((chunk) => (chunk === null ? resolve(0) : stdout(chunk)));
+    });
   }
   let status = 0;
   for (const file of args) {

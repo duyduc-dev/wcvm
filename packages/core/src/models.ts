@@ -19,6 +19,8 @@ export interface IProcess {
   /** Bytes the process wrote; closes when it exits. Buffers until read. */
   stdout: ReadableStream<Uint8Array>;
   stderr: ReadableStream<Uint8Array>;
+  /** Open until closed (real pipe semantics) or the process exits; writes after exit are dropped. */
+  stdin: WritableStream<Uint8Array>;
   exit: Promise<IProcessExit>;
   /** Stops the process; a no-op once it has exited. Defaults to SIGTERM. */
   kill(signal?: "SIGTERM" | "SIGKILL"): void;

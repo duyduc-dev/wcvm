@@ -1,5 +1,6 @@
 import type { IFsClient } from "../fs/fsClient";
 import type { IChildProcessHost } from "../runtime/bindings/childProcess";
+import type { IStdinHost } from "../runtime/runtime";
 
 export interface IProgramContext {
   /** Arguments after the command name. */
@@ -16,6 +17,8 @@ export interface IProgramContext {
   sleep(ms: number): Promise<void>;
   /** Backs `node`'s child_process; undefined outside a real process worker. */
   childProcess?: IChildProcessHost;
+  /** This process's own stdin; undefined outside a real process worker. */
+  stdin?: IStdinHost;
 }
 
 /** Resolves to the process exit status. */

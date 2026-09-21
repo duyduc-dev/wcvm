@@ -449,4 +449,59 @@ test.describe("node", () => {
       expect(JSON.parse(r.out)).toEqual({ code: 0, out: "hi from grandchild\n" });
     });
   });
+
+  test.describe("stdin", () => {
+    test("process.stdin delivers what the host writes, and ends when the host closes it", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const proc = await wc.spawn("node", [
+          "-e",
+          "let out = ''; process.stdin.on('data', (c) => { out += c; });" +
+            "process.stdin.on('end', () => console.log('end:', out)); process.stdin.resume();",
+        ]);
+        const writer = proc.stdin.getWriter();
+        await writer.write(new TextEncoder().encode("hello "));
+        await writer.write(new TextEncoder().encode("world"));
+        await writer.close();
+        const [out, err, exit] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exit,
+        ]);
+        return { code: exit.exitCode, out, err };
+      });
+      expect(r).toEqual({ code: 0, out: "end: hello world\n", err: "" });
+    });
+
+    test("cat with no args streams real stdin to stdout", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const proc = await wc.spawn("cat", []);
+        const writer = proc.stdin.getWriter();
+        await writer.write(new TextEncoder().encode("piped through cat"));
+        await writer.close();
+        const [out, err, exit] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+          proc.exit,
+        ]);
+        return { code: exit.exitCode, out, err };
+      });
+      expect(r).toEqual({ code: 0, out: "piped through cat", err: "" });
+    });
+
+    test("child_process: child.stdin.write()/end() reach the real child's stdin", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawn } = require('child_process');" +
+          "const child = spawn('cat', []);" +
+          "let out = '';" +
+          "child.stdout.on('data', (c) => { out += c; });" +
+          "child.on('exit', () => console.log(out));" +
+          "child.stdin.write('from parent ');" +
+          "child.stdin.end('to child');",
+      ]);
+      expect(r).toEqual({ code: 0, out: "from parent to child\n", err: "" });
+    });
+  });
 });

@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { ChildProcessEvent, IChildProcessHost } from "./bindings/childProcess";
 import { runScript } from "./harness";
 
-/** Simulates the kernel: reacts to spawn()/kill() by scheduling events on a microtask. */
+/** Simulates the kernel: reacts to spawn()/kill()/stdin writes by scheduling events on a microtask. */
 const createFakeHost = () => {
   let handler: ((event: ChildProcessEvent) => void) | null = null;
   const spawns: Array<{ childPid: number; command: string; args: string[]; cwd: string | undefined; env: Record<string, string> | undefined }> = [];
   const kills: Array<{ childPid: number; signal: string | undefined }> = [];
+  const stdinWrites: Array<{ childPid: number; chunk: Uint8Array }> = [];
+  const stdinEnds: number[] = [];
   let onSpawn: ((childPid: number) => void) | undefined;
   let onKill: ((childPid: number, signal: string | undefined) => void) | undefined;
 
@@ -19,6 +21,8 @@ const createFakeHost = () => {
       kills.push({ childPid, signal });
       onKill?.(childPid, signal);
     },
+    writeStdin: (childPid, chunk) => stdinWrites.push({ childPid, chunk }),
+    endStdin: (childPid) => stdinEnds.push(childPid),
     onEvent: (h) => {
       handler = h;
     },
@@ -28,6 +32,8 @@ const createFakeHost = () => {
     host,
     spawns,
     kills,
+    stdinWrites,
+    stdinEnds,
     emit,
     onSpawn: (fn: (childPid: number) => void) => (onSpawn = fn),
     onKill: (fn: (childPid: number, signal: string | undefined) => void) => (onKill = fn),
@@ -92,7 +98,7 @@ describe("child_process over a fake kernel host", () => {
     expect(r.code).toBe(0);
   });
 
-  it("writing to child.stdin fails loudly instead of silently dropping bytes", async () => {
+  it("child.stdin.write() delivers bytes to the host, and end() ends it", async () => {
     const fake = createFakeHost();
     fake.onSpawn((childPid) => fake.emit({ type: "exit", childPid, exitCode: 0 }));
 
@@ -100,11 +106,15 @@ describe("child_process over a fake kernel host", () => {
       `
       const { spawn } = require("child_process");
       const child = spawn("cat", []);
-      child.stdin.on("error", (e) => console.log("stdin error:", e.code));
-      child.stdin.write("hello");
+      child.stdin.write("hello ");
+      child.stdin.end("world");
       `,
       fake.host,
     );
-    expect(r.stdout).toContain("stdin error: ENOSYS");
+    expect(r.code).toBe(0);
+    const childPid = fake.spawns[0].childPid;
+    const written = fake.stdinWrites.map((w) => new TextDecoder().decode(w.chunk)).join("");
+    expect(written).toBe("hello world");
+    expect(fake.stdinEnds).toEqual([childPid]);
   });
 });

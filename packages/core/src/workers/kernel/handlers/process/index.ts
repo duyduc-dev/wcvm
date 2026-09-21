@@ -39,9 +39,19 @@ const processKillHandler = withKernel((kernel, data) =>
   kernel.processes.kill(data.processId as number, data.signal as string | undefined),
 );
 
+const processStdinHandler = withKernel((kernel, data) =>
+  kernel.processes.writeStdin(data.processId as number, data.chunk as Uint8Array),
+);
+
+const processStdinEndHandler = withKernel((kernel, data) =>
+  kernel.processes.endStdin(data.processId as number),
+);
+
 const registerProcessHandlers = (router: Router): void => {
   router.handle("process:spawn", processSpawnHandler);
   router.handle("process:kill", processKillHandler);
+  router.handle("process:stdin", processStdinHandler);
+  router.handle("process:stdinEnd", processStdinEndHandler);
 };
 
 export { processSpawnHandler, processKillHandler, registerProcessHandlers };
