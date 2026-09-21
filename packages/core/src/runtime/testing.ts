@@ -1,4 +1,5 @@
 import { createInternalBinding } from "./bindings";
+import { EventLoop } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
 import { createPrimordials } from "./primordials";
 
@@ -21,13 +22,15 @@ export const createTestLoader = (processOverrides: Record<string, unknown> = {})
     ...processOverrides,
   };
   let loader: ReturnType<typeof createBuiltinLoader>;
+  const loop = new EventLoop();
   const internalBinding = createInternalBinding({
     requireBuiltin: (id) => loader.requireBuiltin(id),
+    loop,
   });
   loader = createBuiltinLoader({
     process,
     internalBinding,
     primordials: createPrimordials(),
   });
-  return { loader, process, warnings, require: loader.requireBuiltin };
+  return { loader, process, warnings, loop, require: loader.requireBuiltin };
 };

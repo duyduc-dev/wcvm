@@ -62,6 +62,13 @@ export const createOptionsBinding = () => ({
     "--throw-deprecation": false,
     "--warnings": true,
     "--stack-trace-limit": 10,
+    "--disable-warning": [],
+    "--redirect-warnings": "",
+    "--diagnostic-dir": "",
+    "--unhandled-rejections": "",
+    "--experimental-require-module": true,
+    "--async-context-frame": false,
+    "--enable-source-maps": false,
   }),
   getCLIOptionsInfo: () => ({ options: new Map(), aliases: new Map() }),
   getEmbedderOptions: () => ({}),
@@ -114,5 +121,36 @@ export const createPerformanceBinding = () => {
     },
     milestones,
     now: () => performance.now() - originMs,
+  };
+};
+
+// V8's continuation-preserved embedder data has no JS equivalent; a plain slot
+// is enough while `--async-context-frame` is off, since nothing then reads it.
+export const createAsyncContextFrameBinding = () => {
+  let current: unknown;
+  return {
+    getContinuationPreservedEmbedderData: () => current,
+    setContinuationPreservedEmbedderData: (value: unknown) => {
+      current = value;
+    },
+  };
+};
+
+// Native code publishes to diagnostics channels through this; there is no native
+// publisher here, so this only hands out a stable index per channel name and
+// keeps the subscriber counts the JS side increments and decrements.
+export const createDiagnosticsChannelBinding = () => {
+  const indexes = new Map<string | symbol, number>();
+  return {
+    subscribers: new Int32Array(4096),
+    getOrCreateChannelIndex: (name: string | symbol) => {
+      let index = indexes.get(name);
+      if (index === undefined) {
+        index = indexes.size;
+        indexes.set(name, index);
+      }
+      return index;
+    },
+    linkNativeChannel: () => {},
   };
 };

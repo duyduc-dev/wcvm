@@ -11,6 +11,9 @@ export interface IRunParams {
   fs: IFsClient;
   write(stream: StdStream, chunk: Uint8Array): void;
   sleep(ms: number): Promise<void>;
+  pid?: number;
+  /** See IProgramContext.globalObject. */
+  globalObject?: Record<string, any>;
 }
 
 const EXIT_COMMAND_NOT_FOUND = 127;
@@ -24,7 +27,9 @@ const encoder = new TextEncoder();
  */
 const runProcess = async (params: IRunParams): Promise<number> => {
   const { command, args, cwd, env, fs, write, sleep } = params;
-  const stderr = (text: string) => write("stderr", encoder.encode(text));
+  const toBytes = (data: string | Uint8Array) =>
+    typeof data === "string" ? encoder.encode(data) : data;
+  const stderr = (data: string | Uint8Array) => write("stderr", toBytes(data));
 
   const program = resolveProgram(command);
   if (!program) {
@@ -47,8 +52,9 @@ const runProcess = async (params: IRunParams): Promise<number> => {
       fs,
       sleep,
       stderr,
-      stdout: (data) =>
-        write("stdout", typeof data === "string" ? encoder.encode(data) : data),
+      pid: params.pid ?? 0,
+      globalObject: params.globalObject,
+      stdout: (data) => write("stdout", toBytes(data)),
     });
   } catch (error) {
     stderr(`${command}: ${error instanceof Error ? error.message : String(error)}\n`);

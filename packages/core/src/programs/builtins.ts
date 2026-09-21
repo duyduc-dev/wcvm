@@ -1,4 +1,5 @@
 import type { IFsClient } from "../fs/fsClient";
+import { node } from "./node";
 import type { IProgramContext, Program } from "./types";
 
 const ERRNO_TEXT: Record<string, string> = {
@@ -160,6 +161,7 @@ const builtins: Record<string, Program> = {
   mkdir,
   rm,
   sleep,
+  node,
   true: () => 0,
   false: () => 1,
 };

@@ -12,6 +12,9 @@ This pnpm workspace contains `wcvm`, a browser-based WebContainer-style runtime
   - `src/kernel/`: kernel host (fs client) and `processes.ts` (PID table, supervision).
   - `src/programs/`: built-in commands; plain functions over the sync fs client.
   - `src/workers/process/`: process worker (`run.ts` is the testable core).
+  - `src/runtime/`: the Node runtime. `node/lib/**` is Node's own source, VERBATIM and
+    generated: never edit it by hand (`scripts/vendor-node-lib.mjs`, checked by a test).
+    Our code sits beside it: `bindings/`, `shims.ts`, `eventLoop.ts`, `cjs.ts`, `runtime.ts`.
   - `src/fs/`: `Vfs` (in-memory filesystem), `FsServer` (syscall servicer), `fsClient` (sync client).
   - `src/workers/fs/`: File System Worker; `src/testing/`: test-only helpers.
   - `src/protocols/`: shared protocol code, incl. `syscall.ts` (the SAB syscall ABI),
@@ -48,6 +51,12 @@ conventions of the file you edit.
 Node accepts some things browsers reject (e.g. `TextDecoder.decode` on a view over a
 SharedArrayBuffer). Changes to worker/SAB code must also pass `pnpm --filter playground e2e`
 (real Chromium), not just the Vitest suite.
+
+To add a Node module: list it in `src/runtime/node/manifest.json` and run
+`node scripts/vendor-node-lib.mjs`, or use `scripts/discover-node-lib.mjs` (see PLAN.md).
+When a vendored module needs a binding member we lack, implement it in
+`src/runtime/bindings/` with Node's exact semantics and return codes; only shim a whole
+module (`shims.ts`) when Node's version is C++ or a C++ parser.
 
 `protocols/syscall.ts` must stay dependency-free and use erasable TypeScript only
 (no enums, no parameter properties): tests import it directly from Node

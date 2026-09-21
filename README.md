@@ -4,8 +4,9 @@ A WebContainer-style Node.js sandbox that runs entirely in the browser, inside
 Web Workers, with no backend. Inspired by
 [StackBlitz WebContainers](https://webcontainers.io/).
 
-> **Status: early rewrite.** A virtual filesystem and real processes running
-> built-in commands work; there is no Node runtime, shell or networking yet. See
+> **Status: early rewrite.** A virtual filesystem, real processes, and a Node.js
+> runtime (`node script.js`, `require`, timers, streams, console) work; `require("fs")`,
+> a shell and networking do not exist yet. See
 > [`PLAN.md`](PLAN.md) for the roadmap. [`PROGRESS.md`](PROGRESS.md) is the
 > archive of the earlier, much larger `duckwc` implementation.
 
@@ -31,7 +32,21 @@ sleeper.kill();                                       // exit status 143 (SIGTER
 ```
 
 Built-in commands: `echo`, `cat`, `ls`, `pwd`, `mkdir`, `rm`, `sleep`, `true`,
-`false`. An unknown command exits 127. Each process runs in its own Web Worker
+`false` and `node`. An unknown command exits 127.
+
+```ts
+await wc.fs.writeFile("/app/main.js", `
+  const path = require("path");
+  setTimeout(() => console.log("done", path.basename(__filename)), 10);
+  console.log("args:", process.argv.slice(2));
+`);
+const node = await wc.spawn("node", ["main.js", "x"], { cwd: "/app" });
+console.log(await new Response(node.stdout).text()); // "args: [ 'x' ]\ndone main.js\n"
+```
+
+`node` runs Node's own `lib/` (v24.18.0, vendored verbatim) on a small native layer
+written for the browser. It is not full Node: see "Known differences" in
+[`PLAN.md`](PLAN.md). Each process runs in its own Web Worker
 and talks to the filesystem through a synchronous SharedArrayBuffer bridge.
 
 `boot({ bootTimeoutMs })` rejects `ready` with `ERR_BOOT_TIMEOUT` if the kernel

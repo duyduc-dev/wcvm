@@ -14,9 +14,11 @@ const setup = () => {
       cwd,
       env: {},
       fs,
+      pid: 1,
       stdout: (d) =>
         out.push(typeof d === "string" ? d : new TextDecoder().decode(d)),
-      stderr: (t) => err.push(t),
+      stderr: (t) =>
+        err.push(typeof t === "string" ? t : new TextDecoder().decode(t)),
       sleep: async (ms) => {
         sleeps.push(ms);
       },
@@ -95,6 +97,7 @@ describe("cat", () => {
       cwd: "/",
       env: {},
       fs: t.fs,
+      pid: 1,
       stdout: (d) => chunks.push(d as Uint8Array),
       stderr: () => {},
       sleep: async () => {},
