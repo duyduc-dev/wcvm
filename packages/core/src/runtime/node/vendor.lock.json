@@ -79,6 +79,17 @@
     "internal/readline/utils": "a0b8b7cb13da3df61bade053aebdd15d031ca8767399f726f047bcb5692d0faf",
     "internal/readline/callbacks": "af9b691f147976bca019361b7be1095c7ef8c059353cd948e518327f2b3d6f8f",
     "internal/repl/history": "19069b28f75bb9925170ef8e14aee7351214a5d06a3270024d237bdb1b804b7f",
-    "os": "5b14b21284e19382708f588ff7fa5a212c5335a84b1d9ae6ebdf626244f8fde9"
+    "os": "5b14b21284e19382708f588ff7fa5a212c5335a84b1d9ae6ebdf626244f8fde9",
+    "assert": "6f388bad36064dc1dbc5558d3c8018d9daf5d1d2f28acc1b159a93a6e468643e",
+    "internal/assert/assertion_error": "41ebb0538f7707b144042ea4ac1085db1268751f8a727760f09fb06d720e6ba4",
+    "internal/assert/myers_diff": "811f14c9c9f0a85b39cc2925dc351f9ce6d0ce0f4e0426802c72e5bf0d905ea6",
+    "internal/assert/utils": "ea5b811f58b5d6ee922bd8aaa9f2bec0826b0ba04d1f929eddbfe0ba1224f596",
+    "internal/errors/error_source": "ba84ebd73ab2ff0460036cf86591773c5fb05f86abce8396be0399694a77236f",
+    "internal/source_map/source_map_cache": "f6a6823663845852670293f788fab72e8f216534525756ecee28aee330998767",
+    "internal/assert/calltracker": "b73a7f5296ed47e22ca20f28d03c2aaa3f0a2f53c295e35c20f8a337391bf9ba",
+    "readline": "9a316ea2f324340976c4ad23b3e08053a76867ba8fbcf20537497b07fa3a1cea",
+    "internal/readline/emitKeypressEvents": "a4e22146ea0a66703c8f9d1861f3fe6e860adc06fb5cfb40919d0c002cba974b",
+    "readline/promises": "76e9099cebd75a18992a0fef6f2a7f359a347aa2bfdb525739fdfe06f5db1eff",
+    "internal/readline/promises": "8ebe49629da7f7aca5f61754729ecb8f1dcf6b5860c67e83a93807afcccdfd79"
   }
 }

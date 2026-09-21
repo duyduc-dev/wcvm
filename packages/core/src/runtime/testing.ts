@@ -36,5 +36,7 @@ export const createTestLoader = (processOverrides: Record<string, unknown> = {})
     internalBinding,
     primordials: createPrimordials(),
   });
+  // Mirrors runtime.ts: any module that calls debuglog() before this throws.
+  loader.requireBuiltin("internal/util/debuglog").initializeDebugEnv((process.env as Record<string, string>).NODE_DEBUG);
   return { loader, process, warnings, loop, fs, vfs, require: loader.requireBuiltin };
 };

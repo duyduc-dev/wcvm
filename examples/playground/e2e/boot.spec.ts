@@ -366,4 +366,27 @@ test.describe("node", () => {
     const r = await spawn(page, "node", ["-e", "const os = require('os'); console.log(os.platform(), os.tmpdir(), os.homedir(), os.EOL === '\\n')"]);
     expect(r).toEqual({ code: 0, out: "linux /tmp /home/user true\n", err: "" });
   });
+
+  test("assert throws AssertionError uncaught, with a nonzero exit", async ({ page }) => {
+    const r = await spawn(page, "node", [
+      "-e",
+      "const assert = require('assert'); assert.strictEqual(1, 1); assert.strictEqual(1, 2, 'boom')",
+    ]);
+    expect(r.code).toBe(1);
+    expect(r.err).toContain("AssertionError");
+    expect(r.err).toContain("boom");
+  });
+
+  test("readline reads lines from a piped Readable in a real worker", async ({ page }) => {
+    const r = await spawn(page, "node", [
+      "-e",
+      "const readline = require('readline'); const { Readable } = require('stream');" +
+        "const input = new Readable({ read() {} });" +
+        "const rl = readline.createInterface({ input, terminal: false });" +
+        "rl.on('line', (l) => console.log('line:', l));" +
+        "rl.on('close', () => console.log('closed'));" +
+        "input.push('one\\ntwo\\n'); input.push(null);",
+    ]);
+    expect(r).toEqual({ code: 0, out: "line: one\nline: two\nclosed\n", err: "" });
+  });
 });

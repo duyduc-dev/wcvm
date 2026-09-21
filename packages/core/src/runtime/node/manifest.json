@@ -79,6 +79,17 @@
     "internal/readline/utils": "builtin",
     "internal/readline/callbacks": "builtin",
     "internal/repl/history": "builtin",
-    "os": "builtin"
+    "os": "builtin",
+    "assert": "builtin",
+    "internal/assert/assertion_error": "builtin",
+    "internal/assert/myers_diff": "builtin",
+    "internal/assert/utils": "builtin",
+    "internal/errors/error_source": "builtin",
+    "internal/source_map/source_map_cache": "builtin",
+    "internal/assert/calltracker": "builtin",
+    "readline": "builtin",
+    "internal/readline/emitKeypressEvents": "builtin",
+    "readline/promises": "builtin",
+    "internal/readline/promises": "builtin"
   }
 }

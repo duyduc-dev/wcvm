@@ -3,6 +3,30 @@ import { UV_ERRORS, uvErrorMap } from "./uvErrors";
 // Small bindings, mostly inert: they exist so vendored modules can load and
 // query "is this feature on?" without a native core behind them.
 
+// V8's `v8::Message` (what the C++ binding reads `sourceLine` from) has no JS
+// equivalent: `Error.prepareStackTrace` gives real file/line/column per frame,
+// but not the literal source text backing it, so `sourceLine` is always empty
+// here. assert's "show the failing expression" enrichment degrades to a plain
+// message instead of throwing; file/line/column stay accurate.
+const getErrorSourcePositions = (error: unknown) => {
+  const previous = Error.prepareStackTrace;
+  let site: any;
+  try {
+    Error.prepareStackTrace = (_error, callSites) => callSites;
+    site = (error as { stack?: unknown[] })?.stack?.[0] as any;
+  } catch {
+    site = undefined;
+  } finally {
+    Error.prepareStackTrace = previous;
+  }
+  return {
+    sourceLine: "",
+    scriptResourceName: site?.getFileName?.() ?? site?.getScriptNameOrSourceURL?.() ?? "",
+    lineNumber: site?.getLineNumber?.() ?? 0,
+    startColumn: Math.max(0, (site?.getColumnNumber?.() ?? 1) - 1),
+  };
+};
+
 export const createErrorsBinding = () => ({
   setPrepareStackTraceCallback: () => {},
   setGetSourceMapErrorSource: () => {},
@@ -10,6 +34,7 @@ export const createErrorsBinding = () => ({
   setMaybeCacheGeneratedSourceMap: () => {},
   setEnhanceStackForFatalException: () => {},
   noSideEffectsToString: (value: unknown) => String(value),
+  getErrorSourcePositions,
   triggerUncaughtException: (error: unknown) => {
     throw error;
   },
