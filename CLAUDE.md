@@ -16,20 +16,26 @@ strict TypeScript; we did NOT copy vivari's JS.
 
 Done and verified in real Chromium:
 - Boot handshake, kernel worker, File System Worker (in-memory `Vfs`), `wc.fs.*`, `mount`.
-- Real processes: one Web Worker per PID, own SAB + doorbell port, stdout/stderr streams, `kill`.
-- Built-ins: `echo cat ls pwd mkdir rm sleep true false node`.
+- Real processes: one Web Worker per PID, own SAB + doorbell port, stdout/stderr/stdin streams,
+  `kill`. `stdin` is a real open pipe (out-of-band via `postMessage`, never the SAB): open until
+  the host closes it or the process exits, and only refs the event loop while actually being
+  read (`resume()`/a `'data'` listener) - a script that never touches it still exits on its own.
+- Built-ins: `echo cat ls pwd mkdir rm sleep true false node`. `cat` with no args streams real
+  stdin.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
   `readline`, `readline/promises`, `child_process.spawn`/`exec`/`execFile` (real Node code; a
   child is another real Process Worker the kernel supervises - see `kernel/processes.ts`'s
-  `parentPid` and `runtime/bindings/childProcess.ts`).
-- Tests: 308 Vitest + 32 Playwright (Chromium). See "Verifying".
+  `parentPid` and `runtime/bindings/childProcess.ts`). `child.stdin.write()`/`.end()` deliver for
+  real, over the same stdin plumbing as top-level processes.
+- Tests: 315 Vitest + 35 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects) + stdin data,
-`child_process.execSync`/`spawnSync`/`fork` (IPC), ES modules, real `http`/`net` (TCP/UDP/DNS) +
-preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
-`fs.watch`, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects),
+`child_process.execSync`/`spawnSync`/`fork` (IPC), subtree-kill (a parent's still-running
+`child_process` children are orphaned, not killed with it), ES modules, real `http`/`net`
+(TCP/UDP/DNS) + preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev
+server/HMR, `fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -102,6 +108,11 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   calls back into the binding, it recurses until the stack overflows. Capture the native
   function at module-import time instead (`eventLoop.ts`'s `nativeSetTimeout`, `bindings/loop.ts`'s
   `nativeQueueMicrotask`). Vitest can't catch this: there, `globalObject` is never `self`.
+- `process.stdin` has no backing handle to hook readStart/readStop on for event-loop ref
+  counting (unlike real Node's TTY/pipe handle), so `runtime.ts` refs the loop off the
+  `Readable`'s own `resume`/`pause`/`end` events instead. Get this wrong (e.g. ref whenever a
+  stdin host merely exists) and every spawned process - not just ones reading stdin - stops
+  exiting on its own the moment the public API always wires one up.
 
 ## Conventions
 

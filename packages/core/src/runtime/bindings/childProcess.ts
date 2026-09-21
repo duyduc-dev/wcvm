@@ -15,6 +15,8 @@ export type ChildProcessEvent =
 export interface IChildProcessHost {
   spawn(childPid: number, command: string, args: string[], cwd: string | undefined, env: Record<string, string> | undefined): void;
   kill(childPid: number, signal?: string): void;
+  writeStdin(childPid: number, chunk: Uint8Array): void;
+  endStdin(childPid: number): void;
   /** Registers the one handler for every child's data/exit events. */
   onEvent(handler: (event: ChildProcessEvent) => void): void;
 }
@@ -45,23 +47,46 @@ class ShutdownWrap {}
 
 type QueuedRead = { chunk: Uint8Array } | { eof: true };
 
+const bytesFromString = (str: string, kind: "utf8" | "latin1" | "ucs2"): Uint8Array => {
+  if (kind === "utf8") return new TextEncoder().encode(str);
+  if (kind === "ucs2") {
+    const bytes = new Uint8Array(str.length * 2);
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < str.length; i++) view.setUint16(i * 2, str.charCodeAt(i), true);
+    return bytes;
+  }
+  const bytes = new Uint8Array(str.length);
+  for (let i = 0; i < str.length; i++) bytes[i] = str.charCodeAt(i) & 0xff;
+  return bytes;
+};
+
+const WRITEV_ENCODING_KIND: Record<string, "utf8" | "latin1" | "ucs2"> = {
+  utf8: "utf8", "utf-8": "utf8",
+  latin1: "latin1", binary: "latin1", ascii: "latin1",
+  ucs2: "ucs2", "ucs-2": "ucs2", utf16le: "ucs2", "utf-16le": "ucs2",
+};
+
 class Pipe {
   type: number;
   onread: ((arrayBuffer: ArrayBuffer) => void) | null = null;
   reading = false;
   bytesRead = 0;
   bytesWritten = 0;
-  /** stdin (fd 0, we'd write to the child) vs stdout/stderr (we read); set by Process.spawn. */
+  /** stdin (fd 0, we write to the child) vs stdout/stderr (we read); set by Process.spawn. */
   direction: "in" | "out" | null = null;
+  /** The child this pipe belongs to; set by Process.spawn alongside `direction`. */
+  childPid: number | null = null;
   // Not `private`: an exported factory subclasses this, and TS can't emit a
   // declaration type for an exported class with private inherited members.
   queue: QueuedRead[] = [];
   closed = false;
   readonly state: Int32Array;
+  readonly host: IChildProcessHost;
 
-  constructor(type: number, state: Int32Array) {
+  constructor(type: number, state: Int32Array, host: IChildProcessHost) {
     this.type = type;
     this.state = state;
+    this.host = host;
   }
 
   readStart(): number {
@@ -75,17 +100,59 @@ class Pipe {
     return 0;
   }
 
-  // Writing to a child's stdin has no delivery path yet (needs the general
-  // stdin mechanism PLAN.md already lists as not-done); fail loudly rather
-  // than silently dropping bytes.
-  writeBuffer = (): number => uvCode("ENOSYS");
-  writeUtf8String = this.writeBuffer;
-  writeLatin1String = this.writeBuffer;
-  writeAsciiString = this.writeBuffer;
-  writeUcs2String = this.writeBuffer;
-  writev = (): number => uvCode("ENOSYS");
+  writeBuffer(_req: WriteWrap, data: Uint8Array): number {
+    return this.deliverWrite(data);
+  }
+  writeUtf8String(_req: WriteWrap, data: string): number {
+    return this.deliverWrite(bytesFromString(data, "utf8"));
+  }
+  writeLatin1String(_req: WriteWrap, data: string): number {
+    return this.deliverWrite(bytesFromString(data, "latin1"));
+  }
+  writeAsciiString(_req: WriteWrap, data: string): number {
+    return this.deliverWrite(bytesFromString(data, "latin1"));
+  }
+  writeUcs2String(_req: WriteWrap, data: string): number {
+    return this.deliverWrite(bytesFromString(data, "ucs2"));
+  }
+
+  writev(_req: WriteWrap, chunks: unknown[], allBuffers: boolean): number {
+    const parts: Uint8Array[] = [];
+    if (allBuffers) {
+      for (const chunk of chunks) parts.push(chunk as Uint8Array);
+    } else {
+      for (let i = 0; i < chunks.length; i += 2) {
+        const chunk = chunks[i];
+        if (typeof chunk === "string") {
+          const encoding = chunks[i + 1] as string | undefined;
+          parts.push(bytesFromString(chunk, (encoding ? WRITEV_ENCODING_KIND[encoding] : undefined) ?? "utf8"));
+        } else {
+          parts.push(chunk as Uint8Array);
+        }
+      }
+    }
+    const combined = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let offset = 0;
+    for (const part of parts) {
+      combined.set(part, offset);
+      offset += part.length;
+    }
+    return this.deliverWrite(combined);
+  }
+
+  /** Every write completes synchronously: either delivered now, or rejected now.
+   *  Not `private`, for the same declaration-emit reason as the fields above. */
+  deliverWrite(bytes: Uint8Array): number {
+    if (this.direction !== "out" || this.childPid === null) return uvCode("ENOSYS");
+    this.host.writeStdin(this.childPid, bytes);
+    this.bytesWritten += bytes.length;
+    this.state[K_BYTES_WRITTEN] = bytes.length;
+    this.state[K_LAST_WRITE_WAS_ASYNC] = 0;
+    return 0;
+  }
 
   shutdown(): number {
+    if (this.direction === "out" && this.childPid !== null) this.host.endStdin(this.childPid);
     return 1; // finished synchronously; net.js calls the callback itself.
   }
 
@@ -157,6 +224,7 @@ class Process {
     options.stdio.forEach((slot, fd) => {
       if (slot?.handle instanceof Pipe) {
         slot.handle.direction = fd === 0 ? "out" : "in";
+        slot.handle.childPid = childPid;
         this.router.registerPipe(childPid, fd, slot.handle);
       }
     });
@@ -254,7 +322,7 @@ export const createPipeWrapBinding = (ctx: IChildProcessContext) => {
   return {
     Pipe: class extends Pipe {
       constructor(type: number) {
-        super(type, router.state);
+        super(type, router.state, router.host);
       }
     },
     PipeConnectWrap: class PipeConnectWrap {},

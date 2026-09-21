@@ -11,12 +11,19 @@ import { createBuiltinLoader } from "./loader";
 import { createPrimordials } from "./primordials";
 import { createProcessObject, NODE_VERSION, ProcessExit } from "./process";
 
+export interface IStdinHost {
+  /** Registers the one handler for incoming stdin; a null chunk means EOF. */
+  onData(handler: (chunk: Uint8Array | null) => void): void;
+}
+
 export interface IRuntimeHost {
   write(stream: "stdout" | "stderr", chunk: Uint8Array): void;
   /** Overrides for the scheduler; tests use this to control time. */
   loopHost?: IEventLoopHost;
   /** Backs child_process; without it, `require("child_process")` can't spawn. */
   childProcess?: IChildProcessHost;
+  /** Feeds process.stdin; without it, stdin behaves as already at EOF. */
+  stdin?: IStdinHost;
 }
 
 export interface IRuntimeOptions {
@@ -108,9 +115,29 @@ const createRuntime = (options: IRuntimeOptions) => {
   };
   const stdout = makeOutput("stdout", 1);
   const stderr = makeOutput("stderr", 2);
+  // Real semantics: open until the host closes it or this process exits, not
+  // auto-ended - a script that reads stdin blocks for real data, same as Node.
+  // A real handle backing stdin would ref the loop only while actively read
+  // from (readStart/readStop); we have no handle, so mirror that off the
+  // Readable's own resume/pause/end events instead - a script that never
+  // touches stdin must still be able to exit on its own.
   const stdin = new Readable({ read() {} });
-  stdin.push(null);
   Object.assign(stdin, { fd: 0, isTTY: false });
+  if (host.stdin) {
+    let release: (() => void) | null = null;
+    stdin.on("resume", () => {
+      release ??= loop.ref();
+    });
+    const unref = () => {
+      release?.();
+      release = null;
+    };
+    stdin.on("pause", unref);
+    stdin.on("end", unref);
+    host.stdin.onData((chunk) => stdin.push(chunk));
+  } else {
+    stdin.push(null);
+  }
   Object.defineProperties(process, {
     stdout: { get: () => stdout, enumerable: true, configurable: true },
     stderr: { get: () => stderr, enumerable: true, configurable: true },

@@ -1,11 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLoopbackFs } from "../testing/loopbackFs";
+import type { IStdinHost } from "../runtime/runtime";
 import { resolveProgram } from ".";
+
+/** A stdin host the test drives directly, like the process worker would. */
+const createFakeStdin = () => {
+  let handler: ((chunk: Uint8Array | null) => void) | null = null;
+  const host: IStdinHost = {
+    onData: (h) => {
+      handler = h;
+    },
+  };
+  return { host, push: (chunk: Uint8Array | null) => handler?.(chunk) };
+};
 
 const setup = () => {
   const { fs, vfs } = createLoopbackFs();
   const sleeps: number[] = [];
-  const run = async (command: string, args: string[], cwd = "/") => {
+  const run = async (command: string, args: string[], cwd = "/", stdin?: IStdinHost) => {
     const out: string[] = [];
     const err: string[] = [];
     const program = resolveProgram(command)!;
@@ -22,6 +34,7 @@ const setup = () => {
       sleep: async (ms) => {
         sleeps.push(ms);
       },
+      stdin,
     });
     return { status, out: out.join(""), err: err.join("") };
   };
@@ -83,10 +96,18 @@ describe("cat", () => {
     expect(r.err).toContain("cat: /d: Is a directory");
   });
 
-  it("refuses to read stdin for now", async () => {
+  it("with no args and no stdin host, acts like reading an already-closed stdin", async () => {
     const r = await t.run("cat", []);
-    expect(r.status).toBe(1);
-    expect(r.err).toContain("stdin");
+    expect(r).toMatchObject({ status: 0, out: "" });
+  });
+
+  it("with no args, streams stdin to stdout until it ends", async () => {
+    const stdin = createFakeStdin();
+    const done = t.run("cat", [], "/", stdin.host);
+    stdin.push(new TextEncoder().encode("hello "));
+    stdin.push(new TextEncoder().encode("world"));
+    stdin.push(null);
+    expect(await done).toMatchObject({ status: 0, out: "hello world" });
   });
 
   it("streams binary content unchanged", async () => {

@@ -401,9 +401,72 @@ describe("the event loop", () => {
 });
 
 describe("standard streams", () => {
-  it("stdin is an already-ended stream", async () => {
+  it("stdin is an already-ended stream when the host provides none", async () => {
     const r = await run(`process.stdin.on("data", () => console.log("data")); process.stdin.on("end", () => console.log("end")); process.stdin.resume()`);
     expect(r.stdout).toBe("end\n");
+  });
+
+  /**
+   * `runScript` can't interleave: it awaits the whole run before returning.
+   * These drive `createRuntime` directly so the test can push stdin data
+   * mid-run, after the script has installed its listeners.
+   */
+  const runInterleaved = async (source: string) => {
+    const fs = (await import("../testing/loopbackFs")).createLoopbackFs().fs;
+    fs.mkdir("/app");
+    fs.writeFile("/app/main.js", source);
+    const { createRuntime } = await import("./runtime");
+    const outChunks: string[] = [];
+    let deliver: ((chunk: Uint8Array | null) => void) | undefined;
+    const runtime = createRuntime({
+      fs,
+      cwd: "/app",
+      argv: ["/bin/node"],
+      env: {},
+      host: {
+        write: (_stream, chunk) => outChunks.push(new TextDecoder().decode(chunk)),
+        stdin: { onData: (h) => (deliver = h) },
+      },
+    });
+    const donePromise = runtime.runMain("/app/main.js");
+    // Give the script a turn to install its listeners before pushing.
+    await Promise.resolve();
+    return { deliver: deliver!, done: donePromise, stdout: () => outChunks.join("") };
+  };
+
+  it("with a real stdin host, a script reading stdin sees exactly what's pushed, in order", async () => {
+    const r = await runInterleaved(`
+      let out = "";
+      process.stdin.on("data", (c) => { out += c; });
+      process.stdin.on("end", () => console.log("end:", out));
+      process.stdin.resume();
+    `);
+    r.deliver(new TextEncoder().encode("hello "));
+    r.deliver(new TextEncoder().encode("world"));
+    r.deliver(null);
+    expect(await r.done).toBe(0);
+    expect(r.stdout()).toBe("end: hello world\n");
+  });
+
+  it("stays alive waiting for stdin while resumed, then exits once it ends", async () => {
+    const r = await runInterleaved(`
+      process.stdin.resume();
+      process.stdin.on("end", () => console.log("ended"));
+      setTimeout(() => console.log("still running"), 5);
+    `);
+    // The timer alone wouldn't keep a resumed-but-silent stdin from mattering;
+    // confirm the process is still alive after it, waiting on stdin.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(r.stdout()).toBe("still running\n");
+    r.deliver(null);
+    expect(await r.done).toBe(0);
+    expect(r.stdout()).toBe("still running\nended\n");
+  });
+
+  it("a script that never touches stdin exits normally even with a live host that never ends it", async () => {
+    const r = await runInterleaved(`console.log("done")`);
+    expect(await r.done).toBe(0);
+    expect(r.stdout()).toBe("done\n");
   });
 
   it("stdout reports what it is", async () => {

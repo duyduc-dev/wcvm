@@ -230,4 +230,36 @@ describe("child_process routing", () => {
       { type: "process:exit", processId: 1, exitCode: 0 },
     ]);
   });
+
+  it("a child:stdin message from a parent worker delivers to its child's own worker", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "cat", args: [] });
+    const chunk = new Uint8Array([7]);
+
+    t.workers[0].emit({ type: "child:stdin", childPid: 1_000_001, chunk });
+    t.workers[0].emit({ type: "child:stdinEnd", childPid: 1_000_001 });
+
+    expect(t.workers[1].childEvents).toEqual([{ type: "stdin", chunk }, { type: "stdinEnd" }]);
+  });
+});
+
+describe("stdin", () => {
+  it("writeStdin/endStdin deliver stdin/stdinEnd straight to that process's worker", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    const chunk = new Uint8Array([1, 2, 3]);
+
+    t.table.writeStdin(1, chunk);
+    t.table.endStdin(1);
+
+    expect(t.workers[0].childEvents).toEqual([{ type: "stdin", chunk }, { type: "stdinEnd" }]);
+  });
+
+  it("writeStdin/endStdin on an unknown or already-exited pid does nothing", () => {
+    expect(() => t.table.writeStdin(99, new Uint8Array())).not.toThrow();
+    expect(() => t.table.endStdin(99)).not.toThrow();
+
+    t.table.spawn({ processId: 1, command: "x", args: [] });
+    t.workers[0].emit({ type: "exit", code: 0 });
+    expect(() => t.table.writeStdin(1, new Uint8Array())).not.toThrow();
+  });
 });
