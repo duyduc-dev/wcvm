@@ -21,8 +21,7 @@ This pnpm workspace contains `wcvm`, a browser-based WebContainer-style runtime
     diagnostics and state.
 - `examples/playground/`: Vite integration demo and Playwright end-to-end coverage.
 - `PLAN.md`: phased implementation plan and open decisions. Read it first.
-- `PROGRESS.md`: ARCHIVE of the old `duckwc` implementation. Useful history, not
-  a description of this tree.
+- `CLAUDE.md`: handoff context for a fresh session (architecture, status, gotchas).
 
 Keep tests beside the module they cover: `packages/core/src/**/Thing.test.ts`.
 

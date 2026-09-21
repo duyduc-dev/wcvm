@@ -1,7 +1,8 @@
 # wcvm - context for a fresh session
 
 Read this first, then `PLAN.md` (roadmap + known differences) and `AGENTS.md` (conventions).
-`PROGRESS.md` is an ARCHIVE of an older implementation (`duckwc`); it does not describe this tree.
+An older implementation (`duckwc`) once lived here; its notes (`PROGRESS.md`) were removed but are in
+git history: `git show 5e7e388:PROGRESS.md`.
 
 ## What this is
 
