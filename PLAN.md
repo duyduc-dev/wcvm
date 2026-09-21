@@ -12,12 +12,14 @@ Done: Phases 0-3, and Phase 4 except ESM/child_process. `boot()` returns `{ spaw
   (own SAB + doorbell port to the fs worker) and returns `stdout`/`stderr` streams, `exit`
   and `kill()`. Built-ins: `echo cat ls pwd mkdir rm sleep true false` and **`node`**.
 - `node script.js [args]` / `node -e code` run Node's real vendored `lib/` (v24.18.0):
-  `path events buffer util stream timers console fs os` + the internals they need, on our own
-  `internalBinding` layer, with a libuv-shaped event loop, a real `process`, and a CommonJS
-  loader (node_modules, package.json `main`/`exports`, JSON, cycles).
+  `path events buffer util stream timers console fs os assert readline` + the internals they
+  need, on our own `internalBinding` layer, with a libuv-shaped event loop, a real `process`,
+  and a CommonJS loader (node_modules, package.json `main`/`exports`, JSON, cycles).
 - `fs` (sync, callback, `fs.promises`, streams, `opendir`, FileHandle) and `os` are Node's real
   modules over `bindings/fs.ts`; errors have Node's exact message/errno/code/syscall/path/dest.
-Verified by Vitest (293) and Playwright in real Chromium (25), including a script reading a
+- `assert`/`readline`/`readline/promises` are Node's real modules; `assert`'s no-message path
+  (`assert(x)`) never shows the literal failing expression (see "Known differences" below).
+Verified by Vitest (300) and Playwright in real Chromium (27), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: ESM (`import`), `child_process`, `http`/`net`, stdin data, `worker_threads`,
@@ -49,8 +51,14 @@ Not done: ESM (`import`), `child_process`, `http`/`net`, stdin data, `worker_thr
   uid/gid report 1000. `fs.watch` needs the kernel's OP_WATCH (not built yet).
 - fd numbers come from one VFS table shared by all processes (each process's fds are closed
   when it exits or is killed, checked in Chromium), so they are not 3,4,5... per process.
-- The process worker bundle is ~1.1 MB because it contains the whole runtime; every process
+- The process worker bundle is ~1.2 MB because it contains the whole runtime; every process
   pays to parse it even for `echo`. Split `node` into its own worker entry if that shows up.
+- `assert`'s "show the failing expression" enrichment (`assert(x)` with no message) needs Node's
+  vendored acorn tokenizer, which lives outside `lib/` (`deps/acorn`) and our vendoring pipeline
+  only fetches `lib/**`; `internalBinding('errors').getErrorSourcePositions` (`bindings/misc.ts`)
+  gets real file/line/column from V8's `Error.prepareStackTrace`, but always reports an empty
+  source line, so the shimmed tokenizer (`runtime/shims.ts`) always yields zero tokens - correct
+  for that empty input, not an approximation. `assert(x)` still throws `AssertionError` either way.
 
 ## Architecture to build (from vivari)
 
@@ -107,14 +115,14 @@ module: `Thing.test.ts`).
 - Still open from this phase: stdin. Deliver it out-of-band (`postMessage`), not through
   the SAB, since a running process is not parked on it.
 
-### Phase 4 - Node runtime in the process worker  (MOSTLY DONE; fs next)
+### Phase 4 - Node runtime in the process worker  (MOSTLY DONE; child_process/ESM next)
 - Sync CommonJS loader (`node_modules` resolution), per-process event loop
   (nextTick, microtasks, timers, setImmediate), builtins: `process`, `fs`,
   `path`, `events`, `buffer`.
 - Decided: vendor Node's real `lib/` + our `internalBinding` (vivari "Path B").
-- Done: `fs`, `fs/promises`, `os`, `string_decoder`, `stream`.
-- Remaining: `child_process` (spawn via the kernel), `readline`, `assert`, `http`/`net`
-  (Phase 6), ESM.
+- Done: `fs`, `fs/promises`, `os`, `string_decoder`, `stream`, `assert`, `readline`,
+  `readline/promises`.
+- Remaining: `child_process` (spawn via the kernel), `http`/`net` (Phase 6), ESM.
 
 ### Phase 5 - Shell
 - Small `sh`: `;` `&&` `||`, pipes, redirects, `node <file>`. Interactive REPL

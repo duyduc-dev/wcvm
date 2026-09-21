@@ -417,3 +417,27 @@ describe("standard streams", () => {
     expect(r.code).toBe(0);
   });
 });
+
+describe("assert and readline from user code", () => {
+  it("require('assert') throws AssertionError, uncaught, with a nonzero exit", async () => {
+    const r = await run(`const assert = require("assert"); assert.strictEqual(1, 1); assert.strictEqual(1, 2, "nope")`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("AssertionError");
+    expect(r.stderr).toContain("nope");
+  });
+
+  it("require('readline') reads lines from a piped Readable and closes on end", async () => {
+    const r = await run(`
+      const readline = require("readline");
+      const { Readable } = require("stream");
+      const input = new Readable({ read() {} });
+      const rl = readline.createInterface({ input, terminal: false });
+      rl.on("line", (line) => console.log("line:", line));
+      rl.on("close", () => console.log("closed"));
+      input.push("one\\ntwo\\n");
+      input.push(null);
+    `);
+    expect(r.stdout).toBe("line: one\nline: two\nclosed\n");
+    expect(r.code).toBe(0);
+  });
+});

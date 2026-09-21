@@ -179,3 +179,76 @@ describe("vendored util", () => {
     expect(new util.TextDecoder().decode(new util.TextEncoder().encode("ok"))).toBe("ok");
   });
 });
+
+describe("vendored assert", () => {
+  const assert = load("assert");
+
+  it("ok/strictEqual/deepStrictEqual pass and fail correctly", () => {
+    expect(() => assert.ok(true)).not.toThrow();
+    expect(() => assert.ok(false)).toThrow(assert.AssertionError);
+    expect(() => assert.strictEqual(1, 1)).not.toThrow();
+    expect(() => assert.strictEqual(1, "1" as unknown as number)).toThrow(assert.AssertionError);
+    expect(() => assert.deepStrictEqual({ a: [1, 2] }, { a: [1, 2] })).not.toThrow();
+    expect(() => assert.deepStrictEqual({ a: 1 }, { a: "1" })).toThrow(assert.AssertionError);
+  });
+
+  it("throws/doesNotThrow/rejects/doesNotReject", async () => {
+    expect(() =>
+      assert.throws(() => {
+        throw new TypeError("bad");
+      }, TypeError),
+    ).not.toThrow();
+    expect(() => assert.doesNotThrow(() => {})).not.toThrow();
+    await expect(assert.rejects(Promise.reject(new Error("x")))).resolves.toBeUndefined();
+    await expect(assert.doesNotReject(Promise.resolve(1))).resolves.toBeUndefined();
+  });
+
+  it("AssertionError carries actual/expected/operator/code", () => {
+    try {
+      assert.strictEqual(1, 2);
+      throw new Error("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(assert.AssertionError);
+      expect((error as any).code).toBe("ERR_ASSERTION");
+      expect((error as any).actual).toBe(1);
+      expect((error as any).expected).toBe(2);
+      expect((error as any).operator).toBe("strictEqual");
+    }
+  });
+});
+
+describe("vendored readline", () => {
+  const { Readable, Writable } = load("stream");
+  const sink = () =>
+    new Writable({
+      write(_chunk: unknown, _encoding: string, callback: () => void) {
+        callback();
+      },
+    });
+
+  it("emits 'line' for each newline-terminated chunk and closes on input end", async () => {
+    const readline = load("readline");
+    const input = new Readable({ read() {} });
+    const rl = readline.createInterface({ input, output: sink(), terminal: false });
+    const lines: string[] = [];
+    rl.on("line", (line: string) => lines.push(line));
+    const closed = new Promise((resolve) => rl.on("close", resolve));
+
+    input.push("hello\nworld\n");
+    input.push(null);
+    await closed;
+
+    expect(lines).toEqual(["hello", "world"]);
+  });
+
+  it("readline/promises resolves a question and closes cleanly", async () => {
+    const promises = load("readline/promises");
+    const input = new Readable({ read() {} });
+    const rl = promises.createInterface({ input, output: sink(), terminal: false });
+
+    const answer = rl.question("answer? ");
+    input.push("42\n");
+    expect(await answer).toBe("42");
+    rl.close();
+  });
+});

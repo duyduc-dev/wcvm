@@ -20,8 +20,9 @@ Done and verified in real Chromium:
 - Built-ins: `echo cat ls pwd mkdir rm sleep true false node`.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
-  `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`.
-- Tests: ~293 Vitest + 25 Playwright (Chromium). See "Verifying".
+  `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
+  `readline`, `readline/promises`.
+- Tests: 300 Vitest + 27 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects) + stdin data, `child_process`,
 ES modules, `http`/`net` + preview Service Worker, fetcher worker + real `npm`, OPFS persistence,
