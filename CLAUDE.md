@@ -23,8 +23,12 @@ Done and verified in real Chromium:
   Killing (or the natural exit of) a process kills its whole subtree: a `child_process` with no
   live parent left would otherwise strand a Process Worker in the tab forever (`detached` is
   accepted but not honoured, so there is no opt-out yet).
-- Built-ins: `echo cat ls pwd mkdir rm sleep true false node`. `cat` with no args streams real
+- Built-ins: `echo cat ls pwd mkdir rm sleep true false node sh`. `cat` with no args streams real
   stdin.
+- `sh -c "..."` / `sh script.sh` (`programs/sh/`): `;`/`&&`/`||` sequencing, `|` pipes (in-memory,
+  everything is one worker), `>`/`>>`/`<` redirects, `cd` as a shell builtin. Runs over the same
+  built-in registry as everything else, including `node` and recursively `sh` itself. No `$`
+  expansion, globbing, subshells, control flow or `&` background jobs.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
@@ -32,9 +36,9 @@ Done and verified in real Chromium:
   child is another real Process Worker the kernel supervises - see `kernel/processes.ts`'s
   `parentPid` and `runtime/bindings/childProcess.ts`). `child.stdin.write()`/`.end()` deliver for
   real, over the same stdin plumbing as top-level processes.
-- Tests: 319 Vitest + 36 Playwright (Chromium). See "Verifying".
+- Tests: 353 Vitest + 41 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects),
+Not done (roadmap order, see PLAN.md): an interactive REPL (`node` or `sh`),
 `child_process.execSync`/`spawnSync`/`fork` (IPC), ES modules, real `http`/`net` (TCP/UDP/DNS) +
 preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
 `fs.watch`, Python/Bun, Studio UI.
@@ -115,6 +119,13 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   `Readable`'s own `resume`/`pause`/`end` events instead. Get this wrong (e.g. ref whenever a
   stdin host merely exists) and every spawned process - not just ones reading stdin - stops
   exiting on its own the moment the public API always wires one up.
+- A module that resolves a builtin by name and can be asked for itself (`sh` running `sh -c
+  "sh -c ..."`) is circular with whatever module owns the registry. A plain object-literal
+  property (`builtins.ts`'s `{ ..., sh, ... }`) captures whatever the circular import happened
+  to hold AT THAT LINE - `undefined` if anything reaches the far module first - which is
+  load-order dependent, so it can pass under one bundler/test runner and fail under another.
+  Use a getter (`get sh() { return sh; }`) so the property reads the live binding at access
+  time instead of snapshotting it at module-init time.
 
 ## Conventions
 
