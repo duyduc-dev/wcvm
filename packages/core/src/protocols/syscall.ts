@@ -92,8 +92,13 @@ export const makeViews = (sab: SharedArrayBuffer): ISyscallViews => ({
 export const encodeString = (value: string): Uint8Array =>
   textEncoder.encode(value);
 
+// Browsers reject TextDecoder.decode() on a view over a SharedArrayBuffer
+// ("must not be shared"), though Node accepts it. Every request field is such
+// a view, so copy first (slice() always yields a non-shared buffer).
 export const decodeBytes = (bytes: Uint8Array): string =>
-  textDecoder.decode(bytes);
+  textDecoder.decode(
+    bytes.buffer instanceof SharedArrayBuffer ? bytes.slice() : bytes,
+  );
 
 export const u32ToBytes = (value: number): Uint8Array => {
   const bytes = new Uint8Array(4);

@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DATA_BYTES,
   SyscallError,
@@ -46,6 +46,35 @@ describe("syscall framing", () => {
     expect(() => decodeRequest(frame.subarray(0, frame.length - 1))).toThrow(
       expect.objectContaining({ code: "EPROTO" }),
     );
+  });
+});
+
+describe("decodeBytes", () => {
+  it("never hands TextDecoder a view over shared memory (browsers throw on it)", () => {
+    const shared = new Uint8Array(new SharedArrayBuffer(3));
+    shared.set([104, 105, 33]);
+
+    // Node accepts shared views, so enforce the browser's rule here instead.
+    const realDecode = TextDecoder.prototype.decode;
+    const spy = vi
+      .spyOn(TextDecoder.prototype, "decode")
+      .mockImplementation(function (
+        this: TextDecoder,
+        input?: AllowSharedBufferSource,
+      ) {
+        if ((input as ArrayBufferView).buffer instanceof SharedArrayBuffer) {
+          throw new TypeError(
+            "The provided ArrayBufferView value must not be shared.",
+          );
+        }
+        return realDecode.call(this, input);
+      });
+    try {
+      expect(decodeBytes(shared)).toBe("hi!");
+      expect(decodeBytes(new Uint8Array([104, 105]))).toBe("hi");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

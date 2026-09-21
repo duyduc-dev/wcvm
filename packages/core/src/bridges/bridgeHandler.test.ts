@@ -44,6 +44,21 @@ describe("kernel bridge handler", () => {
     );
   });
 
+  it("carries the errno code from the kernel onto the rejection", () => {
+    const { pendingRequests, receive } = setup();
+    const p = pending();
+    pendingRequests.set(3, p);
+    receive({
+      type: "kernel-response",
+      reqId: 3,
+      errorMessage: "ENOENT",
+      errorCode: "ENOENT",
+    });
+    expect(p.reject).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "ENOENT" }),
+    );
+  });
+
   it("ignores responses for unknown request ids", () => {
     const { receive } = setup();
     expect(() =>

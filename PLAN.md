@@ -6,12 +6,12 @@ in this tree; treat it as history.
 
 ## Current state
 
-- `boot()` throws `ERR_NOT_ISOLATED` unless cross-origin isolated, creates one
-  kernel worker, returns `{ spawn, diagnostics }`.
-- Kernel worker: router with `boot` and `process:spawn` only. `process:spawn`
-  is a stub that immediately posts `process:exit` code 0.
-- `IKernelHost` is empty. No tests. Nothing consumes the `ready` message yet.
-- Docs (`README`, `AGENTS`, `packages/core/README`) still say `duckwc`/`bootWC`.
+Done: Phases 0-2. `boot()` returns `{ spawn, fs, diagnostics, ready }`; a kernel
+worker boots a File System Worker (in-memory `Vfs` behind a syscall server) and
+serves `wc.fs.*` (incl. `mount`, files > 1 MiB, errno `code` on errors) over the
+SAB protocol. Verified by Vitest and by Playwright in real Chromium.
+
+Not done: `process:spawn` is still a stub that immediately reports exit 0 (Phase 3).
 
 ## Architecture to build (from vivari)
 
@@ -37,7 +37,7 @@ in this tree; treat it as history.
 Each phase ends with something demonstrable and tested (vitest, beside the
 module: `Thing.test.ts`).
 
-### Phase 0 - Housekeeping
+### Phase 0 - Housekeeping  (DONE)
 - Commit the `boot:exit` -> `ready` rename; expose `ready: Promise<void>` from
   `boot()`, with a boot timeout (`ERR_BOOT_TIMEOUT` already exists).
 - Settle the public name; fix or remove stale docs; trim `PROGRESS.md` to an
@@ -46,13 +46,13 @@ module: `Thing.test.ts`).
   (playground) and `dist/`.
 - Add tests: router, state, bridge request/reject, diagnostics.
 
-### Phase 1 - Syscall protocol + sync bridge
-- `src/protocol/syscall.ts`: layout, states, frame encode/decode, errno errors.
+### Phase 1 - Syscall protocol + sync bridge  (DONE)
+- `src/protocols/syscall.ts`: layout, states, frame encode/decode, errno errors.
 - Client `call(opcode, request)` with the park loop; servicer-side decoder.
 - Tests with two `worker_threads`: echo opcode, oversize request throws, error
   response.
 
-### Phase 2 - File system worker + VFS
+### Phase 2 - File system worker + VFS  (DONE)
 - `workers/fs` + `FsServer` owning an inode VFS (dirs, files, symlinks, stat,
   rename, fd layer, errno errors). Start with a TS in-memory VFS behind an
   interface; Rust/Wasm + compression can replace it later.
@@ -94,15 +94,29 @@ module: `Thing.test.ts`).
 
 Later: Python (Pyodide), Bun shim, debugger, Studio UI.
 
+## Lessons learned (keep in mind for later phases)
+
+- Node accepts things browsers reject. `TextDecoder.decode()` throws on a view
+  over a SharedArrayBuffer in Chromium but not in Node, so unit tests under
+  Node passed while every fs call failed with EIO in the browser. Anything that
+  touches shared memory needs a real-browser check: run
+  `pnpm --filter playground e2e` (Chromium) before calling a phase done.
+- The kernel must not block on `Atomics.wait` before its nested worker has
+  reported `ready`; boot awaits the fs worker for this reason.
+- `fs`-heavy tests can run on one thread with `testing/loopbackFs.ts` (the
+  doorbell services the request synchronously). Cross-thread behavior is
+  tested with real `worker_threads` via `testing/spawnFixtureWorker.ts`.
+
 ## First milestone
 
 Phases 0-3: `spawn("echo", ["Hello, World!"])` produces real stdout and exit
 code, and a script can `readFileSync` a file the host wrote. This proves
 host -> kernel -> process worker -> SAB -> FS worker -> back.
 
-## Open decisions
+## Decisions
 
-1. Public name: `wcvm` or `duckwc`.
-2. Node runtime: vendored real `lib/` (A) vs hand-written builtins (B).
-3. Port vivari JS wholesale vs rewrite in strict TS using it as reference
-   (recommended: rewrite; vendor only Rust crates and Node `lib/` later).
+1. Public name: `wcvm` (decided).
+2. Port vs rewrite: rewrite in strict TS using vivari as reference; vendor only
+   Rust crates and Node `lib/` later (decided).
+3. OPEN - Node runtime (needed at Phase 4): vendored real `lib/` (A, recommended)
+   vs hand-written builtins (B).

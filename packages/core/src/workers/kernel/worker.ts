@@ -1,7 +1,9 @@
 import { KernelMessage } from "../../bridges/models";
 import { createState } from "../../protocols/state";
 import { bootHandler } from "./handlers/boot";
+import { registerFsHandlers } from "./handlers/fs";
 import { processSpawnHandler } from "./handlers/process";
+import { toErrorReply } from "./errors";
 import { IWorkerState } from "./models";
 import { createRouter } from "./router";
 
@@ -16,6 +18,7 @@ const postMessage = (message: KernelMessage) => {
 
 router.handle("boot", bootHandler);
 router.handle("process:spawn", processSpawnHandler);
+registerFsHandlers(router);
 
 self.onmessage = (e: MessageEvent<KernelMessage>) => {
   const { type, reqId } = e.data;
@@ -31,12 +34,6 @@ self.onmessage = (e: MessageEvent<KernelMessage>) => {
       if (isRequest) postMessage({ type: "kernel-response", reqId, result });
     })
     .catch((cause: unknown) => {
-      const errorMessage =
-        cause instanceof Error ? cause.message : String(cause);
-      postMessage(
-        isRequest
-          ? { type: "kernel-response", reqId, errorMessage }
-          : { type: "kernel:error", messageType: type, errorMessage },
-      );
+      postMessage(toErrorReply(type, reqId, cause));
     });
 };

@@ -59,6 +59,44 @@ describe("boot", () => {
     await assertion;
   });
 
+  it("rejects ready with the kernel's reason when boot fails, not a timeout", async () => {
+    isolate(true);
+    const { boot } = await import("./boot");
+    const { ready } = boot();
+    listeners.get("kernel:error")!({
+      type: "kernel:error",
+      messageType: "boot",
+      errorMessage: "fs worker exploded",
+    });
+    await expect(ready).rejects.toMatchObject({
+      type: "ERR_WORKER",
+      message: expect.stringContaining("fs worker exploded"),
+    });
+  });
+
+  it("ignores kernel errors for other message types", async () => {
+    isolate(true);
+    const { boot } = await import("./boot");
+    const { ready } = boot();
+    listeners.get("kernel:error")!({
+      type: "kernel:error",
+      messageType: "fs:readFile",
+      errorMessage: "unrelated",
+    });
+    listeners.get("ready")!({ type: "ready" });
+    await expect(ready).resolves.toBeUndefined();
+  });
+
+  it("exposes an fs api bound to the kernel", async () => {
+    isolate(true);
+    const { boot } = await import("./boot");
+    const { fs } = boot();
+    listeners.get("ready")!({ type: "ready" });
+    bridge.request.mockResolvedValueOnce(true);
+    await expect(fs.exists("/x")).resolves.toBe(true);
+    expect(bridge.request).toHaveBeenCalledWith("fs:exists", { path: "/x" });
+  });
+
   it("holds spawn until the kernel is ready, then posts process:spawn", async () => {
     isolate(true);
     const { boot } = await import("./boot");

@@ -33,7 +33,12 @@ const kernelWorkerHandler = ({
       if (pendingRequest) {
         pendingRequests.delete(reqId);
         if (typeof data.errorMessage === "string") {
-          pendingRequest.reject(new WcvmError("ERR_WORKER", data.errorMessage));
+          pendingRequest.reject(
+            new WcvmError("ERR_WORKER", data.errorMessage, {
+              code:
+                typeof data.errorCode === "string" ? data.errorCode : undefined,
+            }),
+          );
         } else {
           pendingRequest.resolve(data.result);
         }
