@@ -7,8 +7,8 @@ export interface IStateManager<T extends object> {
 
 const createState = <T extends object>(
   initial: T,
-  diagnostics: Diagnostics,
-) => {
+  diagnostics?: Diagnostics,
+): IStateManager<T> => {
   let state: T = { ...initial };
 
   const getState = (): Readonly<T> => ({ ...state });
@@ -16,7 +16,7 @@ const createState = <T extends object>(
   const setState = (
     newState: Partial<T> | ((prevState: T) => Partial<T>),
   ): void => {
-    diagnostics.log("state:update", {
+    diagnostics?.log("state:update", {
       prevState: { ...state },
       newState:
         typeof newState === "function" ? newState(state) : { ...newState },

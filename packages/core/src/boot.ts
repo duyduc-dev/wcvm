@@ -20,11 +20,19 @@ const boot = () => {
   const stateManager = createState<IState>({ processId: 0 }, diagnostics);
   const kernelBridge = createKernelBridge({ diagnostics, stateManager });
 
-  const spawn = (command: string, args: string[], options?: ISpawnOptions) => {
+  // Boot kernel
+  kernelBridge.boot();
+
+  const spawn = async (
+    command: string,
+    args: string[],
+    options?: ISpawnOptions,
+  ) => {
     stateManager.setState((prevState) => ({
       processId: prevState.processId + 1,
     }));
-    const process = createProcessApi(
+
+    return createProcessApi(
       kernelBridge,
       stateManager.getState().processId,
       command,

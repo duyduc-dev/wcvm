@@ -1,0 +1,3 @@
+const baseEnv = () => ({});
+
+export { baseEnv };

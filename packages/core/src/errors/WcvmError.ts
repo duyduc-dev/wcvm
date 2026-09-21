@@ -1,4 +1,8 @@
-type WcvmRuntimeErrorType = "ERR_NOT_ISOLATED" | "ERR_WORKER";
+type WcvmRuntimeErrorType =
+  | "ERR_NOT_ISOLATED"
+  | "ERR_WORKER"
+  | "ERR_NOT_IMPLEMENTED"
+  | "ERR_BOOT_TIMEOUT";
 
 type WcvmErrorType = "WcvmError" | WcvmRuntimeErrorType;
 
