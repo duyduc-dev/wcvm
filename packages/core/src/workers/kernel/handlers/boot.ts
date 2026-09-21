@@ -12,7 +12,7 @@ const boot = ({ setKernel, onPostMessage }: IPrams) => {
   setKernel(kernel);
 
   onPostMessage({
-    type: "boot:exit",
+    type: "ready",
   });
 };
 

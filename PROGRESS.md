@@ -1,3 +1,8 @@
+> **ARCHIVE - describes the old `duckwc` implementation (`bootWC`, `dwc.fs`, npm, Vite HMR),
+> none of which exists in the current tree.** The current rewrite is `wcvm`; see
+> `PLAN.md`. Kept as history and for lessons learned (esp. the Vite 7 vs Vite 8/Rolldown
+> findings in sections 9-13).
+
 # Progress notes — real npm install + dev-server preview
 
 Written to hand off work-in-progress across devices.

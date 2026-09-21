@@ -2,12 +2,20 @@
 
 ## Project Structure & Module Organization
 
-This pnpm workspace contains the browser-based WebContainer-style runtime.
+This pnpm workspace contains `wcvm`, a browser-based WebContainer-style runtime
+(Node-style projects running fully client-side in Web Workers).
 
-- `packages/core/`: published `duckwc` library. Public APIs live in `src/apis/`; the runtime, virtual filesystem, protocol, bridges, and Workers are under `src/runtime/`, `src/kernel/`, `src/workers/`, and `src/protocol/`.
+- `packages/core/`: the published `wcvm` library.
+  - `src/boot.ts`, `src/apis/`: public API (`boot()`, `spawn()`).
+  - `src/bridges/`: main-thread side of the kernel worker (request/response, events).
+  - `src/workers/kernel/`: kernel worker (message router + handlers).
+  - `src/kernel/`: kernel host (PID table, supervision) - being built out.
+  - `src/protocols/`: shared protocol code, incl. `syscall.ts` (the SAB syscall ABI),
+    diagnostics and state.
 - `examples/playground/`: Vite integration demo and Playwright end-to-end coverage.
-- `apps/docs/`: React/Vite documentation site. `apps/studio/` is a separate Vite UI.
-- `PROGRESS.md`: verified behavior, known gaps, and active technical context; update it when changing a tracked capability.
+- `PLAN.md`: phased implementation plan and open decisions. Read it first.
+- `PROGRESS.md`: ARCHIVE of the old `duckwc` implementation. Useful history, not
+  a description of this tree.
 
 Keep tests beside the module they cover: `packages/core/src/**/Thing.test.ts`.
 
@@ -16,28 +24,37 @@ Keep tests beside the module they cover: `packages/core/src/**/Thing.test.ts`.
 Use pnpm 11 (the version is pinned in `package.json`).
 
 ```bash
-pnpm install                         # install workspace dependencies
-pnpm build                           # build every workspace package/app
-pnpm --filter duckwc test         # run the Vitest unit suite
-pnpm --filter playground e2e         # run Playwright browser tests
-pnpm --filter playground dev         # start the interactive demo
-pnpm --filter docs dev               # start the docs site
-pnpm --filter docs lint              # lint documentation UI code
-pnpm --filter studio lint            # lint Studio
+pnpm install                    # install workspace dependencies
+pnpm build                      # build every workspace package
+pnpm --filter wcvm test         # run the Vitest unit suite
+pnpm --filter playground dev    # start the interactive demo
+pnpm --filter playground e2e    # run Playwright browser tests
+cd packages/core && npx tsc --noEmit -p .   # typecheck
 ```
-
-The playground’s `predev`/`prebuild` hooks stage its npm and preview-service-worker assets automatically.
 
 ## Coding Style & Naming Conventions
 
-Write strict TypeScript with two-space indentation, semicolons, double-quoted strings, and trailing commas where existing code uses them. Use `camelCase` for values and functions, `PascalCase` for types/classes/React components, and descriptive module names such as `syncWireFormat.ts`. Keep browser-facing API types exported deliberately from `packages/core/src`; avoid leaking worker internals.
+Strict TypeScript, two-space indentation, semicolons, double-quoted strings,
+trailing commas where existing code uses them. `camelCase` for values and
+functions, `PascalCase` for types/classes, `I`-prefixed interfaces as in existing
+code. Keep browser-facing types exported deliberately from `packages/core/src`;
+don't leak worker internals. There is no repository-wide formatter: preserve the
+conventions of the file you edit.
 
-There is no repository-wide formatter. Preserve the conventions of the file you edit; Docs uses Oxlint and Studio uses ESLint.
+`protocols/syscall.ts` must stay dependency-free and use erasable TypeScript only
+(no enums, no parameter properties): tests import it directly from Node
+`worker_threads` with type stripping and no build step.
 
 ## Testing Guidelines
 
-Add or update focused Vitest coverage for every core behavior change, including success, failure, and message/stream edge cases. Name tests as readable behavior statements within `describe("module", ...)`. Run the smallest relevant suite first, then `pnpm --filter duckwc test`. Changes to the demo, preview, or Vite integration should also run `pnpm --filter playground e2e`.
+Add focused Vitest coverage for every core behavior change, including success,
+failure, and message edge cases. Name tests as readable behavior statements within
+`describe("module", ...)`. Cross-thread behavior (SAB, `Atomics.wait`) is tested
+with real `worker_threads`; see `protocols/syscall.test.ts`. Run the smallest
+suite first, then `pnpm --filter wcvm test`.
 
 ## Commit & Pull Request Guidelines
 
-Recent history uses short imperative subjects, e.g. `Fix exponential blowup in esmLoader.ts's data: URL construction`; use `Document ...` for progress notes and `Add`/`Fix`/`Implement` for code. Keep commits narrowly scoped. PRs should state the user-visible impact, tests run, linked issue or `PROGRESS.md` item where applicable, and screenshots for Docs/Studio UI changes.
+Short imperative subjects (`Add`, `Fix`, `Implement`, `Document`). Keep commits
+narrowly scoped. PRs should state user-visible impact, tests run, and the
+`PLAN.md` phase they advance.
