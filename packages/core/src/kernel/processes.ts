@@ -62,15 +62,33 @@ const createProcessTable = ({
     return parentPid === undefined ? undefined : workers.get(parentPid)?.worker;
   };
 
-  /** Idempotent: the first exit wins; later events from a dead worker are dropped. */
+  const childrenOf = (pid: number): number[] => {
+    const children: number[] = [];
+    for (const [childPid, entry] of workers) if (entry.parentPid === pid) children.push(childPid);
+    return children;
+  };
+
+  /**
+   * Idempotent: the first exit wins; later events from a dead worker are dropped.
+   * Tears down `pid`'s whole subtree: an orphaned `child_process` has no live
+   * parent left to report to or be managed by, so leaking it would strand a
+   * Process Worker (and any of *its* children) in the tab forever. `detached`
+   * is accepted by the vendored `child_process` options but not honoured, so
+   * this has no opt-out yet. `cascade` marks a subtree member being cleaned up
+   * because its ancestor is gone, not because it exited itself: no one is left
+   * to notify, so its own exit event is suppressed (real process trees don't
+   * notify a grandparent when a grandchild dies either).
+   */
   const finalize = (
     pid: number,
     code: number,
     extra: { signal?: Signal; errorMessage?: string } = {},
+    cascade = false,
   ) => {
     const entry = workers.get(pid);
     if (!entry) return;
-    const parent = parentOf(pid);
+    const parent = cascade ? undefined : parentOf(pid);
+    const children = childrenOf(pid);
     workers.delete(pid);
     // Stop the worker before detaching, so it cannot issue a request that the
     // fs worker would then service for a client that no longer exists.
@@ -78,8 +96,11 @@ const createProcessTable = ({
     entry.worker.onerror = null;
     entry.worker.terminate();
     detachFsClient(pid);
-    if (parent) parent.postMessage({ type: "child:exit", childPid: pid, exitCode: code, ...extra });
-    else emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
+    if (!cascade) {
+      if (parent) parent.postMessage({ type: "child:exit", childPid: pid, exitCode: code, ...extra });
+      else emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
+    }
+    for (const childPid of children) finalize(childPid, SIGNAL_EXIT.SIGKILL, { signal: "SIGKILL" }, true);
   };
 
   const forwardOutput = (pid: number, stream: "stdout" | "stderr", chunk: Uint8Array) => {
