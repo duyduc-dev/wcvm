@@ -1,0 +1,28 @@
+{
+  "version": "v24.18.0",
+  "modules": {
+    "internal/per_context/primordials": "per_context",
+    "path": "builtin",
+    "internal/constants": "builtin",
+    "internal/validators": "builtin",
+    "internal/errors": "builtin",
+    "internal/assert": "builtin",
+    "internal/util": "builtin",
+    "internal/options": "builtin",
+    "internal/util/types": "builtin",
+    "events": "builtin",
+    "internal/util/inspect": "builtin",
+    "internal/events/abort_listener": "builtin",
+    "util": "builtin",
+    "buffer": "builtin",
+    "internal/buffer": "builtin",
+    "util/types": "builtin",
+    "internal/v8/startup_snapshot": "builtin",
+    "internal/util/debuglog": "builtin",
+    "internal/streams/utils": "builtin",
+    "internal/util/comparisons": "builtin",
+    "internal/event_target": "builtin",
+    "internal/webidl": "builtin",
+    "internal/perf/utils": "builtin"
+  }
+}

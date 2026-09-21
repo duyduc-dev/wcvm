@@ -1,0 +1,28 @@
+{
+  "version": "v24.18.0",
+  "files": {
+    "internal/per_context/primordials": "6c9fc969aabdb7403f89eb44545a5aa0e90bec8385c71d4b2f70f54a0a8591f8",
+    "path": "dd326ecdc2d6ad2025c4991f4b480d76a9f1d52b7f6d0988a5dc0a1d02de5209",
+    "internal/constants": "8c4c12bb17f4b106760be5fe77e8d7febc9b104d9dcd97402c332f64d6619440",
+    "internal/validators": "a4485ecdd3c8a5fdb70c8c63b4229fb78d1b5f7447732bc9bebaa95b005eba61",
+    "internal/errors": "e1f6708d0e476b39724567ae0e657e2aa40ac4cba96814c4aa6b158227322bd8",
+    "internal/assert": "03940c9b646255b631d3a95cf2a9ad156d587db8b0ac223d1a87f3fd5531a807",
+    "internal/util": "4aa900feab2a6cdb84060c0358c569578d31b6f0831224792868ece9b8899951",
+    "internal/options": "e0ab420134f5d0d5a5f51de2ec46680387a7cb98be78b6bd6b1f356c96d6540b",
+    "internal/util/types": "9fee21497045f91bb4501c8e915b2f2b79da06e24b8970e26d559584ec9f2da9",
+    "events": "113b0cd4b1c81c909022c572525ae844136a746dd26e2b7e4a3161841e744281",
+    "internal/util/inspect": "4df57a8b8c0a2db3fdd448a3fc8452ec1e93362287ff1cb1f573880b8d4e3b37",
+    "internal/events/abort_listener": "349abf5f54373518279092b802faa3ce9687d1e63cf81255290406c4a1c0302e",
+    "util": "b7fa1864fa5e8a387f4148a3ee01b0d293caa12618178770b591b4086f52d85c",
+    "buffer": "85699dbf250b11767414f73c8912ef5b5578ae8f361730cdb2331763efa29ef7",
+    "internal/buffer": "ce1f2b80ecaf7f4d8ef3ff5d40e77e48c4413760e1a743c8c1b24cabfc1c25d8",
+    "util/types": "ccdb74daed669baa9512818d6aef80a2f352277d767f0d3f2be60d6554a67966",
+    "internal/v8/startup_snapshot": "ca0c3355a13bc0eb75185d0bf2bfdaa110504a3f74e085d91ff8a5e1868b9c93",
+    "internal/util/debuglog": "4471d0ba1b85d272e583aef5ec9fe05c28377bf59b923523495bcba46a858fec",
+    "internal/streams/utils": "76f2a40f2e1b799a575116036549bf5eca5f69b9038a77b1016eee823e51625f",
+    "internal/util/comparisons": "1a58c16d2e37277fc07d8fcc74b8a1ee1586c30e9984f4ed3e3a8bca7d4c25af",
+    "internal/event_target": "f5817a1875e4ddc8772e888c6a5c59aa74ed01f58e78096e0e36b780d604004c",
+    "internal/webidl": "52022aff95e682df13ff4f29d9302278b0106a513e8b50a0f4e6ccba81c14ccb",
+    "internal/perf/utils": "12aaefacd6f7b67360fb9758cdc94c8e0f2d43c36a1f71f313c3e4f776e80be0"
+  }
+}
