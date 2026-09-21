@@ -1,4 +1,5 @@
 import type { IFsClient } from "../fs/fsClient";
+import type { IChildProcessHost } from "../runtime/bindings/childProcess";
 
 export interface IProgramContext {
   /** Arguments after the command name. */
@@ -13,6 +14,8 @@ export interface IProgramContext {
   globalObject?: Record<string, any>;
   /** Injected so tests need not wait in real time. */
   sleep(ms: number): Promise<void>;
+  /** Backs `node`'s child_process; undefined outside a real process worker. */
+  childProcess?: IChildProcessHost;
 }
 
 /** Resolves to the process exit status. */

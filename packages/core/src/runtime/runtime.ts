@@ -4,6 +4,7 @@
 
 import type { IFsClient } from "../fs/fsClient";
 import { createInternalBinding } from "./bindings";
+import type { IChildProcessHost } from "./bindings/childProcess";
 import { createModuleSystem } from "./cjs";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
@@ -14,6 +15,8 @@ export interface IRuntimeHost {
   write(stream: "stdout" | "stderr", chunk: Uint8Array): void;
   /** Overrides for the scheduler; tests use this to control time. */
   loopHost?: IEventLoopHost;
+  /** Backs child_process; without it, `require("child_process")` can't spawn. */
+  childProcess?: IChildProcessHost;
 }
 
 export interface IRuntimeOptions {
@@ -61,6 +64,7 @@ const createRuntime = (options: IRuntimeOptions) => {
     fs,
     process,
     writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
+    childProcess: host.childProcess,
   });
   loader = createBuiltinLoader({ process, internalBinding, primordials });
   const { requireBuiltin } = loader;

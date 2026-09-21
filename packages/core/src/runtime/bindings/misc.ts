@@ -1,4 +1,4 @@
-import { UV_ERRORS, uvErrorMap } from "./uvErrors";
+import { UV_ERRORS, uvErrorMap, uvException } from "./uvErrors";
 
 // Small bindings, mostly inert: they exist so vendored modules can load and
 // query "is this feature on?" without a native core behind them.
@@ -227,3 +227,38 @@ export const createDiagnosticsChannelBinding = () => {
 
 // The permission model is off (`--permission` unset): everything is allowed.
 export const createPermissionBinding = () => ({ has: () => true });
+
+const notSupported = (name: string) => () => {
+  throw uvException("ENOSYS", name);
+};
+
+// net.js and internal/child_process.js destructure these at module load even
+// though child_process only needs pipes: real TCP/UDP/TTY/DNS are Phase 6.
+// Each class only needs to exist for `instanceof` checks; any real use throws.
+export const createTcpWrapBinding = () => ({
+  TCP: class TCP {},
+  TCPConnectWrap: class TCPConnectWrap {},
+  constants: { SOCKET: 0, SERVER: 1 },
+});
+
+export const createUdpWrapBinding = () => ({
+  UDP: class UDP {},
+  constants: { SOCKET: 0, SERVER: 1, UDP_DGRAM_IS_REMOTE: 1 },
+});
+
+export const createTtyWrapBinding = () => ({
+  TTY: class TTY {},
+  isTTY: () => false,
+  guessHandleType: () => "UNKNOWN",
+});
+
+export const createCaresWrapBinding = () => ({
+  convertIpv6StringToBuffer: notSupported("convertIpv6StringToBuffer"),
+  GetAddrInfoReqWrap: class GetAddrInfoReqWrap {},
+  GetNameInfoReqWrap: class GetNameInfoReqWrap {},
+  ChannelWrap: class ChannelWrap {},
+});
+
+// child_process.spawnSync/execFileSync (out of scope for now: needs a second,
+// blocking process<->kernel channel like the fs SAB).
+export const createSpawnSyncBinding = () => ({ spawn: notSupported("spawnSync") });

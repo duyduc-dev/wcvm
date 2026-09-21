@@ -90,6 +90,14 @@
     "readline": "builtin",
     "internal/readline/emitKeypressEvents": "builtin",
     "readline/promises": "builtin",
-    "internal/readline/promises": "builtin"
+    "internal/readline/promises": "builtin",
+    "child_process": "builtin",
+    "internal/child_process": "builtin",
+    "net": "builtin",
+    "internal/net": "builtin",
+    "internal/stream_base_commons": "builtin",
+    "dgram": "builtin",
+    "internal/dgram": "builtin",
+    "internal/socket_list": "builtin"
   }
 }

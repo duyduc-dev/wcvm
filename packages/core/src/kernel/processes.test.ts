@@ -174,3 +174,60 @@ describe("process table", () => {
     expect(t.workers[1].terminated).toBe(false);
   });
 });
+
+describe("child_process routing", () => {
+  it("a child:spawn message starts a real process and never reaches the host", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "echo", args: ["hi"], cwd: "/w", env: { FOO: "bar" } });
+
+    expect(t.table.has(1_000_001)).toBe(true);
+    expect(t.workers).toHaveLength(2);
+    expect(t.workers[1].inits[0]).toMatchObject({ command: "echo", args: ["hi"], cwd: "/w" });
+    expect(t.events).toEqual([]);
+  });
+
+  it("routes a child's stdout/stderr/exit to its parent worker, not the host", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "echo", args: ["hi"] });
+    const chunk = new Uint8Array([1]);
+
+    t.workers[1].emit({ type: "stdout", chunk });
+    t.workers[1].emit({ type: "stderr", chunk });
+    t.workers[1].emit({ type: "exit", code: 0 });
+
+    expect(t.workers[0].childEvents).toEqual([
+      { type: "child:stdout", childPid: 1_000_001, chunk },
+      { type: "child:stderr", childPid: 1_000_001, chunk },
+      { type: "child:exit", childPid: 1_000_001, exitCode: 0 },
+    ]);
+    expect(t.events).toEqual([]);
+    expect(t.table.has(1_000_001)).toBe(false);
+  });
+
+  it("a child:kill message kills only that child, reporting the signal to the parent", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "sleep", args: ["9"] });
+    t.workers[0].emit({ type: "child:kill", childPid: 1_000_001, signal: "SIGKILL" });
+
+    expect(t.workers[0].childEvents.at(-1)).toEqual({
+      type: "child:exit",
+      childPid: 1_000_001,
+      exitCode: 137,
+      signal: "SIGKILL",
+    });
+    expect(t.workers[1].terminated).toBe(true);
+    expect(t.table.has(1)).toBe(true);
+  });
+
+  it("a top-level process's own stdout/exit still go to the host, unaffected by child routing", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    const chunk = new Uint8Array([9]);
+    t.workers[0].emit({ type: "stdout", chunk });
+    t.workers[0].emit({ type: "exit", code: 0 });
+
+    expect(t.events).toEqual([
+      { type: "process:stdout", processId: 1, chunk },
+      { type: "process:exit", processId: 1, exitCode: 0 },
+    ]);
+  });
+});

@@ -3,6 +3,8 @@ import type { BuiltinFactory, PerContextFactory } from "./types";
 import f_assert from "./lib/assert.js";
 import f_async_hooks from "./lib/async_hooks.js";
 import f_buffer from "./lib/buffer.js";
+import f_child_process from "./lib/child_process.js";
+import f_dgram from "./lib/dgram.js";
 import f_diagnostics_channel from "./lib/diagnostics_channel.js";
 import f_events from "./lib/events.js";
 import f_fs from "./lib/fs.js";
@@ -16,9 +18,11 @@ import f_internal_assert_utils from "./lib/internal/assert/utils.js";
 import f_internal_async_context_frame from "./lib/internal/async_context_frame.js";
 import f_internal_async_hooks from "./lib/internal/async_hooks.js";
 import f_internal_buffer from "./lib/internal/buffer.js";
+import f_internal_child_process from "./lib/internal/child_process.js";
 import f_internal_console_constructor from "./lib/internal/console/constructor.js";
 import f_internal_console_global from "./lib/internal/console/global.js";
 import f_internal_constants from "./lib/internal/constants.js";
+import f_internal_dgram from "./lib/internal/dgram.js";
 import f_internal_errors from "./lib/internal/errors.js";
 import f_internal_errors_error_source from "./lib/internal/errors/error_source.js";
 import f_internal_event_target from "./lib/internal/event_target.js";
@@ -37,6 +41,7 @@ import f_internal_fs_sync_write_stream from "./lib/internal/fs/sync_write_stream
 import f_internal_fs_utils from "./lib/internal/fs/utils.js";
 import f_internal_fs_watchers from "./lib/internal/fs/watchers.js";
 import f_internal_linkedlist from "./lib/internal/linkedlist.js";
+import f_internal_net from "./lib/internal/net.js";
 import f_internal_options from "./lib/internal/options.js";
 import f_internal_per_context_primordials from "./lib/internal/per_context/primordials.js";
 import f_internal_perf_utils from "./lib/internal/perf/utils.js";
@@ -51,7 +56,9 @@ import f_internal_readline_interface from "./lib/internal/readline/interface.js"
 import f_internal_readline_promises from "./lib/internal/readline/promises.js";
 import f_internal_readline_utils from "./lib/internal/readline/utils.js";
 import f_internal_repl_history from "./lib/internal/repl/history.js";
+import f_internal_socket_list from "./lib/internal/socket_list.js";
 import f_internal_source_map_source_map_cache from "./lib/internal/source_map/source_map_cache.js";
+import f_internal_stream_base_commons from "./lib/internal/stream_base_commons.js";
 import f_internal_streams_add_abort_signal from "./lib/internal/streams/add-abort-signal.js";
 import f_internal_streams_compose from "./lib/internal/streams/compose.js";
 import f_internal_streams_destroy from "./lib/internal/streams/destroy.js";
@@ -79,6 +86,7 @@ import f_internal_v8_startup_snapshot from "./lib/internal/v8/startup_snapshot.j
 import f_internal_validators from "./lib/internal/validators.js";
 import f_internal_webidl from "./lib/internal/webidl.js";
 import f_internal_worker_js_transferable from "./lib/internal/worker/js_transferable.js";
+import f_net from "./lib/net.js";
 import f_os from "./lib/os.js";
 import f_path from "./lib/path.js";
 import f_readline from "./lib/readline.js";
@@ -97,6 +105,8 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "assert": f_assert,
   "async_hooks": f_async_hooks,
   "buffer": f_buffer,
+  "child_process": f_child_process,
+  "dgram": f_dgram,
   "diagnostics_channel": f_diagnostics_channel,
   "events": f_events,
   "fs": f_fs,
@@ -110,9 +120,11 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/async_context_frame": f_internal_async_context_frame,
   "internal/async_hooks": f_internal_async_hooks,
   "internal/buffer": f_internal_buffer,
+  "internal/child_process": f_internal_child_process,
   "internal/console/constructor": f_internal_console_constructor,
   "internal/console/global": f_internal_console_global,
   "internal/constants": f_internal_constants,
+  "internal/dgram": f_internal_dgram,
   "internal/errors": f_internal_errors,
   "internal/errors/error_source": f_internal_errors_error_source,
   "internal/event_target": f_internal_event_target,
@@ -131,6 +143,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/fs/utils": f_internal_fs_utils,
   "internal/fs/watchers": f_internal_fs_watchers,
   "internal/linkedlist": f_internal_linkedlist,
+  "internal/net": f_internal_net,
   "internal/options": f_internal_options,
   "internal/perf/utils": f_internal_perf_utils,
   "internal/priority_queue": f_internal_priority_queue,
@@ -144,7 +157,9 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/readline/promises": f_internal_readline_promises,
   "internal/readline/utils": f_internal_readline_utils,
   "internal/repl/history": f_internal_repl_history,
+  "internal/socket_list": f_internal_socket_list,
   "internal/source_map/source_map_cache": f_internal_source_map_source_map_cache,
+  "internal/stream_base_commons": f_internal_stream_base_commons,
   "internal/streams/add-abort-signal": f_internal_streams_add_abort_signal,
   "internal/streams/compose": f_internal_streams_compose,
   "internal/streams/destroy": f_internal_streams_destroy,
@@ -172,6 +187,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/validators": f_internal_validators,
   "internal/webidl": f_internal_webidl,
   "internal/worker/js_transferable": f_internal_worker_js_transferable,
+  "net": f_net,
   "os": f_os,
   "path": f_path,
   "readline": f_readline,

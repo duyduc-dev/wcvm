@@ -1,4 +1,5 @@
 import { createLoopbackFs } from "../testing/loopbackFs";
+import type { IChildProcessHost } from "./bindings/childProcess";
 import { createRuntime, type IRuntimeOptions } from "./runtime";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -9,6 +10,7 @@ export const runScript = async (
   entry: string,
   options: Partial<Pick<IRuntimeOptions, "argv" | "env" | "cwd">> & {
     setup?: (runtime: ReturnType<typeof createRuntime>) => void;
+    childProcess?: IChildProcessHost;
   } = {},
 ) => {
   const { fs, vfs } = createLoopbackFs();
@@ -27,6 +29,7 @@ export const runScript = async (
     env: options.env ?? {},
     host: {
       write: (stream, chunk) => (stream === "stdout" ? out : err).push(decoder.decode(chunk)),
+      childProcess: options.childProcess,
     },
   });
   options.setup?.(runtime);
