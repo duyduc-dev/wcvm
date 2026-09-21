@@ -62,7 +62,7 @@ describe("kernel host", () => {
     expect(kernel.processes.has(4)).toBe(true);
 
     processWorker.emit({ type: "exit", code: 0 });
-    expect(events).toContainEqual({ type: "process:exit", processId: 4, errorCode: 0 });
+    expect(events).toContainEqual({ type: "process:exit", processId: 4, exitCode: 0 });
     init.fsPort.close();
   });
 });

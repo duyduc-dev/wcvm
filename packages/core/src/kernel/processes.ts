@@ -66,7 +66,7 @@ const createProcessTable = ({
     worker.onerror = null;
     worker.terminate();
     detachFsClient(pid);
-    emit({ type: "process:exit", processId: pid, errorCode: code, ...extra });
+    emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
   };
 
   const spawn = (spec: ISpawnSpec) => {
@@ -75,7 +75,7 @@ const createProcessTable = ({
       emit({
         type: "process:exit",
         processId: pid,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: `Process ${pid} already exists`,
       });
       return;
@@ -91,7 +91,7 @@ const createProcessTable = ({
       emit({
         type: "process:exit",
         processId: pid,
-        errorCode: 1,
+        exitCode: 1,
         errorMessage: `Failed to start process: ${(cause as Error).message}`,
       });
       return;

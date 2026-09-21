@@ -97,7 +97,7 @@ const spawn = (page: import("@playwright/test").Page, command: string, args: str
         new Response(proc.stderr).text(),
         proc.exit,
       ]);
-      return { code: exit.errorCode, out, err, signal: exit.signal } as Result;
+      return { code: exit.exitCode, out, err, signal: exit.signal } as Result;
     },
     { command, args, cwd },
   );
@@ -148,7 +148,7 @@ test("concurrent processes are isolated and all complete", async ({ page }) => {
       procs.map(async (p) => ({
         id: p.processId,
         out: await new Response(p.stdout).text(),
-        code: (await p.exit).errorCode,
+        code: (await p.exit).exitCode,
       })),
     );
   });
@@ -167,7 +167,7 @@ test("kill stops a long-running process with SIGTERM's status", async ({ page })
     const exit = await proc.exit;
     return { exit, ms: performance.now() - started };
   });
-  expect(result.exit).toMatchObject({ errorCode: 143, signal: "SIGTERM" });
+  expect(result.exit).toMatchObject({ exitCode: 143, signal: "SIGTERM" });
   expect(result.ms).toBeLessThan(5_000);
 });
 
@@ -250,7 +250,7 @@ test.describe("node", () => {
       const rest = await new Response(new ReadableStream({
         async pull(c) { const { done, value } = await reader.read(); if (done) c.close(); else c.enqueue(value); },
       })).text();
-      return { first: new TextDecoder().decode(first.value), exitedYet, rest, code: (await proc.exit).errorCode };
+      return { first: new TextDecoder().decode(first.value), exitedYet, rest, code: (await proc.exit).exitCode };
     });
     expect(result).toEqual({ first: "early\n", exitedYet: false, rest: "late\n", code: 0 });
   });
@@ -266,7 +266,7 @@ test.describe("node", () => {
       const exit = await proc.exit;
       return { exit, ms: performance.now() - started };
     });
-    expect(r.exit).toMatchObject({ errorCode: 143, signal: "SIGTERM" });
+    expect(r.exit).toMatchObject({ exitCode: 143, signal: "SIGTERM" });
     expect(r.ms).toBeLessThan(3000);
   });
 
@@ -287,5 +287,83 @@ test.describe("node", () => {
     await spawn(page, "node", ["-e", "global.leaked = 1"]);
     const r = await spawn(page, "node", ["-e", "console.log(typeof leaked)"]);
     expect(r.out).toBe("undefined\n");
+  });
+
+  test("a script reads a file the host wrote, and the host reads what the script wrote (the milestone)", async ({ page }) => {
+    await writeFiles(page, { "/work/input.txt": "written by the host\n" });
+    const r = await spawn(page, "node", ["-e", `
+      const fs = require("fs");
+      const text = fs.readFileSync("input.txt", "utf8");
+      fs.writeFileSync("output.txt", text.toUpperCase());
+      fs.mkdirSync("made/by/script", { recursive: true });
+      console.log("read", text.length, "bytes");
+    `], "/work");
+    expect(r).toEqual({ code: 0, out: "read 20 bytes\n", err: "" });
+
+    const seen = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      return {
+        output: new TextDecoder().decode(await fs.readFile("/work/output.txt")),
+        made: await fs.exists("/work/made/by/script"),
+      };
+    });
+    expect(seen).toEqual({ output: "WRITTEN BY THE HOST\n", made: true });
+  });
+
+  test("fs errors, callbacks, promises and streams work in a real worker", async ({ page }) => {
+    await writeFiles(page, { "/w/a.txt": "0123456789" });
+    const r = await spawn(page, "node", ["-e", `
+      const fs = require("fs");
+      try { fs.readFileSync("/nope") } catch (e) { console.log(e.code, e.message) }
+      fs.readFile("a.txt", "utf8", async (err, text) => {
+        console.log("callback", text);
+        console.log("promise", await fs.promises.readFile("a.txt", "utf8"), (await fs.promises.stat("a.txt")).size);
+        let chunks = 0, total = 0;
+        fs.createReadStream("a.txt", { highWaterMark: 4 }).on("data", (c) => { chunks++; total += c.length })
+          .on("end", () => console.log("stream", chunks, total));
+      });
+    `], "/w");
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("ENOENT ENOENT: no such file or directory, open '/nope'\ncallback 0123456789\npromise 0123456789 10\nstream 3 10\n");
+  });
+
+  test("a multi-megabyte file round-trips between two processes", async ({ page }) => {
+    const w = await spawn(page, "node", ["-e", "require('fs').writeFileSync('/big.bin', Buffer.alloc(3_000_000, 5)); console.log('wrote')"]);
+    expect(w.out).toBe("wrote\n");
+    const r = await spawn(page, "node", ["-e", `
+      const b = require("fs").readFileSync("/big.bin");
+      console.log(b.length, b.every((x) => x === 5));
+    `]);
+    expect(r).toEqual({ code: 0, out: "3000000 true\n", err: "" });
+  });
+
+  test("fs.writeSync on fd 1 and 2 reaches the host's stdout and stderr", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", "const fs = require('fs'); fs.writeSync(1, 'to stdout\\n'); fs.writeSync(2, 'to stderr\\n')"]);
+    expect(r).toEqual({ code: 0, out: "to stdout\n", err: "to stderr\n" });
+  });
+
+  test("a killed process does not leak its open files", async ({ page }) => {
+    // Two rounds: if the first process's descriptors leaked, the VFS would still
+    // hold them; we can observe that as fd numbers never being reused.
+    const fdOf = async () => {
+      const proc = await spawn(page, "node", ["-e", "console.log(require('fs').openSync('/etc-none', 'w'))"]);
+      return Number(proc.out.trim());
+    };
+    const first = await fdOf();
+    const killed = await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const p = await wc.spawn("node", ["-e", "const fs = require('fs'); fs.openSync('/leak-a', 'w'); fs.openSync('/leak-b', 'w'); console.log('opened'); setInterval(() => {}, 1000)"]);
+      await p.stdout.getReader().read();
+      p.kill("SIGKILL");
+      return (await p.exit).exitCode;
+    });
+    expect(killed).toBe(137);
+    const second = await fdOf();
+    expect(second).toBe(first);
+  });
+
+  test("os reports a Linux machine", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", "const os = require('os'); console.log(os.platform(), os.tmpdir(), os.homedir(), os.EOL === '\\n')"]);
+    expect(r).toEqual({ code: 0, out: "linux /tmp /home/user true\n", err: "" });
   });
 });

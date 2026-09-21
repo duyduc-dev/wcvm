@@ -20,7 +20,7 @@ describe("vendored Node lib", () => {
 
   it("registers exactly the modules in the manifest, at one pinned version", () => {
     const registered = [...Object.keys(builtinFactories), ...Object.keys(perContextFactories)];
-    const shimmed = new Set(["internal/url", "internal/encoding", "internal/bootstrap/realm"]);
+    const shimmed = new Set(["internal/url", "internal/encoding", "internal/blob", "internal/bootstrap/realm"]);
     const vendored = registered.filter((id) => !shimmed.has(id));
     expect(vendored.sort()).toEqual(Object.keys(manifest.modules).sort());
     expect(Object.keys(lock.files).sort()).toEqual(Object.keys(manifest.modules).sort());
@@ -30,7 +30,7 @@ describe("vendored Node lib", () => {
 
   it("does not vendor modules that are shimmed by hand", () => {
     // A vendored copy would be shadowed by the shim, hiding which one runs.
-    for (const id of ["internal/url", "internal/encoding", "internal/bootstrap/realm"]) {
+    for (const id of ["internal/url", "internal/encoding", "internal/blob", "internal/bootstrap/realm"]) {
       expect(manifest.modules).not.toHaveProperty(id);
     }
   });

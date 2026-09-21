@@ -178,3 +178,53 @@ describe("sync fs client across a real worker thread", () => {
     expect(results.bigRoundTrip).toBe(true);
   });
 });
+
+describe("FsServer file descriptor ownership", () => {
+  const call = (server: FsServer, sab: SharedArrayBuffer, opcode: number, fields: Uint8Array[]) => {
+    publish(sab, opcode, fields);
+    server.service(1);
+    return outcome(sab);
+  };
+
+  it("closes a client's open descriptors when it is unregistered", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.writeFile("/f", encodeString("x"));
+
+    const flags = new Uint8Array(4);
+    const mode = new Uint8Array(4);
+    const opened = call(server, sab, 13 /* OP_OPEN */, [encodeString("/f"), flags, mode]);
+    expect(opened.state).toBe(STATE_RESPONSE_OK);
+    const fd = new DataView(opened.payload.buffer, opened.payload.byteOffset).getUint32(0, true);
+    expect(() => server.vfs.fstat(fd)).not.toThrow();
+
+    server.unregisterClient(1);
+    expect(() => server.vfs.fstat(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
+  });
+
+  it("forgets descriptors the client closed itself, and never touches another client's", () => {
+    const server = new FsServer();
+    const a = createSyscallBuffer();
+    const b = createSyscallBuffer();
+    server.registerClient(1, a);
+    server.registerClient(2, b);
+    server.vfs.writeFile("/f", encodeString("x"));
+
+    const open = (client: number, sab: SharedArrayBuffer) => {
+      publish(sab, 13, [encodeString("/f"), new Uint8Array(4), new Uint8Array(4)]);
+      server.service(client);
+      return new DataView(outcome(sab).payload.buffer).getUint32(0, true);
+    };
+    const fdA = open(1, a);
+    const fdB = open(2, b);
+
+    const u32 = (n: number) => { const x = new Uint8Array(4); new DataView(x.buffer).setUint32(0, n, true); return x; };
+    publish(a, 14 /* OP_CLOSE */, [u32(fdA)]);
+    server.service(1);
+    server.unregisterClient(1);
+    expect(() => server.vfs.fstat(fdB)).not.toThrow();
+    server.unregisterClient(2);
+    expect(() => server.vfs.fstat(fdB)).toThrow();
+  });
+});

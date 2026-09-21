@@ -59,6 +59,26 @@
     "internal/console/constructor": "builtin",
     "diagnostics_channel": "builtin",
     "internal/process/warning": "builtin",
-    "internal/util/colors": "builtin"
+    "internal/util/colors": "builtin",
+    "fs": "builtin",
+    "fs/promises": "builtin",
+    "internal/fs/utils": "builtin",
+    "internal/fs/promises": "builtin",
+    "internal/fs/streams": "builtin",
+    "internal/fs/read/context": "builtin",
+    "internal/fs/dir": "builtin",
+    "internal/fs/watchers": "builtin",
+    "internal/fs/rimraf": "builtin",
+    "internal/fs/cp/cp": "builtin",
+    "internal/fs/cp/cp-sync": "builtin",
+    "internal/fs/glob": "builtin",
+    "internal/fs/sync_write_stream": "builtin",
+    "internal/fs/recursive_watch": "builtin",
+    "internal/process/permission": "builtin",
+    "internal/readline/interface": "builtin",
+    "internal/readline/utils": "builtin",
+    "internal/readline/callbacks": "builtin",
+    "internal/repl/history": "builtin",
+    "os": "builtin"
   }
 }

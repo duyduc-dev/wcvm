@@ -4,6 +4,8 @@ import f_async_hooks from "./lib/async_hooks.js";
 import f_buffer from "./lib/buffer.js";
 import f_diagnostics_channel from "./lib/diagnostics_channel.js";
 import f_events from "./lib/events.js";
+import f_fs from "./lib/fs.js";
+import f_fs_promises from "./lib/fs/promises.js";
 import f_internal_abort_controller from "./lib/internal/abort_controller.js";
 import f_internal_assert from "./lib/internal/assert.js";
 import f_internal_async_context_frame from "./lib/internal/async_context_frame.js";
@@ -16,14 +18,31 @@ import f_internal_errors from "./lib/internal/errors.js";
 import f_internal_event_target from "./lib/internal/event_target.js";
 import f_internal_events_abort_listener from "./lib/internal/events/abort_listener.js";
 import f_internal_fixed_queue from "./lib/internal/fixed_queue.js";
+import f_internal_fs_cp_cp from "./lib/internal/fs/cp/cp.js";
+import f_internal_fs_cp_cp_sync from "./lib/internal/fs/cp/cp-sync.js";
+import f_internal_fs_dir from "./lib/internal/fs/dir.js";
+import f_internal_fs_glob from "./lib/internal/fs/glob.js";
+import f_internal_fs_promises from "./lib/internal/fs/promises.js";
+import f_internal_fs_read_context from "./lib/internal/fs/read/context.js";
+import f_internal_fs_recursive_watch from "./lib/internal/fs/recursive_watch.js";
+import f_internal_fs_rimraf from "./lib/internal/fs/rimraf.js";
+import f_internal_fs_streams from "./lib/internal/fs/streams.js";
+import f_internal_fs_sync_write_stream from "./lib/internal/fs/sync_write_stream.js";
+import f_internal_fs_utils from "./lib/internal/fs/utils.js";
+import f_internal_fs_watchers from "./lib/internal/fs/watchers.js";
 import f_internal_linkedlist from "./lib/internal/linkedlist.js";
 import f_internal_options from "./lib/internal/options.js";
 import f_internal_per_context_primordials from "./lib/internal/per_context/primordials.js";
 import f_internal_perf_utils from "./lib/internal/perf/utils.js";
 import f_internal_priority_queue from "./lib/internal/priority_queue.js";
+import f_internal_process_permission from "./lib/internal/process/permission.js";
 import f_internal_process_promises from "./lib/internal/process/promises.js";
 import f_internal_process_task_queues from "./lib/internal/process/task_queues.js";
 import f_internal_process_warning from "./lib/internal/process/warning.js";
+import f_internal_readline_callbacks from "./lib/internal/readline/callbacks.js";
+import f_internal_readline_interface from "./lib/internal/readline/interface.js";
+import f_internal_readline_utils from "./lib/internal/readline/utils.js";
+import f_internal_repl_history from "./lib/internal/repl/history.js";
 import f_internal_streams_add_abort_signal from "./lib/internal/streams/add-abort-signal.js";
 import f_internal_streams_compose from "./lib/internal/streams/compose.js";
 import f_internal_streams_destroy from "./lib/internal/streams/destroy.js";
@@ -51,6 +70,7 @@ import f_internal_v8_startup_snapshot from "./lib/internal/v8/startup_snapshot.j
 import f_internal_validators from "./lib/internal/validators.js";
 import f_internal_webidl from "./lib/internal/webidl.js";
 import f_internal_worker_js_transferable from "./lib/internal/worker/js_transferable.js";
+import f_os from "./lib/os.js";
 import f_path from "./lib/path.js";
 import f_stream from "./lib/stream.js";
 import f_stream_promises from "./lib/stream/promises.js";
@@ -67,6 +87,8 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "buffer": f_buffer,
   "diagnostics_channel": f_diagnostics_channel,
   "events": f_events,
+  "fs": f_fs,
+  "fs/promises": f_fs_promises,
   "internal/abort_controller": f_internal_abort_controller,
   "internal/assert": f_internal_assert,
   "internal/async_context_frame": f_internal_async_context_frame,
@@ -79,13 +101,30 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/event_target": f_internal_event_target,
   "internal/events/abort_listener": f_internal_events_abort_listener,
   "internal/fixed_queue": f_internal_fixed_queue,
+  "internal/fs/cp/cp": f_internal_fs_cp_cp,
+  "internal/fs/cp/cp-sync": f_internal_fs_cp_cp_sync,
+  "internal/fs/dir": f_internal_fs_dir,
+  "internal/fs/glob": f_internal_fs_glob,
+  "internal/fs/promises": f_internal_fs_promises,
+  "internal/fs/read/context": f_internal_fs_read_context,
+  "internal/fs/recursive_watch": f_internal_fs_recursive_watch,
+  "internal/fs/rimraf": f_internal_fs_rimraf,
+  "internal/fs/streams": f_internal_fs_streams,
+  "internal/fs/sync_write_stream": f_internal_fs_sync_write_stream,
+  "internal/fs/utils": f_internal_fs_utils,
+  "internal/fs/watchers": f_internal_fs_watchers,
   "internal/linkedlist": f_internal_linkedlist,
   "internal/options": f_internal_options,
   "internal/perf/utils": f_internal_perf_utils,
   "internal/priority_queue": f_internal_priority_queue,
+  "internal/process/permission": f_internal_process_permission,
   "internal/process/promises": f_internal_process_promises,
   "internal/process/task_queues": f_internal_process_task_queues,
   "internal/process/warning": f_internal_process_warning,
+  "internal/readline/callbacks": f_internal_readline_callbacks,
+  "internal/readline/interface": f_internal_readline_interface,
+  "internal/readline/utils": f_internal_readline_utils,
+  "internal/repl/history": f_internal_repl_history,
   "internal/streams/add-abort-signal": f_internal_streams_add_abort_signal,
   "internal/streams/compose": f_internal_streams_compose,
   "internal/streams/destroy": f_internal_streams_destroy,
@@ -113,6 +152,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/validators": f_internal_validators,
   "internal/webidl": f_internal_webidl,
   "internal/worker/js_transferable": f_internal_worker_js_transferable,
+  "os": f_os,
   "path": f_path,
   "stream": f_stream,
   "stream/promises": f_stream_promises,

@@ -9,7 +9,7 @@ export interface IState {
 
 export interface IProcessExit {
   /** The process's exit status (143 / 137 when killed by SIGTERM / SIGKILL). */
-  errorCode: number;
+  exitCode: number;
   errorMessage?: string;
   signal?: "SIGTERM" | "SIGKILL";
 }

@@ -321,3 +321,62 @@ describe("Vfs file descriptors", () => {
     expect(text(vfs.read(fd, 10, -1))).toBe("data");
   });
 });
+
+describe("Vfs times, links and entry kinds", () => {
+  it("stat reports atime and birthtime, and utimes sets atime and mtime", () => {
+    vfs.writeFile("/f", bytes("x"));
+    const before = vfs.stat("/f");
+    expect(before.birthtimeMs).toBeLessThanOrEqual(before.mtimeMs);
+    expect(before.atimeMs).toBeGreaterThan(0);
+
+    vfs.utimes("/f", 1000, 2000);
+    const after = vfs.stat("/f");
+    expect(after.atimeMs).toBe(1000);
+    expect(after.mtimeMs).toBe(2000);
+    expect(after.birthtimeMs).toBe(before.birthtimeMs);
+  });
+
+  it("utimes follows symlinks unless told not to; futimes uses the descriptor", () => {
+    vfs.writeFile("/f", bytes(""));
+    vfs.symlink("/f", "/l");
+    vfs.utimes("/l", 5, 6);
+    expect(vfs.stat("/f").mtimeMs).toBe(6);
+    vfs.utimes("/l", 7, 8, false);
+    expect(vfs.stat("/f").mtimeMs).toBe(6);
+    expect(vfs.lstat("/l").mtimeMs).toBe(8);
+
+    const fd = vfs.open("/f", O_RDONLY);
+    vfs.futimes(fd, 9, 10);
+    expect(vfs.stat("/f").mtimeMs).toBe(10);
+    expect(code(() => vfs.utimes("/nope", 1, 1))).toBe("ENOENT");
+  });
+
+  it("hard links share content and count links; directories cannot be linked", () => {
+    vfs.writeFile("/a", bytes("one"));
+    vfs.link("/a", "/b");
+    expect(vfs.stat("/a").nlink).toBe(2);
+    expect(vfs.stat("/a").ino).toBe(vfs.stat("/b").ino);
+
+    const fd = vfs.open("/b", O_WRONLY | O_TRUNC);
+    vfs.write(fd, bytes("two"), -1);
+    expect(text(vfs.readFile("/a"))).toBe("two");
+
+    vfs.unlink("/a");
+    expect(vfs.stat("/b").nlink).toBe(1);
+    expect(text(vfs.readFile("/b"))).toBe("two");
+
+    vfs.mkdir("/d");
+    expect(code(() => vfs.link("/d", "/d2"))).toBe("EPERM");
+    expect(code(() => vfs.link("/b", "/b"))).toBe("EEXIST");
+    expect(code(() => vfs.link("/nope", "/c"))).toBe("ENOENT");
+  });
+
+  it("readdirKinds returns sorted names with their kinds", () => {
+    vfs.mkdir("/d");
+    vfs.writeFile("/d/b", bytes(""));
+    vfs.mkdir("/d/a");
+    vfs.symlink("/x", "/d/c");
+    expect(vfs.readdirKinds("/d")).toEqual([["a", "dir"], ["b", "file"], ["c", "symlink"]]);
+    expect(code(() => vfs.readdirKinds("/d/b"))).toBe("ENOTDIR");
+  });
+});

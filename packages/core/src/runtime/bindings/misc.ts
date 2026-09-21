@@ -1,4 +1,4 @@
-import { ENCODINGS } from "./buffer";
+import { UV_ERRORS, uvErrorMap } from "./uvErrors";
 
 // Small bindings, mostly inert: they exist so vendored modules can load and
 // query "is this feature on?" without a native core behind them.
@@ -42,14 +42,53 @@ export const createConfigBinding = () => ({
   isDebugBuild: false,
 });
 
-export const createStringDecoderBinding = () => ({ encodings: [...ENCODINGS] });
 
 export const createMessagingBinding = () => ({
   DOMException: (globalThis as { DOMException?: unknown }).DOMException,
 });
 
-export const createOsBinding = () => ({
-  getOSInformation: () => ["Linux", "#1 SMP wcvm", "6.0.0-wcvm", "x86_64"],
+export interface IOsContext {
+  env: () => Record<string, string | undefined>;
+}
+
+// A single-user Linux box called "wcvm". Sizes come from the browser when it says.
+export const createOsBinding = (ctx: IOsContext) => {
+  const nav = (globalThis as { navigator?: { hardwareConcurrency?: number; deviceMemory?: number } }).navigator;
+  const cores = nav?.hardwareConcurrency ?? 1;
+  const totalMem = (nav?.deviceMemory ?? 4) * 1024 ** 3;
+  return {
+    getOSInformation: () => ["Linux", "#1 SMP wcvm", "6.0.0-wcvm", "x86_64"],
+    getHostname: () => "wcvm",
+    getHomeDirectory: () => ctx.env().HOME ?? "/home/user",
+    getAvailableParallelism: () => cores,
+    // flat: model, speed, user, nice, sys, idle, irq per cpu
+    getCPUs: () => Array.from({ length: cores }, () => ["wcvm virtual cpu", 0, 0, 0, 0, 0, 0]).flat(),
+    getFreeMem: () => totalMem / 2,
+    getTotalMem: () => totalMem,
+    getLoadAvg: (out: Float64Array) => out.fill(0),
+    getUptime: () => Math.floor(performance.now() / 1000),
+    getInterfaceAddresses: () => ["lo", "127.0.0.1", "255.0.0.0", "IPv4", "00:00:00:00:00:00", true, -1],
+    getUserInfo: () => ({ uid: 1000, gid: 1000, username: "user", homedir: ctx.env().HOME ?? "/home/user", shell: "/bin/sh" }),
+    getPriority: () => 0,
+    setPriority: () => 0,
+    isBigEndian: false,
+  };
+};
+
+export const createCredentialsBinding = (ctx: IOsContext) => ({
+  safeGetenv: (name: string) => ctx.env()[name],
+  // uv_os_tmpdir: TMPDIR, TMP, TEMP, TEMPDIR, else /tmp; no trailing slash.
+  getTempDir: () => {
+    const env = ctx.env();
+    const dir = env.TMPDIR || env.TMP || env.TEMP || env.TEMPDIR || "/tmp";
+    return dir.length > 1 && dir.endsWith("/") ? dir.slice(0, -1) : dir;
+  },
+  implementsPosixCredentials: true,
+  getuid: () => 1000,
+  geteuid: () => 1000,
+  getgid: () => 1000,
+  getegid: () => 1000,
+  getgroups: () => [1000],
 });
 
 export const createOptionsBinding = () => ({
@@ -89,11 +128,17 @@ export const createProfilerBinding = () => ({
   setSourceMapCacheGetter: () => {},
 });
 
-export const createUvBinding = () => ({
-  errname: (code: number) => `UV_${Math.abs(code)}`,
-  getErrorMap: () => new Map<number, [string, string]>(),
-  UV_EOF: -4095,
-});
+export const createUvBinding = () => {
+  const errors = uvErrorMap();
+  const constants = Object.fromEntries(UV_ERRORS.map(([name, errno]) => [`UV_${name}`, -errno]));
+  return {
+    ...constants,
+    UV_EOF: -4095,
+    errname: (code: number) => errors.get(code)?.[0] ?? `Unknown system error ${code}`,
+    getErrorMap: () => errors,
+    getErrorMessage: (code: number) => errors.get(code)?.[1] ?? `Unknown system error ${code}`,
+  };
+};
 
 export const createTraceEventsBinding = () => ({
   trace: () => {},
@@ -154,3 +199,6 @@ export const createDiagnosticsChannelBinding = () => {
     linkNativeChannel: () => {},
   };
 };
+
+// The permission model is off (`--permission` unset): everything is allowed.
+export const createPermissionBinding = () => ({ has: () => true });

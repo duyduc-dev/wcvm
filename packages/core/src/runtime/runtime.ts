@@ -58,6 +58,9 @@ const createRuntime = (options: IRuntimeOptions) => {
   const internalBinding = createInternalBinding({
     requireBuiltin: (id) => loader.requireBuiltin(id),
     loop,
+    fs,
+    process,
+    writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
   });
   loader = createBuiltinLoader({ process, internalBinding, primordials });
   const { requireBuiltin } = loader;
