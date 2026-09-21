@@ -9,7 +9,9 @@ This pnpm workspace contains `wcvm`, a browser-based WebContainer-style runtime
   - `src/boot.ts`, `src/apis/`: public API (`boot()`, `spawn()`).
   - `src/bridges/`: main-thread side of the kernel worker (request/response, events).
   - `src/workers/kernel/`: kernel worker (message router + handlers).
-  - `src/kernel/`: kernel host (owns the fs client; PID table/supervision still to come).
+  - `src/kernel/`: kernel host (fs client) and `processes.ts` (PID table, supervision).
+  - `src/programs/`: built-in commands; plain functions over the sync fs client.
+  - `src/workers/process/`: process worker (`run.ts` is the testable core).
   - `src/fs/`: `Vfs` (in-memory filesystem), `FsServer` (syscall servicer), `fsClient` (sync client).
   - `src/workers/fs/`: File System Worker; `src/testing/`: test-only helpers.
   - `src/protocols/`: shared protocol code, incl. `syscall.ts` (the SAB syscall ABI),

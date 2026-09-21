@@ -6,12 +6,16 @@ in this tree; treat it as history.
 
 ## Current state
 
-Done: Phases 0-2. `boot()` returns `{ spawn, fs, diagnostics, ready }`; a kernel
-worker boots a File System Worker (in-memory `Vfs` behind a syscall server) and
-serves `wc.fs.*` (incl. `mount`, files > 1 MiB, errno `code` on errors) over the
-SAB protocol. Verified by Vitest and by Playwright in real Chromium.
+Done: Phases 0-3. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
+- Kernel worker boots a File System Worker (in-memory `Vfs`) and serves `wc.fs.*`.
+- `spawn(command, args, { cwd, env })` runs a built-in (`echo`, `cat`, `ls`, `pwd`,
+  `mkdir`, `rm`, `sleep`, `true`, `false`) in its own `Process Worker PID N`, with its
+  own SAB and a doorbell port straight to the fs worker. Returns `stdout`/`stderr`
+  streams, `exit` (status; 127 not found; 143/137 when killed) and `kill()`.
+Verified by Vitest and by Playwright in real Chromium.
 
-Not done: `process:spawn` is still a stub that immediately reports exit 0 (Phase 3).
+Not done: stdin (`cat` with no args refuses); running scripts (`node file.js`) - Phase 4;
+a shell - Phase 5; child processes / subtree kill (no process can spawn yet).
 
 ## Architecture to build (from vivari)
 
@@ -59,12 +63,14 @@ module: `Thing.test.ts`).
 - Public API: `readFile`, `writeFile`, `mkdir`, `readdir`, `rm`, `mount(tree)`.
 - Sync fs client for process workers.
 
-### Phase 3 - Real processes (replaces the stub)
+### Phase 3 - Real processes (replaces the stub)  (DONE, except stdin)
 - Kernel PID table, `createProcess`, `finalize` (subtree kill).
 - `MessageChannel` from each process to the FS worker as its doorbell.
 - `spawn()` gets stdout/stderr streams, stdin, `kill()`, real exit code; keep
   the `{ processId, exit }` shape and extend it.
 - Minimal built-ins: `echo`, `cat`, `ls`, `pwd`, `mkdir`, `rm`.
+- Still open from this phase: stdin. Deliver it out-of-band (`postMessage`), not through
+  the SAB, since a running process is not parked on it.
 
 ### Phase 4 - Node runtime in the process worker
 - Sync CommonJS loader (`node_modules` resolution), per-process event loop
@@ -107,7 +113,12 @@ Later: Python (Pyodide), Bun shim, debugger, Studio UI.
   doorbell services the request synchronously). Cross-thread behavior is
   tested with real `worker_threads` via `testing/spawnFixtureWorker.ts`.
 
-## First milestone
+- Terminate the worker BEFORE detaching its fs client, or the fs worker may be asked
+  to service a client that no longer exists (see `kernel/processes.ts`).
+- The kernel's `process:exit` payload uses `errorCode` for the exit status (inherited
+  naming); `signal` is set when killed.
+
+## First milestone (reached at the end of Phase 3)
 
 Phases 0-3: `spawn("echo", ["Hello, World!"])` produces real stdout and exit
 code, and a script can `readFileSync` a file the host wrote. This proves
