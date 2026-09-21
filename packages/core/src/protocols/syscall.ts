@@ -253,3 +253,59 @@ export const respondOk = (
   }
   finish(views, STATE_RESPONSE_OK, payload);
 };
+
+// ---- opcodes ----------------------------------------------------------------
+//
+// Opcodes 1..FS_OPCODE_MAX are file system calls, serviced by the File System
+// Worker. Everything from KERNEL_OPCODE_MIN up (spawn, kill, listen, fetch, ...)
+// is serviced by the kernel. Field layouts, all little-endian:
+//
+//   OP_READ_FILE  path                          -> raw bytes (EMSGSIZE if too big)
+//   OP_WRITE_FILE path, bytes                   -> empty
+//   OP_EXISTS     path                          -> 1 byte: 0 | 1
+//   OP_READDIR    path                          -> JSON string[]
+//   OP_MKDIR      path            [FLAG_RECURSIVE] -> empty
+//   OP_STAT/LSTAT path                          -> JSON IStat
+//   OP_UNLINK / OP_RMDIR path                   -> empty
+//   OP_RM         path            [FLAG_RECURSIVE] -> empty
+//   OP_RENAME     from, to                      -> empty
+//   OP_SYMLINK    target, path                  -> empty
+//   OP_READLINK   path                          -> UTF-8 target
+//   OP_REALPATH   path                          -> UTF-8 path
+//   OP_CHMOD      path, u32 mode                -> empty
+//   OP_OPEN       path, u32 flags, u32 mode     -> u32 fd
+//   OP_CLOSE      u32 fd                        -> empty
+//   OP_FD_READ    u32 fd, u32 len, f64 pos      -> raw bytes   (pos < 0: use cursor)
+//   OP_FD_WRITE   u32 fd, f64 pos, bytes        -> u32 written (pos < 0: use cursor)
+//   OP_FSTAT      u32 fd                        -> JSON IStat
+//   OP_FTRUNCATE  u32 fd, f64 length            -> empty
+export const OP_READ_FILE = 1;
+export const OP_WRITE_FILE = 2;
+export const OP_EXISTS = 3;
+export const OP_READDIR = 4;
+export const OP_MKDIR = 5;
+export const OP_STAT = 6;
+export const OP_LSTAT = 7;
+export const OP_UNLINK = 8;
+export const OP_RMDIR = 9;
+export const OP_RENAME = 10;
+export const OP_SYMLINK = 11;
+export const OP_READLINK = 12;
+export const OP_OPEN = 13;
+export const OP_CLOSE = 14;
+export const OP_FD_READ = 15;
+export const OP_FD_WRITE = 16;
+export const OP_FSTAT = 17;
+export const OP_FTRUNCATE = 18;
+export const OP_REALPATH = 19;
+export const OP_RM = 20;
+export const OP_CHMOD = 21;
+
+export const FS_OPCODE_MAX = 63;
+export const KERNEL_OPCODE_MIN = 64;
+
+export const isFsOpcode = (opcode: number): boolean =>
+  opcode >= 1 && opcode <= FS_OPCODE_MAX;
+
+/** Max bytes per fd read/write, so each frame stays inside the data window. */
+export const FD_CHUNK = 512 * 1024;
