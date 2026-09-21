@@ -526,3 +526,43 @@ test.describe("node", () => {
     });
   });
 });
+
+test.describe("sh", () => {
+  test("sequences, short-circuits, and pipes across real built-in programs", async ({ page }) => {
+    const r = await spawn(page, "sh", ["-c", "false && echo skipped; echo one | cat; true && echo two"]);
+    expect(r).toEqual({ code: 0, out: "one\ntwo\n", err: "" });
+  });
+
+  test("> and >> redirect to real files on the VFS, visible to the host", async ({ page }) => {
+    const out = await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn("sh", ["-c", "echo one > /log.txt; echo two >> /log.txt"]);
+      await proc.exit;
+      return new TextDecoder().decode(await wc.fs.readFile("/log.txt"));
+    });
+    expect(out).toBe("one\ntwo\n");
+  });
+
+  test("cd changes cwd for the rest of the script, across a real spawn", async ({ page }) => {
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      await wc.fs.mount({ work: { directory: { "f.txt": { file: { contents: "x" } } } } });
+    });
+    const r = await spawn(page, "sh", ["-c", "cd /work && ls"]);
+    expect(r).toEqual({ code: 0, out: "f.txt\n", err: "" });
+  });
+
+  test("runs node as an ordinary command inside a real shell script", async ({ page }) => {
+    const r = await spawn(page, "sh", ["-c", "node -e \"console.log(1 + 1)\""]);
+    expect(r).toEqual({ code: 0, out: "2\n", err: "" });
+  });
+
+  test("a script file runs via `sh <file>`, resolved against cwd", async ({ page }) => {
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      await wc.fs.mount({ app: { directory: { "build.sh": { file: { contents: "echo building; echo done" } } } } });
+    });
+    const r = await spawn(page, "sh", ["build.sh"], "/app");
+    expect(r).toEqual({ code: 0, out: "building\ndone\n", err: "" });
+  });
+});

@@ -1,5 +1,6 @@
 import type { IFsClient } from "../fs/fsClient";
 import { node } from "./node";
+import { sh } from "./sh/sh";
 import type { IProgramContext, Program } from "./types";
 
 const ERRNO_TEXT: Record<string, string> = {
@@ -164,6 +165,15 @@ const builtins: Record<string, Program> = {
   rm,
   sleep,
   node,
+  // `sh` resolves other builtins (including itself) by name, so this module
+  // and sh/sh.ts import each other. A plain `sh` property would capture
+  // whatever sh/sh.ts's binding happened to be AT THIS LINE, which is
+  // `undefined` if something reaches sh/sh.ts before this module - a real,
+  // load-order-dependent bug, not just a lint nit. A getter defers to actual
+  // call time, by when both modules have always finished loading.
+  get sh() {
+    return sh;
+  },
   true: () => 0,
   false: () => 1,
 };
