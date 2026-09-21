@@ -20,6 +20,9 @@ Done and verified in real Chromium:
   `kill`. `stdin` is a real open pipe (out-of-band via `postMessage`, never the SAB): open until
   the host closes it or the process exits, and only refs the event loop while actually being
   read (`resume()`/a `'data'` listener) - a script that never touches it still exits on its own.
+  Killing (or the natural exit of) a process kills its whole subtree: a `child_process` with no
+  live parent left would otherwise strand a Process Worker in the tab forever (`detached` is
+  accepted but not honoured, so there is no opt-out yet).
 - Built-ins: `echo cat ls pwd mkdir rm sleep true false node`. `cat` with no args streams real
   stdin.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
@@ -29,13 +32,12 @@ Done and verified in real Chromium:
   child is another real Process Worker the kernel supervises - see `kernel/processes.ts`'s
   `parentPid` and `runtime/bindings/childProcess.ts`). `child.stdin.write()`/`.end()` deliver for
   real, over the same stdin plumbing as top-level processes.
-- Tests: 315 Vitest + 35 Playwright (Chromium). See "Verifying".
+- Tests: 319 Vitest + 36 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects),
-`child_process.execSync`/`spawnSync`/`fork` (IPC), subtree-kill (a parent's still-running
-`child_process` children are orphaned, not killed with it), ES modules, real `http`/`net`
-(TCP/UDP/DNS) + preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev
-server/HMR, `fs.watch`, Python/Bun, Studio UI.
+`child_process.execSync`/`spawnSync`/`fork` (IPC), ES modules, real `http`/`net` (TCP/UDP/DNS) +
+preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
+`fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
 

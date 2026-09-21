@@ -448,6 +448,27 @@ test.describe("node", () => {
       expect(r.code).toBe(0);
       expect(JSON.parse(r.out)).toEqual({ code: 0, out: "hi from grandchild\n" });
     });
+
+    test("killing a parent also kills its still-running child_process children (subtree kill)", async ({ page }) => {
+      // The child sets a timer that would leave an observable trace on the VFS
+      // if it kept running after the parent is gone; a real Process Worker
+      // getting terminated drops that timer with it, so the file never appears.
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const parent = await wc.spawn("node", [
+          "-e",
+          "const { spawn } = require('child_process');" +
+            "spawn('node', ['-e', \"setTimeout(() => require('fs').writeFileSync('/child-finished', 'yes'), 150)\"]);" +
+            "setInterval(() => {}, 10000);",
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        parent.kill();
+        await parent.exit;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return { childFinished: await wc.fs.exists("/child-finished") };
+      });
+      expect(r.childFinished).toBe(false);
+    });
   });
 
   test.describe("stdin", () => {

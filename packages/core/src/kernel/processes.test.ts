@@ -263,3 +263,58 @@ describe("stdin", () => {
     expect(() => t.table.writeStdin(1, new Uint8Array())).not.toThrow();
   });
 });
+
+describe("subtree kill", () => {
+  it("killing a parent also kills its child_process children, silently", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "sleep", args: ["9"] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_002, command: "sleep", args: ["9"] });
+
+    t.table.kill(1);
+
+    expect(t.workers[0].terminated).toBe(true);
+    expect(t.workers[1].terminated).toBe(true);
+    expect(t.workers[2].terminated).toBe(true);
+    expect(t.table.has(1)).toBe(false);
+    expect(t.table.has(1_000_001)).toBe(false);
+    expect(t.table.has(1_000_002)).toBe(false);
+    // Only the parent's own exit is reported; the cascaded children are silent.
+    expect(t.events).toEqual([{ type: "process:exit", processId: 1, exitCode: 143, signal: "SIGTERM" }]);
+  });
+
+  it("a natural exit (not just an explicit kill) also cascades", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "sleep", args: ["9"] });
+
+    t.workers[0].emit({ type: "exit", code: 0 });
+
+    expect(t.workers[1].terminated).toBe(true);
+    expect(t.table.has(1_000_001)).toBe(false);
+    expect(t.events).toEqual([{ type: "process:exit", processId: 1, exitCode: 0 }]);
+  });
+
+  it("cascades through grandchildren too", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "node", args: [] });
+    t.workers[1].emit({ type: "child:spawn", childPid: 1_000_001_000_001, command: "sleep", args: ["9"] });
+
+    t.table.kill(1);
+
+    expect(t.workers.every((w) => w.terminated)).toBe(true);
+    expect(t.table.has(1_000_001_000_001)).toBe(false);
+  });
+
+  it("killing a child directly leaves its parent and siblings alone", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "sleep", args: ["9"] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_002, command: "sleep", args: ["9"] });
+
+    t.table.kill(1_000_001);
+
+    expect(t.table.has(1)).toBe(true);
+    expect(t.table.has(1_000_002)).toBe(true);
+    expect(t.workers[0].terminated).toBe(false);
+    expect(t.workers[2].terminated).toBe(false);
+    expect(t.workers[0].childEvents).toEqual([{ type: "child:exit", childPid: 1_000_001, exitCode: 143, signal: "SIGTERM" }]);
+  });
+});
