@@ -1,9 +1,9 @@
 import type { KernelMessage } from "../bridges/models";
-import type { IProcessInit, ProcessEvent } from "../workers/process/messages";
+import type { ChildEvent, IProcessInit, ProcessEvent } from "../workers/process/messages";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IProcessWorkerLike {
-  postMessage(message: IProcessInit, transfer: Transferable[]): void;
+  postMessage(message: IProcessInit | ChildEvent, transfer?: Transferable[]): void;
   terminate(): void;
   onmessage: ((event: MessageEvent<ProcessEvent>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
@@ -24,6 +24,8 @@ export interface ISpawnSpec {
   args: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** Set for a child_process spawned from inside another process; see spawn()'s routing. */
+  parentPid?: number;
 }
 
 export type Signal = "SIGTERM" | "SIGKILL";
@@ -49,7 +51,13 @@ const createProcessTable = ({
   detachFsClient,
   emit,
 }: IProcessTableParams): IProcessTable => {
-  const workers = new Map<number, IProcessWorkerLike>();
+  const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number }>();
+
+  /** A child_process's parent, if it's both a child and still alive; undefined routes to the host. */
+  const parentOf = (pid: number): IProcessWorkerLike | undefined => {
+    const parentPid = workers.get(pid)?.parentPid;
+    return parentPid === undefined ? undefined : workers.get(parentPid)?.worker;
+  };
 
   /** Idempotent: the first exit wins; later events from a dead worker are dropped. */
   const finalize = (
@@ -57,20 +65,28 @@ const createProcessTable = ({
     code: number,
     extra: { signal?: Signal; errorMessage?: string } = {},
   ) => {
-    const worker = workers.get(pid);
-    if (!worker) return;
+    const entry = workers.get(pid);
+    if (!entry) return;
+    const parent = parentOf(pid);
     workers.delete(pid);
     // Stop the worker before detaching, so it cannot issue a request that the
     // fs worker would then service for a client that no longer exists.
-    worker.onmessage = null;
-    worker.onerror = null;
-    worker.terminate();
+    entry.worker.onmessage = null;
+    entry.worker.onerror = null;
+    entry.worker.terminate();
     detachFsClient(pid);
-    emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
+    if (parent) parent.postMessage({ type: "child:exit", childPid: pid, exitCode: code, ...extra });
+    else emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
+  };
+
+  const forwardOutput = (pid: number, stream: "stdout" | "stderr", chunk: Uint8Array) => {
+    const parent = parentOf(pid);
+    if (parent) parent.postMessage({ type: `child:${stream}`, childPid: pid, chunk });
+    else emit({ type: `process:${stream}`, processId: pid, chunk });
   };
 
   const spawn = (spec: ISpawnSpec) => {
-    const { processId: pid } = spec;
+    const { processId: pid, parentPid } = spec;
     if (workers.has(pid)) {
       emit({
         type: "process:exit",
@@ -96,12 +112,25 @@ const createProcessTable = ({
       });
       return;
     }
-    workers.set(pid, worker);
+    workers.set(pid, { worker, parentPid });
 
     worker.onmessage = (event) => {
       const data = event.data;
-      if (data.type === "exit") finalize(pid, data.code);
-      else emit({ type: `process:${data.type}`, processId: pid, chunk: data.chunk });
+      switch (data.type) {
+        case "exit":
+          finalize(pid, data.code);
+          break;
+        case "stdout":
+        case "stderr":
+          forwardOutput(pid, data.type, data.chunk);
+          break;
+        case "child:spawn":
+          spawn({ processId: data.childPid, command: data.command, args: data.args, cwd: data.cwd, env: data.env, parentPid: pid });
+          break;
+        case "child:kill":
+          kill(data.childPid, data.signal);
+          break;
+      }
     };
     worker.onerror = (event) => {
       finalize(pid, 1, {

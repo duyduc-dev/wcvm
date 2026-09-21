@@ -2,11 +2,13 @@ import { WcvmError } from "../../errors/WcvmError";
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
+import { createPipeWrapBinding, createProcessWrapBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
 import { createFsBinding, createFsDirBinding, createFsEventWrapBinding } from "./fs";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
 import {
   createAsyncContextFrameBinding,
+  createCaresWrapBinding,
   createConfigBinding,
   createCredentialsBinding,
   createDiagnosticsChannelBinding,
@@ -18,7 +20,11 @@ import {
   createPerformanceBinding,
   createPermissionBinding,
   createProfilerBinding,
+  createSpawnSyncBinding,
+  createTcpWrapBinding,
   createTraceEventsBinding,
+  createTtyWrapBinding,
+  createUdpWrapBinding,
   createUvBinding,
 } from "./misc";
 import { createStringDecoderBinding } from "./stringDecoder";
@@ -35,6 +41,8 @@ interface IBindingContext {
   fs?: IFsClient;
   /** Where fd 1 / fd 2 writes go. */
   writeStdio?: (fd: 1 | 2, chunk: Uint8Array) => void;
+  /** Spawns/kills child_process children via the kernel; without it, pipe_wrap/process_wrap are unavailable. */
+  childProcess?: IChildProcessHost;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -43,6 +51,7 @@ const factories: Record<string, BindingFactory> = {
   async_context_frame: () => createAsyncContextFrameBinding(),
   async_wrap: () => createAsyncWrapBinding(),
   buffer: () => createBufferBinding(),
+  cares_wrap: () => createCaresWrapBinding(),
   config: () => createConfigBinding(),
   constants: () => createConstantsBinding(),
   diagnostics_channel: () => createDiagnosticsChannelBinding(),
@@ -57,13 +66,20 @@ const factories: Record<string, BindingFactory> = {
   os: (ctx) => createOsBinding({ env: () => ctx.process?.env ?? {} }),
   permission: () => createPermissionBinding(),
   performance: () => createPerformanceBinding(),
+  pipe_wrap: (ctx) => createPipeWrapBinding(ctx),
+  process_wrap: (ctx) => createProcessWrapBinding(ctx),
   profiler: () => createProfilerBinding(),
+  spawn_sync: () => createSpawnSyncBinding(),
+  stream_wrap: (ctx) => createStreamWrapBinding(ctx),
   string_decoder: () => createStringDecoderBinding(),
+  tcp_wrap: () => createTcpWrapBinding(),
   trace_events: () => createTraceEventsBinding(),
+  tty_wrap: () => createTtyWrapBinding(),
   symbols: () => createSymbolsBinding(),
   task_queue: (ctx) => createTaskQueueBinding(ctx.loop),
   timers: (ctx) => createTimersBinding(ctx.loop),
   types: () => createTypesBinding(),
+  udp_wrap: () => createUdpWrapBinding(),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),
 };

@@ -3,6 +3,13 @@ import type { EventLoop } from "../eventLoop";
 // Bindings that expose the EventLoop to Node's vendored timers, task queue and
 // async-hooks code. Field layouts and constants follow src/env.h / async_wrap.h.
 
+// Captured at import time, before a runtime installs its own `queueMicrotask`
+// over the worker's globals (globalObject: self): task_queues.js's public
+// queueMicrotask() calls straight back into this binding, so an unqualified
+// reference here would resolve to that same installed global and recurse
+// forever. Mirrors eventLoop.ts's nativeSetTimeout capture.
+const nativeQueueMicrotask = globalThis.queueMicrotask.bind(globalThis);
+
 export const createTimersBinding = (loop: EventLoop) => ({
   immediateInfo: loop.immediateInfo,
   timeoutInfo: loop.timeoutInfo,
@@ -35,7 +42,7 @@ export const createTaskQueueBinding = (loop: EventLoop) => {
     // jobs run when control returns to the host, right after the tick loop.
     runMicrotasks: () => {},
     setTickCallback: (fn: () => void) => loop.setTickCallback(fn),
-    enqueueMicrotask: (fn: () => void) => queueMicrotask(fn),
+    enqueueMicrotask: (fn: () => void) => nativeQueueMicrotask(fn),
     setPromiseRejectCallback: (fn: (...args: unknown[]) => void) => {
       rejectCallback = fn;
     },

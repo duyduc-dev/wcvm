@@ -90,6 +90,14 @@
     "readline": "9a316ea2f324340976c4ad23b3e08053a76867ba8fbcf20537497b07fa3a1cea",
     "internal/readline/emitKeypressEvents": "a4e22146ea0a66703c8f9d1861f3fe6e860adc06fb5cfb40919d0c002cba974b",
     "readline/promises": "76e9099cebd75a18992a0fef6f2a7f359a347aa2bfdb525739fdfe06f5db1eff",
-    "internal/readline/promises": "8ebe49629da7f7aca5f61754729ecb8f1dcf6b5860c67e83a93807afcccdfd79"
+    "internal/readline/promises": "8ebe49629da7f7aca5f61754729ecb8f1dcf6b5860c67e83a93807afcccdfd79",
+    "child_process": "48d5a30575e1561fd270fe4802bb7255b5f4a33a65d3fc96382814fb3a4269e9",
+    "internal/child_process": "0c2e2cc568bb1651aec25c8a9c7178380dfde9b4ac772b02c6286536ee4986b1",
+    "net": "de8f10a443606c5fb32a53978f072dce805f533bfb0ebf4c988bde80aa74d792",
+    "internal/net": "92789d3cd23228e068e02382c067c481e7771604e5b085e1fa5ab9a750f67c06",
+    "internal/stream_base_commons": "898b8c327eb3ac6140e1be1bf6584c353625488f0ccb6f579f465974c120456d",
+    "dgram": "549ed75e584e648f185581b04774ec93afd43d72653bdd0cb5bd2c69f96cdff1",
+    "internal/dgram": "73e0473fab2c7cbd9316a0336bfa0ed240225f729c12ab001175c64551db0d10",
+    "internal/socket_list": "f28aa47cd9e0cbe1bc3ae03b669f2a05a97557492f4448b5907ddefa8f0b4fe3"
   }
 }

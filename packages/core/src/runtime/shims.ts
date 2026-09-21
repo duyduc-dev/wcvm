@@ -157,11 +157,23 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     module.exports = { Parser: { tokenizer: () => [] } };
   };
 
+  /**
+   * `internal/perf/observe` is a large PerformanceObserver implementation;
+   * net.js requires it unconditionally at module load but only calls it from
+   * `connect()` (real TCP, which we don't support). No observer is ever
+   * subscribed here, so this is exactly real Node's own default state, not
+   * an approximation.
+   */
+  const internalPerfObserve: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = { hasObserver: () => false, startPerf: () => {}, stopPerf: () => {} };
+  };
+
   return {
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
     "internal/deps/acorn/acorn/dist/acorn": internalAcorn,
+    "internal/perf/observe": internalPerfObserve,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {
         BuiltinModule,

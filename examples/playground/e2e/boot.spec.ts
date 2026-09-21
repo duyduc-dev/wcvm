@@ -389,4 +389,64 @@ test.describe("node", () => {
     ]);
     expect(r).toEqual({ code: 0, out: "line: one\nline: two\nclosed\n", err: "" });
   });
+
+  test.describe("child_process", () => {
+    test("spawn() runs a real child in its own process worker and streams its stdout back", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawn } = require('child_process');" +
+          "const child = spawn('echo', ['hello', 'from', 'child']);" +
+          "let out = '';" +
+          "child.stdout.on('data', (c) => { out += c; });" +
+          "child.on('exit', (code, signal) => console.log(JSON.stringify({ code, signal, out, pid: typeof child.pid })));",
+      ]);
+      expect(r.code).toBe(0);
+      expect(r.err).toBe("");
+      expect(JSON.parse(r.out)).toEqual({ code: 0, signal: null, out: "hello from child\n", pid: "number" });
+    });
+
+    test("a child that fails to run reports a nonzero exit, not a crash", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawn } = require('child_process');" +
+          "const child = spawn('this-command-does-not-exist', []);" +
+          "child.on('exit', (code) => console.log('exit', code));",
+      ]);
+      expect(r).toEqual({ code: 0, out: "exit 127\n", err: "" });
+    });
+
+    test("execFile runs the child and collects its output via a callback", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "require('child_process').execFile('echo', ['via', 'execFile'], (err, stdout, stderr) => " +
+          "console.log(JSON.stringify({ err, stdout, stderr })));",
+      ]);
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.out)).toEqual({ err: null, stdout: "via execFile\n", stderr: "" });
+    });
+
+    test("child.kill() stops a long-running child and reports the signal", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawn } = require('child_process');" +
+          "const child = spawn('sleep', ['9']);" +
+          "child.on('exit', (code, signal) => console.log(JSON.stringify({ code, signal })));" +
+          "child.on('spawn', () => child.kill('SIGKILL'));",
+      ]);
+      expect(r).toEqual({ code: 0, out: JSON.stringify({ code: null, signal: "SIGKILL" }) + "\n", err: "" });
+    });
+
+    test("a node child of a node parent: nested real process workers", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawn } = require('child_process');" +
+          "const child = spawn('node', ['-e', \"console.log('hi from grandchild')\"]);" +
+          "let out = '';" +
+          "child.stdout.on('data', (c) => { out += c; });" +
+          "child.on('exit', (code) => console.log(JSON.stringify({ code, out })));",
+      ]);
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.out)).toEqual({ code: 0, out: "hi from grandchild\n" });
+    });
+  });
 });

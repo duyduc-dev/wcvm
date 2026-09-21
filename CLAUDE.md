@@ -21,12 +21,15 @@ Done and verified in real Chromium:
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
-  `readline`, `readline/promises`.
-- Tests: 300 Vitest + 27 Playwright (Chromium). See "Verifying".
+  `readline`, `readline/promises`, `child_process.spawn`/`exec`/`execFile` (real Node code; a
+  child is another real Process Worker the kernel supervises - see `kernel/processes.ts`'s
+  `parentPid` and `runtime/bindings/childProcess.ts`).
+- Tests: 308 Vitest + 32 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects) + stdin data, `child_process`,
-ES modules, `http`/`net` + preview Service Worker, fetcher worker + real `npm`, OPFS persistence,
-Vite dev server/HMR, `fs.watch`, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): shell (`sh`, pipes, redirects) + stdin data,
+`child_process.execSync`/`spawnSync`/`fork` (IPC), ES modules, real `http`/`net` (TCP/UDP/DNS) +
+preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
+`fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -35,6 +38,7 @@ main thread: boot() (src/boot.ts) -> KernelBridge (src/bridges/) -- postMessage 
 Kernel Worker (src/workers/kernel/): router + handlers; hosts the kernel (src/kernel/):
    - createKernelHost: starts the FS Worker, holds a BLOCKING fs client, owns the process table
    - processes.ts: PID table; spawns a Process Worker per PID; forwards stdout/stderr/exit
+     (to the host, or to a parent worker for a `child_process`-spawned child - see `parentPid`)
 FS Worker (src/workers/fs/): FsServer (src/fs/) services syscalls against one in-memory Vfs
 Process Worker (src/workers/process/): runProcess -> a built-in program (src/programs/)
    `node` program -> createRuntime (src/runtime/) = the Node runtime
@@ -92,6 +96,12 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
 - When unsure what Node does, RUN it: real Node 24 is installed locally (`node -e ...`).
 - Network from the sandbox needs the proxy: `curl` honours `https_proxy`, Node's `fetch` does not.
   `scripts/vendor-node-lib.mjs` shells out to curl for that reason.
+- A binding must never call a global (`queueMicrotask`, `setTimeout`, ...) by its bare name.
+  `globalObject: self` puts Node's own same-named globals on the real worker global, so an
+  unqualified reference resolves to Node's wrapper, not the platform's - and if that wrapper
+  calls back into the binding, it recurses until the stack overflows. Capture the native
+  function at module-import time instead (`eventLoop.ts`'s `nativeSetTimeout`, `bindings/loop.ts`'s
+  `nativeQueueMicrotask`). Vitest can't catch this: there, `globalObject` is never `self`.
 
 ## Conventions
 

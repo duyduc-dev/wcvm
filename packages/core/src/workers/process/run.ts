@@ -1,5 +1,6 @@
 import type { IFsClient } from "../../fs/fsClient";
 import { resolveProgram } from "../../programs";
+import type { IChildProcessHost } from "../../runtime/bindings/childProcess";
 
 export type StdStream = "stdout" | "stderr";
 
@@ -14,6 +15,8 @@ export interface IRunParams {
   pid?: number;
   /** See IProgramContext.globalObject. */
   globalObject?: Record<string, any>;
+  /** See IProgramContext.childProcess. */
+  childProcess?: IChildProcessHost;
 }
 
 const EXIT_COMMAND_NOT_FOUND = 127;
@@ -54,6 +57,7 @@ const runProcess = async (params: IRunParams): Promise<number> => {
       stderr,
       pid: params.pid ?? 0,
       globalObject: params.globalObject,
+      childProcess: params.childProcess,
       stdout: (data) => write("stdout", toBytes(data)),
     });
   } catch (error) {
