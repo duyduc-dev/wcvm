@@ -30,7 +30,12 @@ Done and verified in real Chromium:
   built-in registry as everything else, including `node` and recursively `sh` itself. No `$`
   expansion, globbing, subshells, control flow or `&` background jobs. `sh` with no `-c`/script is
   an interactive REPL: reads commands one line at a time from stdin (`programs/sh/lineReader.ts`),
-  `cwd` persisted across lines so `cd` sticks; `exit`/`exit N` ends it.
+  `cwd` persisted across lines so `cd` sticks; `exit`/`exit N` ends it. Nesting an in-process
+  interactive program (a bare `node` or `sh`) at the prompt works: it registers its own handler on
+  the SAME `IStdinHost` sh's REPL is reading from, displacing it, so `lineReader.ts`'s
+  `reattach()` reclaims it after every line (`runReplSh`) - and `workers/process/worker.ts`
+  replays a real EOF to any handler that (re-)registers after the fact, in case that happened
+  while the nested program was still active.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
@@ -73,14 +78,17 @@ Done and verified in real Chromium:
   parent) by reusing the SAME `ctx` object already passed to `createInternalBinding`, since
   `setupChannel`'s `channel.onread` reads the realm's shared `streamBaseState`. `runtime.ts` calls
   `setupChannel(process, pipe, "json")` directly, bypassing vendored `_forkChild`/`NODE_CHANNEL_FD`
-  entirely (no real fd to pass around) - see "Hard-won gotchas" for two real bugs this surfaced
-  (`Pipe.deliver()`'s EOF signal, and `Pipe.close()` needing to propagate to the other side).
+  entirely (no real fd to pass around) - see "Hard-won gotchas" for three real bugs this surfaced
+  (`Pipe.deliver()`'s EOF signal, `Pipe.close()` needing to propagate to the other side, and
+  `_forkChild`'s own `process.on('newListener'/'removeListener', ...)` ref-counting wiring having
+  to be reimplemented too, not just `setupChannel` itself - otherwise a live `'message'` listener
+  never keeps the process alive, defeating the entire point of `fork()`).
   Vendored `internal/child_process/serialization` for real (was missing); only `serialization:
   'json'` (the real default) works - `'advanced'` needs a real V8 serializer (`runtime/shims.ts`'s
   `v8` stub only exists so the module loads, never actually used for json mode). fork()'s default
   `stdio` is `'inherit'` (real fd-sharing this sandbox can't do) - pass `{ silent: true }` to get
   piped/captured stdout+stderr, same as real Node already lets you.
-- Tests: 440 Vitest + 64 Playwright (Chromium). See "Verifying".
+- Tests: 443 Vitest + 65 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): real `http`/`net` (TCP/UDP/DNS) + preview Service Worker,
 fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
@@ -218,6 +226,22 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   ...)` silently never fired until `close()` was also taught to call `host.endIpc()` for the ipc
   case. Only the mandatory Chromium e2e caught this (a fake-host Vitest test can't tell the
   difference between "no real corresponding process" and "forgot to notify it").
+- The `_forkChild`/`NODE_CHANNEL_FD` bootstrap glue skipped for `fork()` (no real fd to give it -
+  `runtime.ts` calls `setupChannel` directly instead) turned out to hide MORE than a fd-open
+  call: `setupChannel` itself never wires `channel.ref()`/`.unref()` to anything - real
+  `_forkChild` does that separately, right after calling `setupChannel`
+  (`process.on('newListener'/'removeListener', (name) => { if (name==='message'||
+  name==='disconnect') control.refCounted()/unrefCounted(); })`). Miss that one extra piece and
+  `Pipe.ref()` (wired to `loop.ref()` in `createForkIpcPipe`) simply never gets called - a forked
+  child with nothing but `process.on('message', ...)` exits immediately instead of staying alive,
+  defeating fork()'s entire purpose. Found by literally counting calls to the override (zero) in
+  a Vitest test that raced the runtime against a real timeout, after two "it just returns empty
+  output sometimes" flaky-looking Vitest failures turned out to be this, not a timing race at
+  all: without the ref, whether a queued reply got processed before the idle process exited was
+  luck, not a guarantee. Lesson: when deliberately skipping a piece of real Node bootstrap
+  because part of it doesn't apply to this sandbox (no fd here), re-read the WHOLE skipped
+  function for other, unrelated things it also did - don't assume "the fd-related part was the
+  only part."
 
 ## Conventions
 
@@ -241,11 +265,3 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
 - The process worker bundle is ~1.6 MB (acorn added real weight, for ESM parsing) and every
   process parses it, even `echo`; split `node` into its own worker entry if startup cost matters.
 - `fs.watch`/`watchFile` return ENOSYS until the kernel has a watch operation.
-- Typing a bare `node` (or `sh`) at an interactive `sh` REPL's prompt to nest one REPL inside
-  another isn't supported: `IStdinHost.onData` only keeps the ONE most recently registered
-  handler (see `workers/process/worker.ts`), so the child's runtime silently steals the parent
-  `sh` REPL's own stdin registration; when the child exits, the parent's `lineReader` is left
-  holding a stale handler reference and stops receiving further input. The playground's terminal
-  demo (`examples/playground/src/terminal.ts`) sidesteps this by only ever spawning one
-  interactive program directly (a picker, not nesting) - fixing it for real needs some kind of
-  stdin-ownership handoff/stack in the kernel, not attempted yet.

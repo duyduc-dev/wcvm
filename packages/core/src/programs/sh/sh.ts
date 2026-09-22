@@ -213,6 +213,10 @@ const runReplSh = async (ctx: IProgramContext): Promise<number> => {
     } catch (error) {
       ctx.stderr(`sh: ${error instanceof ShellSyntaxError ? error.message : String(error)}\n`);
     }
+    // A command just run in-process (cat, node, a nested sh) may have registered its own
+    // stdin handler on this same IStdinHost, displacing this reader's - reclaim it so the
+    // next prompt's input reaches the REPL again instead of that now-exited program's handler.
+    reader.reattach();
   }
 };
 

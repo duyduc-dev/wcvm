@@ -26,18 +26,29 @@ const childProcess: IChildProcessHost = {
 // This process's own stdin can arrive before the runtime has registered a
 // handler (e.g. the kernel forwards it while `node` is still bootstrapping);
 // buffer until someone's listening, same idea as childProcess.ts's Pipe queue.
+//
+// onData only ever keeps the ONE most recently registered handler - a program `sh`'s REPL runs
+// in-process (cat, node, a nested sh) registers its own handler on this SAME IStdinHost and
+// steals it. Once that program exits, sh's own lineReader must re-register to get further input
+// (programs/sh/sh.ts's runReplSh calls its ILineReader's reattach() after every line for this).
+// `stdinEnded` makes that safe even if EOF arrived while the nested program owned it: without
+// this, a handler that (re-)registers after the real EOF already fired once would just wait
+// forever for input that will never come.
 let onStdinData: ((chunk: Uint8Array | null) => void) | null = null;
 const pendingStdin: Array<Uint8Array | null> = [];
+let stdinEnded = false;
 
 const stdin: IStdinHost = {
   onData: (handler) => {
     onStdinData = handler;
     for (const chunk of pendingStdin) handler(chunk);
     pendingStdin.length = 0;
+    if (stdinEnded) handler(null);
   },
 };
 
 const deliverStdin = (chunk: Uint8Array | null) => {
+  if (chunk === null) stdinEnded = true;
   if (onStdinData) onStdinData(chunk);
   else pendingStdin.push(chunk);
 };

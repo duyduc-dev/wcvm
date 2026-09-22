@@ -115,7 +115,19 @@ const createRuntime = (options: IRuntimeOptions) => {
   // V8 serializer we don't have - see runtime/shims.ts's v8 stub).
   if (host.ipc) {
     const pipe = createForkIpcPipe(bindingCtx, host.ipc);
-    requireBuiltin("internal/child_process").setupChannel(process, pipe, "json");
+    const control = requireBuiltin("internal/child_process").setupChannel(process, pipe, "json");
+    // setupChannel itself does NOT wire this up - real _forkChild does, right after calling it
+    // (internal/child_process.js's `_forkChild`), and we skip _forkChild entirely (no real fd).
+    // Without it, `channel.ref()`/`.unref()` (which keep this process alive only while it has a
+    // 'message'/'disconnect' listener) never fire at all - confirmed by running an actual forked
+    // child with nothing but `process.on('message', ...)`: it exited immediately instead of
+    // staying alive, since nothing ever called `control.refCounted()`.
+    process.on("newListener", (name: string) => {
+      if (name === "message" || name === "disconnect") control.refCounted();
+    });
+    process.on("removeListener", (name: string) => {
+      if (name === "message" || name === "disconnect") control.unrefCounted();
+    });
   }
 
   // timers
