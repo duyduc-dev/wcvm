@@ -7,6 +7,7 @@ import type { ISyscallClient } from "../protocols/syscall";
 import { createInternalBinding, type IBindingContext } from "./bindings";
 import { createForkIpcPipe, type IChildProcessHost, type IForkIpcHost } from "./bindings/childProcess";
 import type { IFsWatchHost } from "./bindings/fs";
+import type { INetHost } from "./bindings/net";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
 import { createEsmResolver } from "./esm/resolve";
@@ -36,6 +37,10 @@ export interface IRuntimeHost {
   ipc?: IForkIpcHost;
   /** Delivers fs.watch change events pushed from the kernel; without it, fs.watch() throws ENOSYS. */
   fsWatch?: IFsWatchHost;
+  /** The virtual network's async half (connect/data/close); without it, TCP methods return ENOSYS/ENOTCONN. */
+  net?: INetHost;
+  /** The virtual network's blocking half (net.Server.listen() only); without it, listen() returns ENOSYS. */
+  netSync?: ISyscallClient;
 }
 
 export interface IRuntimeOptions {
@@ -90,6 +95,8 @@ const createRuntime = (options: IRuntimeOptions) => {
     childProcess: host.childProcess,
     spawnSync: host.spawnSync,
     fsWatch: host.fsWatch,
+    net: host.net,
+    netSync: host.netSync,
   };
   const internalBinding = createInternalBinding(bindingCtx);
   loader = createBuiltinLoader({ process, internalBinding, primordials });

@@ -7,6 +7,7 @@ import {
   makeViews,
 } from "../protocols/syscall";
 import type { FsWatchEvent, FsWorkerMessage } from "../workers/fs/handler";
+import { createNetServer } from "./netServer";
 import {
   createProcessTable,
   IProcessTable,
@@ -96,6 +97,7 @@ const createKernelHost = async ({
       writeIpc: (pid, chunk) => processes.writeIpc(pid, chunk),
       endIpc: (pid) => processes.endIpc(pid),
       notifyWatch: (pid, watchId, eventType, filename) => processes.notifyWatch(pid, watchId, eventType, filename),
+      notifyNet: (pid, event) => processes.notifyNet(pid, event),
       kill: (pid, signal) => processes.kill(pid, signal),
       has: (pid) => processes.has(pid),
       get size() {
@@ -103,6 +105,13 @@ const createKernelHost = async ({
       },
     },
     allocatePid: () => nextSyncPid++,
+  });
+
+  // `processes` isn't assigned until below either - same forward-reference trick as
+  // spawnSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
+  // elsewhere accepts a connection or some data/close event actually fires.
+  const netServer = createNetServer({
+    notify: (pid, event) => processes.notifyNet(pid, event),
   });
 
   const processes = createProcessTable({
@@ -127,6 +136,22 @@ const createKernelHost = async ({
       return { sab: buffer, port: port2 };
     },
     detachSyncClient: (clientId) => spawnSyncServer.unregisterClient(clientId),
+    attachNetClient: (clientId) => {
+      const buffer = createSyscallBuffer();
+      const { port1, port2 } = new MessageChannel();
+      netServer.registerClient(clientId, buffer);
+      port1.onmessage = () => netServer.service(clientId);
+      return { sab: buffer, port: port2 };
+    },
+    detachNetClient: (clientId) => netServer.unregisterClient(clientId),
+    netRelay: {
+      unlisten: (pid, port) => netServer.unlisten(pid, port),
+      connect: (fromPid, ticket, port) => netServer.connect(fromPid, ticket, port),
+      data: (fromPid, connId, chunk) => netServer.data(fromPid, connId, chunk),
+      shutdown: (fromPid, connId) => netServer.shutdown(fromPid, connId),
+      close: (fromPid, connId) => netServer.close(fromPid, connId),
+      releasePid: (pid) => netServer.releasePid(pid),
+    },
   });
 
   return {

@@ -804,6 +804,101 @@ test.describe("node", () => {
       expect(r).toEqual({ code: 0, out: "changed 18 3\n", err: "" });
     });
   });
+
+  test.describe("net", () => {
+    // net.createServer/net.connect are entirely virtual (kernel/netServer.ts relays bytes
+    // between two real Process Workers) - these can't be exercised in the single-threaded
+    // Vitest suite (packages/core/src/runtime/net.test.ts) at all, since that needs a real
+    // postMessage round-trip through a real Kernel Worker between two separate real workers.
+
+    test("a real client process connects to a real server process on an explicit port, and data flows both ways", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const server = await wc.spawn("node", [
+          "-e",
+          "const net = require('net');" +
+            "const server = net.createServer((socket) => {" +
+            "  socket.on('data', (chunk) => socket.write('echo:' + chunk));" +
+            "});" +
+            "server.listen(4000, () => console.log('ready'));",
+        ]);
+        // Waits for the server's own "ready\n" before spawning the client - wc.spawn() resolving
+        // only means the worker started, not that its script has reached listen()'s callback yet.
+        const serverReader = server.stdout.getReader();
+        const first = await serverReader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const client = await wc.spawn("node", [
+          "-e",
+          "const net = require('net');" +
+            "const socket = net.connect(4000, () => socket.write('hi'));" +
+            "socket.on('data', (chunk) => { console.log(chunk.toString()); process.exit(0); });",
+        ]);
+        const [clientOut, clientErr, clientExit] = await Promise.all([
+          new Response(client.stdout).text(),
+          new Response(client.stderr).text(),
+          client.exit,
+        ]);
+
+        server.kill();
+        const serverExit = await server.exit;
+        return { clientOut, clientErr, clientCode: clientExit.exitCode, serverSignal: serverExit.signal };
+      });
+      expect(r).toEqual({ clientOut: "echo:hi\n", clientErr: "", clientCode: 0, serverSignal: "SIGTERM" });
+    });
+
+    test("listen(0) auto-assigns different real ports to two different real processes", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const spawnListener = () =>
+          wc.spawn("node", ["-e", "const net = require('net'); const s = net.createServer(); s.listen(0, () => { console.log(s.address().port); s.close(); });"]);
+        const [a, b] = await Promise.all([spawnListener(), spawnListener()]);
+        const [outA, outB] = await Promise.all([new Response(a.stdout).text(), new Response(b.stdout).text()]);
+        return { portA: Number(outA), portB: Number(outB) };
+      });
+      expect(r.portA).toBeGreaterThan(0);
+      expect(r.portB).toBeGreaterThan(0);
+      expect(r.portA).not.toBe(r.portB);
+    });
+
+    test("a second real process listening on an already-used port gets a real EADDRINUSE", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const first = await wc.spawn("node", ["-e", "const net = require('net'); net.createServer().listen(4100, () => console.log('ready'));"]);
+        const reader = first.stdout.getReader();
+        const ready = await reader.read();
+        if (new TextDecoder().decode(ready.value) !== "ready\n") throw new Error("first server did not become ready");
+
+        const second = await wc.spawn("node", [
+          "-e",
+          "const net = require('net');" +
+            "const s = net.createServer();" +
+            "s.on('error', (e) => { console.log('error', e.code); process.exit(0); });" +
+            "s.listen(4100);",
+        ]);
+        const [secondOut, secondErr, secondExit] = await Promise.all([
+          new Response(second.stdout).text(),
+          new Response(second.stderr).text(),
+          second.exit,
+        ]);
+
+        first.kill();
+        await first.exit;
+        return { out: secondOut, err: secondErr, code: secondExit.exitCode };
+      });
+      expect(r).toEqual({ code: 0, out: "error EADDRINUSE\n", err: "" });
+    });
+
+    test("connecting to a real port nobody is listening on gets a real ECONNREFUSED", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const net = require('net');" +
+          "const s = net.connect(4200);" +
+          "s.on('error', (e) => { console.log('error', e.code); process.exit(0); });",
+      ]);
+      expect(r).toEqual({ code: 0, out: "error ECONNREFUSED\n", err: "" });
+    });
+  });
 });
 
 test.describe("sh", () => {

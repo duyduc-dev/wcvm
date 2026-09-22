@@ -15,6 +15,12 @@ const setup = () => {
     port: { id } as unknown as MessagePort,
   }));
   const detachSync = vi.fn();
+  const attachNet = vi.fn((id: number) => ({
+    sab: new SharedArrayBuffer(8),
+    port: { id } as unknown as MessagePort,
+  }));
+  const detachNet = vi.fn();
+  const netRelay = { unlisten: vi.fn(), connect: vi.fn(), data: vi.fn(), shutdown: vi.fn(), close: vi.fn(), releasePid: vi.fn() };
   const table = createProcessTable({
     createProcessWorker: () => {
       const worker = createFakeProcessWorker();
@@ -25,9 +31,12 @@ const setup = () => {
     detachFsClient: detach,
     attachSyncClient: attachSync,
     detachSyncClient: detachSync,
+    attachNetClient: attachNet,
+    detachNetClient: detachNet,
+    netRelay,
     emit: (m) => events.push(m),
   });
-  return { table, workers, events, attach, detach, attachSync, detachSync };
+  return { table, workers, events, attach, detach, attachSync, detachSync, attachNet, detachNet, netRelay };
 };
 
 let t: ReturnType<typeof setup>;
@@ -160,6 +169,9 @@ describe("process table", () => {
       detachFsClient: t.detach,
       attachSyncClient: t.attachSync,
       detachSyncClient: t.detachSync,
+      attachNetClient: t.attachNet,
+      detachNetClient: t.detachNet,
+      netRelay: t.netRelay,
       emit: (m) => events.push(m),
     });
     table.spawn({ processId: 1, command: "x", args: [] });

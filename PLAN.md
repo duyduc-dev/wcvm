@@ -46,8 +46,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   inside a running script via `pipe_wrap`/`process_wrap`/`stream_wrap` bindings
   (`runtime/bindings/childProcess.ts`) instead of real libuv handles. `net`/`dgram` are vendored
   only because `internal/child_process.js` requires them unconditionally (they wrap each stdio
-  pipe in a `net.Socket`); real TCP/UDP/DNS are still Phase 6, not supported (`tcp_wrap`/
-  `udp_wrap`/`tty_wrap`/`cares_wrap` are inert stubs). `child.stdin.write()`/`.end()` deliver for
+  pipe in a `net.Socket`); real TCP is done now (see below), UDP/DNS are not (`udp_wrap`/
+  `tty_wrap`/`cares_wrap` are inert stubs). `child.stdin.write()`/`.end()` deliver for
   real now (routed parent-worker -> kernel -> child-worker as ordinary `writeStdin`/`endStdin`,
   the same path top-level stdin uses). Killing (or the natural exit of) a process kills its whole
   subtree (`kernel/processes.ts`'s `finalize`'s `cascade` recursion over `childrenOf`): a
@@ -164,10 +164,45 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   Chromium not just for one process watching its own writes, but for the HOST's own `wc.fs.*`
   waking a process's `fs.watch`, and for one real process's write waking a DIFFERENT real
   process's watch, both routed through the kernel exactly as above.
-Verified by Vitest (463) and Playwright in real Chromium (68), including a script reading a
+- `net.createServer`/`net.connect` are Node's real `net.js` (already vendored, over the real
+  `tcp_wrap`) backed by a virtual network entirely inside the kernel - no real socket, so a
+  "connection" is two Process Workers' own `TCP` handles relayed byte-for-byte through the
+  kernel (`kernel/netServer.ts`), the same postMessage shape `child_process`'s stdin/stdout/ipc
+  already use. `listen()` alone needs a synchronous, globally-coordinated answer (port `0` ->
+  the real assigned port; an explicit port already taken -> real `EADDRINUSE`) to match real
+  `net.js`'s own contract (it emits `'listening'` right after `handle.listen()` returns `0`, with
+  no further async confirmation awaited) - a THIRD per-process SAB (`OP_NET_LISTEN`,
+  `protocols/syscall.ts`), serviced by the kernel exactly like `spawnSync`'s own second one
+  (`kernel/netServer.ts`'s `service`, mirroring `kernel/spawnSyncServer.ts`). `connect()`/reads/
+  writes are all naturally async, ordinary postMessage relay. `stream_wrap`'s shared
+  `streamBaseState` scratch array (real read/write completions live there, per realm) used to be
+  private to `child_process.ts`'s own router; pulled out to `runtime/bindings/streamBaseState.ts`
+  so `net.ts`'s own router can share the SAME instance `net.js` itself expects (it destructures
+  `stream_wrap` independently of `tcp_wrap`/`pipe_wrap` - a second, disconnected array would
+  silently break reads/writes). No IPv6 (`bind6`/`connect6` always fail, exactly like a machine
+  with no IPv6 would - real `net.js` already falls back to IPv4 gracefully on its own) and no
+  Unix-domain sockets (`net.connect({path})`; `pipe_wrap`'s real `Pipe` class stays scoped to
+  `child_process` stdio). `require('net')` needs a working `dns.lookup()` (its own default
+  `net.connect({port})` has no explicit host - `'localhost'` is the default - and resolving
+  that needs a real DNS module this sandbox doesn't have) and `cluster.isPrimary` (`net.js`'s
+  `Server.listen()` checks it unconditionally, even outside any actual cluster usage) - both
+  small, hand-written shims (`runtime/shims.ts`): `dns.lookup()` always resolves to this
+  sandbox's one virtual loopback address (there is no real network to resolve a hostname
+  against), and `cluster.isPrimary` is always `true` (there is only ever one process per
+  listener, nothing to balance). A connecting/listening `TCP` handle refs the event loop itself,
+  like a real `uv_tcp_t` would - miss that and a script doing nothing but `net.connect(...)`
+  sees an idle loop and exits before the (inherently async) result ever arrives, a real bug the
+  Vitest suite caught immediately. See "Known differences" for the fixed virtual address/family,
+  and for `open()`'s deliberately-*not*-double-firing `fs.watch` behavior this surfaced too (a
+  content write anywhere - `net`, plain `fs`, doesn't matter - now goes through the same fd path).
+  Verified end-to-end in real Chromium for a real client process connecting to a real server
+  process on an explicit port with data flowing both ways, `listen(0)` auto-assigning different
+  real ports to two different real processes, a second real process getting a real `EADDRINUSE`
+  on an already-used port, and a real `ECONNREFUSED` connecting to a port nobody is listening on.
+Verified by Vitest (468) and Playwright in real Chromium (72), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
-Not done: real `http`/`net` (TCP/UDP/DNS), `worker_threads`, `process.binding`, `node -p`.
+Not done: real `http`, UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
 
 ### How the Node runtime is put together (src/runtime/)
 - `node/lib/**`: Node's own files, VERBATIM, generated by `scripts/vendor-node-lib.mjs` from
@@ -244,8 +279,9 @@ Not done: real `http`/`net` (TCP/UDP/DNS), `worker_threads`, `process.binding`, 
   (`runtime/shims.ts`'s `v8` stub only exists so `internal/child_process/serialization.js` can
   load at all - `class ChildProcessSerializer extends v8.DefaultSerializer` needs the base class
   to exist, even though json mode never constructs it). Sending a handle
-  (`child.send(msg, someSocketOrServer)`) isn't supported - no real `net` handles exist in this
-  sandbox anyway (Phase 6). Raw `child.stdio[3]` access to the ipc pipe isn't supported, only
+  (`child.send(msg, someSocketOrServer)`) isn't supported - real `net.Socket`/`net.Server` exist
+  now (see below), but passing one over an ipc channel to another process isn't wired up. Raw
+  `child.stdio[3]` access to the ipc pipe isn't supported, only
   `.send()`/`.on('message')`/`.disconnect()`/`.channel` - covers the overwhelming majority of
   real `fork()` usage.
 - `fs.watch`/`watchFile` (see "Current state" for the full design): a fd's watch-relevant path is
@@ -258,6 +294,13 @@ Not done: real `http`/`net` (TCP/UDP/DNS), `worker_threads`, `process.binding`, 
   unlink/rmdir calls, which are already hooked); the SYNC `fs.rmSync` reports only the top-level
   path, matching real Node's own split (sync always takes a single C++ `binding.rmSync` call,
   never the JS-level walker `rimraf.js` is).
+- `net`: every address, on both ends of every connection, is the same fixed virtual loopback
+  (`127.0.0.1`/`IPv4`) - this sandbox is a single virtual host, so there's nothing else to
+  report (`runtime/bindings/net.ts`). No IPv6 (`bind6`/`connect6` always fail - real `net.js`
+  already falls back to IPv4 gracefully on its own, the same way a machine with no IPv6 would)
+  and no Unix-domain sockets (`net.connect({path})`). `dns.lookup()` doesn't do a real lookup -
+  every hostname resolves to the same virtual loopback address (`runtime/shims.ts`), since
+  there's no real network to resolve one against.
 
 ## Architecture to build (from vivari)
 
@@ -331,9 +374,15 @@ module: `Thing.test.ts`).
   "Current state").
 - Not done: `$` expansion, globbing, subshells, control-flow keywords, `&` background jobs.
 
-### Phase 6 - Network + preview
-- Kernel port registry: `listen`/`accept`/`respond` (chunk large bodies).
-- Service Worker relay + iframe preview; `listen` events on the host handle.
+### Phase 6 - Network + preview  (net DONE; http + preview remaining)
+- Kernel port registry: `listen`/`accept`/`respond` (chunk large bodies) - done, see "Current
+  state"'s `net` entry: a real virtual TCP network (`kernel/netServer.ts`), reached from guest
+  code via a real `tcp_wrap` (`runtime/bindings/net.ts`). `respond`/large-body chunking wasn't
+  needed for raw TCP - revisit once `http` needs to relay a real HTTP response.
+- Remaining: real `http` (needs a hand-written HTTP/1.1 wire parser - Node's own is a native
+  `llhttp` binding, not vendorable as JS) and DNS (`dns.lookup()` is a fixed-address shim for
+  now, not a real resolver). Service Worker relay + iframe preview; `listen` events on the host
+  handle.
 
 ### Phase 7 - Fetcher worker, real npm, persistence
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10.

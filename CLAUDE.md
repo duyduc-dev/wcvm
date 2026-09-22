@@ -100,9 +100,26 @@ Done and verified in real Chromium:
   postMessage channel to every process worker" shape `spawnSync`/`fork()` used. Verified in real
   Chromium not just for a process watching its own writes, but for the host's `wc.fs.*` waking a
   process's watch, and one process's write waking a different process's watch.
-- Tests: 463 Vitest + 68 Playwright (Chromium). See "Verifying".
+- `net.createServer`/`net.connect` (real `net.js`, over a real `tcp_wrap`): a virtual network
+  entirely inside the kernel - a "connection" is two Process Workers' own `TCP` handles
+  (`runtime/bindings/net.ts`) relayed byte-for-byte through `kernel/netServer.ts`, the same
+  postMessage shape `child_process`'s stdin/stdout/ipc already use. `listen()` alone needs a
+  synchronous, globally-coordinated answer (port `0` -> the real assigned port; an explicit port
+  already taken -> real `EADDRINUSE`) - a THIRD per-process SAB (`OP_NET_LISTEN`), serviced by
+  the kernel exactly like `spawnSync`'s own second one. `connect()`/reads/writes are ordinary
+  async postMessage relay. `stream_wrap`'s shared `streamBaseState` (real read/write completions,
+  one array per realm) moved out of `child_process.ts` into `runtime/bindings/streamBaseState.ts`
+  so `net.ts` can share the exact same instance real `net.js` itself expects. No IPv6, no
+  Unix-domain sockets; `require('net')` needed two small new shims (`runtime/shims.ts`):
+  `dns.lookup()` (net.js's own default host, `'localhost'`, needs *something* to resolve it) and
+  `cluster.isPrimary` (`Server.listen()` checks it unconditionally) - both fixed answers, since
+  this sandbox has no real network or multi-process clustering to speak of. Verified in real
+  Chromium for a real client and server process (different Process Workers) exchanging data,
+  `listen(0)` assigning different real ports across processes, a real `EADDRINUSE`, and a real
+  `ECONNREFUSED`.
+- Tests: 468 Vitest + 72 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): real `http`/`net` (TCP/UDP/DNS) + preview Service Worker,
+Not done (roadmap order, see PLAN.md): real `http` + preview Service Worker, UDP/DNS,
 fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
@@ -260,6 +277,18 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   Chromium needed - it's pure Vfs/FsServer logic, no worker/SAB/timer involved). Fix: `open()`'s
   own truncation doesn't report a change by itself; only a write that follows does. `fs.truncateSync`
   isn't affected - it already goes through `open('r+')` + `ftruncate()`, which does report.
+- A real `uv_tcp_t` is ref'd from the moment it starts *connecting*, not just once connected -
+  `TCP.connect()` (`runtime/bindings/net.ts`) forgetting to `ref()` immediately meant a script
+  doing nothing but `net.connect(port, cb)` saw an idle event loop (nothing else pending yet)
+  and exited before the inherently-async connect result could ever arrive; `cb` silently never
+  ran. Caught by a plain Vitest test asserting the callback fired - it just hung until the
+  default test timeout, no Chromium needed. The fix mirrors `fs.watch`'s FSEvent and a listening
+  TCP server: ref on the operation that STARTS async work, not on its eventual success.
+- `require('net')` transitively hits the exact same "eager router construction throws ENOSYS
+  without a childProcess host" gotcha `child_process.js` already has (below): `net.js` also
+  requires `stream_wrap`/`pipe_wrap` unconditionally at module load, and both are built by
+  `childProcess.ts`'s own `ChildRouter`, which throws if no host is wired - regardless of
+  whether the script (or test) ever touches `child_process` itself.
 
 ## Conventions
 

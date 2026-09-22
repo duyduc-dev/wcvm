@@ -2,6 +2,7 @@ import type { IFsClient } from "../fs/fsClient";
 import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost, IForkIpcHost } from "../runtime/bindings/childProcess";
 import type { IFsWatchHost } from "../runtime/bindings/fs";
+import type { INetHost } from "../runtime/bindings/net";
 import type { IStdinHost } from "../runtime/runtime";
 
 export interface IProgramContext {
@@ -27,6 +28,10 @@ export interface IProgramContext {
   ipc?: IForkIpcHost;
   /** Delivers fs.watch change events pushed from the kernel; undefined outside a real process worker. */
   fsWatch?: IFsWatchHost;
+  /** The virtual network's async half; undefined outside a real process worker. */
+  net?: INetHost;
+  /** The virtual network's blocking half (net.Server.listen() only); undefined outside a real process worker. */
+  netSync?: ISyscallClient;
 }
 
 /** Resolves to the process exit status. */

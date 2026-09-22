@@ -1,5 +1,6 @@
 import type { KernelMessage } from "../bridges/models";
 import type { ChildEvent, IProcessInit, ProcessEvent } from "../workers/process/messages";
+import type { NetKernelEvent } from "./netServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IProcessWorkerLike {
@@ -17,6 +18,18 @@ export interface IProcessTableParams {
   /** Registers a new syscall client for execSync/spawnSync, serviced by the kernel itself. */
   attachSyncClient: (clientId: number) => { sab: SharedArrayBuffer; port: MessagePort };
   detachSyncClient: (clientId: number) => void;
+  /** Registers a new syscall client for net.Server.listen(), serviced by the kernel itself. */
+  attachNetClient: (clientId: number) => { sab: SharedArrayBuffer; port: MessagePort };
+  detachNetClient: (clientId: number) => void;
+  /** The async half of the virtual network (kernel/netServer.ts): connect/data/close relay. */
+  netRelay: {
+    unlisten(pid: number, port: number): void;
+    connect(fromPid: number, ticket: number, port: number): void;
+    data(fromPid: number, connId: number, chunk: Uint8Array): void;
+    shutdown(fromPid: number, connId: number): void;
+    close(fromPid: number, connId: number): void;
+    releasePid(pid: number): void;
+  };
   /** Sends an event to the host (`process:stdout`, `process:exit`, ...). */
   emit: (message: KernelMessage) => void;
 }
@@ -57,6 +70,9 @@ export interface IProcessTable {
   /** Delivers an fs.watch/watchFile change the fs worker reported for one of `pid`'s own
    *  watches; a no-op if `pid` isn't running any more (see kernel/index.ts's fsWorker.onmessage). */
   notifyWatch(pid: number, watchId: number, eventType: "rename" | "change", filename: string): void;
+  /** Delivers a net event (connect result, incoming connection, data, close) to `pid`'s own
+   *  process worker; a no-op if `pid` isn't running any more - kernel/netServer.ts's `notify`. */
+  notifyNet(pid: number, event: NetKernelEvent): void;
   has(pid: number): boolean;
   readonly size: number;
 }
@@ -92,6 +108,9 @@ const createProcessTable = ({
   detachFsClient,
   attachSyncClient,
   detachSyncClient,
+  attachNetClient,
+  detachNetClient,
+  netRelay,
   emit,
 }: IProcessTableParams): IProcessTable => {
   const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number; sync?: ISyncEntry }>();
@@ -138,6 +157,8 @@ const createProcessTable = ({
     entry.worker.terminate();
     detachFsClient(pid);
     detachSyncClient(pid);
+    detachNetClient(pid);
+    netRelay.releasePid(pid);
     if (entry.sync) {
       entry.sync.onExit({ code, signal: extra.signal, stdout: concatBytes(entry.sync.stdout), stderr: concatBytes(entry.sync.stderr) });
     } else if (!cascade) {
@@ -178,6 +199,10 @@ const createProcessTable = ({
     workers.get(pid)?.worker.postMessage({ type: "watchEvent", watchId, eventType, filename });
   };
 
+  const notifyNet = (pid: number, event: NetKernelEvent) => {
+    workers.get(pid)?.worker.postMessage(event);
+  };
+
   const spawn = (spec: ISpawnSpec) => {
     const { processId: pid, parentPid, onExit } = spec;
     // A sync spawn's caller is blocked on a SAB, not running a message loop - reporting a
@@ -196,10 +221,12 @@ const createProcessTable = ({
     let worker: IProcessWorkerLike;
     let client: { sab: SharedArrayBuffer; port: MessagePort };
     let syncClient: { sab: SharedArrayBuffer; port: MessagePort };
+    let netClient: { sab: SharedArrayBuffer; port: MessagePort };
     try {
       worker = createProcessWorker(pid);
       client = attachFsClient(pid);
       syncClient = attachSyncClient(pid);
+      netClient = attachNetClient(pid);
     } catch (cause) {
       reportFailure(`Failed to start process: ${(cause as Error).message}`);
       return;
@@ -242,6 +269,21 @@ const createProcessTable = ({
         case "ipcOutEnd":
           parentOf(pid)?.postMessage({ type: "child:ipcOutEnd", childPid: pid });
           break;
+        case "net:unlisten":
+          netRelay.unlisten(pid, data.port);
+          break;
+        case "net:connect":
+          netRelay.connect(pid, data.ticket, data.port);
+          break;
+        case "net:data":
+          netRelay.data(pid, data.connId, data.chunk);
+          break;
+        case "net:shutdown":
+          netRelay.shutdown(pid, data.connId);
+          break;
+        case "net:close":
+          netRelay.close(pid, data.connId);
+          break;
       }
     };
     worker.onerror = (event) => {
@@ -262,9 +304,11 @@ const createProcessTable = ({
         fsPort: client.port,
         syncSab: syncClient.sab,
         syncPort: syncClient.port,
+        netSab: netClient.sab,
+        netPort: netClient.port,
         ipc: spec.ipc ?? false,
       },
-      [client.port, syncClient.port],
+      [client.port, syncClient.port, netClient.port],
     );
   };
 
@@ -281,6 +325,7 @@ const createProcessTable = ({
     writeIpc,
     endIpc,
     notifyWatch,
+    notifyNet,
     has: (pid) => workers.has(pid),
     get size() {
       return workers.size;
