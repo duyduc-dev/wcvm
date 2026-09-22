@@ -16,6 +16,7 @@ import {
   u32ToBytes,
   type ISyscallClient,
 } from "../../protocols/syscall";
+import { K_ARRAY_BUFFER_OFFSET, K_BYTES_WRITTEN, K_LAST_WRITE_WAS_ASYNC, K_READ_BYTES_OR_ERROR, streamBaseStateFor } from "./streamBaseState";
 import { uvCode, uvException } from "./uvErrors";
 
 /** Fulfilled by the process worker (see workers/process/worker.ts). */
@@ -43,14 +44,6 @@ export interface IChildProcessContext {
   process?: { pid?: number };
   childProcess?: IChildProcessHost;
 }
-
-// streamBaseState indices are ours (nothing outside this file/net.js's shared
-// glue reads them by hardcoded number); values must round-trip negative uv
-// codes, so this is Int32, not Uint32.
-const K_READ_BYTES_OR_ERROR = 0;
-const K_ARRAY_BUFFER_OFFSET = 1;
-const K_BYTES_WRITTEN = 2;
-const K_LAST_WRITE_WAS_ASYNC = 3;
 
 const UV_EOF = -4095;
 const SIGTERM = 15;
@@ -326,7 +319,10 @@ class ChildRouter {
     this.host = ctx.childProcess;
     this.ownPid = ctx.process?.pid ?? 0;
     this.loop = ctx.loop;
-    this.state = new Int32Array(4);
+    // Shared with tcp_wrap (runtime/bindings/net.ts): stream_wrap's streamBaseState is ONE array
+    // per realm regardless of handle type - a separate one here would silently disconnect this
+    // router's reads/writes from what net.js/child_process.js actually observe.
+    this.state = streamBaseStateFor(ctx);
 
     this.host.onEvent((event) => this.loop.post(() => this.dispatch(event)));
   }

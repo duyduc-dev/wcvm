@@ -24,6 +24,8 @@ describe("vendored Node lib", () => {
     "internal/blob",
     "internal/bootstrap/realm",
     "internal/perf/observe",
+    "dns",
+    "cluster",
   ];
 
   it("registers exactly the modules in the manifest, at one pinned version", () => {

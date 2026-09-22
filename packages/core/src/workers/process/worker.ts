@@ -2,6 +2,7 @@ import { createFsClient } from "../../fs/fsClient";
 import { createSyscallClient, makeViews } from "../../protocols/syscall";
 import type { ChildProcessEvent, IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/childProcess";
 import type { IFsWatchHost } from "../../runtime/bindings/fs";
+import type { INetHost, NetEvent } from "../../runtime/bindings/net";
 import type { IStdinHost } from "../../runtime/runtime";
 import { ChildEvent, IProcessInit, ProcessEvent } from "./messages";
 import { runProcess } from "./run";
@@ -85,6 +86,21 @@ const fsWatch: IFsWatchHost = {
   },
 };
 
+// One handler total, like fsWatch's own - runtime/bindings/net.ts dispatches to individual TCP
+// instances itself, by connId (or ticket, for a connect() still in flight).
+let onNetEvent: ((event: NetEvent) => void) | null = null;
+
+const net: INetHost = {
+  unlisten: (port) => post({ type: "net:unlisten", port }),
+  connect: (ticket, port) => post({ type: "net:connect", ticket, port }),
+  writeData: (connId, chunk) => post({ type: "net:data", connId, chunk }),
+  shutdown: (connId) => post({ type: "net:shutdown", connId }),
+  close: (connId) => post({ type: "net:close", connId }),
+  onEvent: (handler) => {
+    onNetEvent = handler;
+  },
+};
+
 const start = async (init: IProcessInit) => {
   const fs = createFsClient(
     createSyscallClient({
@@ -95,6 +111,10 @@ const start = async (init: IProcessInit) => {
   const spawnSync = createSyscallClient({
     ...makeViews(init.syncSab),
     notify: () => init.syncPort.postMessage(null),
+  });
+  const netSync = createSyscallClient({
+    ...makeViews(init.netSab),
+    notify: () => init.netPort.postMessage(null),
   });
 
   let code: number;
@@ -114,6 +134,8 @@ const start = async (init: IProcessInit) => {
       spawnSync,
       ipc: init.ipc ? ipc : undefined,
       fsWatch,
+      net,
+      netSync,
     });
   } catch (error) {
     post({
@@ -160,6 +182,25 @@ self.onmessage = (event: MessageEvent<IProcessInit | ChildEvent>) => {
       break;
     case "watchEvent":
       onWatchEvent?.({ watchId: data.watchId, eventType: data.eventType, filename: data.filename });
+      break;
+    case "net:connectResult":
+      onNetEvent?.(
+        data.ok
+          ? { type: "connectResult", ticket: data.ticket, ok: true, connId: data.connId }
+          : { type: "connectResult", ticket: data.ticket, ok: false, code: data.code },
+      );
+      break;
+    case "net:incoming":
+      onNetEvent?.({ type: "incoming", connId: data.connId, port: data.port });
+      break;
+    case "net:data":
+      onNetEvent?.({ type: "data", connId: data.connId, chunk: data.chunk });
+      break;
+    case "net:eof":
+      onNetEvent?.({ type: "eof", connId: data.connId });
+      break;
+    case "net:close":
+      onNetEvent?.({ type: "close", connId: data.connId });
       break;
   }
 };

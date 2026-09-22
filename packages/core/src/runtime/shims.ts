@@ -12,8 +12,13 @@ const SCHEME_ONLY = ["sea", "sqlite", "test", "test/reporters"];
 const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
 
 /**
- * Hand-written stand-ins for the few Node modules that are part of Node's C++
- * bootstrap rather than its `lib/` (so they cannot be vendored verbatim).
+ * Hand-written stand-ins, for two different reasons:
+ *  - Node modules that are part of Node's C++ bootstrap rather than its `lib/`, so they cannot
+ *    be vendored verbatim at all (`internal/url`, `internal/encoding`, `internal/blob`,
+ *    `internal/perf/observe`, `v8`).
+ *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified
+ *    result instead of fully implementing, because there's nothing real behind them to report
+ *    (`dns`, `cluster` - see their own comments below for why).
  *
  * `internal/bootstrap/realm` is Node's own builtin loader. Vendored modules
  * reach it for `BuiltinModule` (does this id exist? may users require it?), so
@@ -143,14 +148,35 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
   };
 
   /**
-   * `internal/perf/observe` is a large PerformanceObserver implementation;
-   * net.js requires it unconditionally at module load but only calls it from
-   * `connect()` (real TCP, which we don't support). No observer is ever
-   * subscribed here, so this is exactly real Node's own default state, not
-   * an approximation.
+   * `internal/perf/observe` is a large PerformanceObserver implementation; net.js requires it
+   * unconditionally at module load and calls it from real, working `connect()` now, but only to
+   * check whether anything is actually observing 'net' events - no observer is ever subscribed
+   * here, so this is exactly real Node's own default (unobserved) state, not an approximation.
    */
   const internalPerfObserve: BuiltinFactory = (_exports, _require, module) => {
     module.exports = { hasObserver: () => false, startPerf: () => {}, stopPerf: () => {} };
+  };
+
+  /**
+   * dns.js (a real, sizable module wrapping cares_wrap's real getaddrinfo/queryA/etc.) isn't
+   * vendored - this sandbox is a single virtual host with no real network to resolve names
+   * against, so hostname resolution is a fixed answer, not a real lookup. Only `lookup()`:
+   * net.js's own default `net.connect({port})` (no explicit host - 'localhost' is its default)
+   * needs it to skip straight to internalConnect(); nothing else in this sandbox calls dns.*.
+   */
+  const dnsShim: BuiltinFactory = (_exports, _require, module, process) => {
+    const ADDRESS = "127.0.0.1";
+    const FAMILY = 4;
+    const lookup = (
+      _hostname: string,
+      options: unknown,
+      callback?: (error: Error | null, address: unknown, family?: number) => void,
+    ) => {
+      const cb = typeof options === "function" ? (options as typeof callback) : callback;
+      const all = typeof options === "object" && options !== null && (options as { all?: boolean }).all === true;
+      process.nextTick(() => cb?.(null, all ? [{ address: ADDRESS, family: FAMILY }] : ADDRESS, all ? undefined : FAMILY));
+    };
+    module.exports = { lookup, ADDRCONFIG: 0, ALL: 0, V4MAPPED: 0 };
   };
 
   /**
@@ -178,11 +204,24 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     module.exports = { DefaultSerializer, DefaultDeserializer, serialize: notImplemented, deserialize: notImplemented };
   };
 
+  /**
+   * cluster.js (real multi-process load balancing over a real fork()) isn't vendored: this
+   * sandbox has one process per net.Server, never several sharing a listen port, so there's
+   * nothing to balance. net.js's Server.listen() checks `cluster.isPrimary` unconditionally
+   * (even for a script that never touched cluster itself) before setting up the real listen -
+   * always true here, matching a plain, non-clustered Node process exactly (not an approximation).
+   */
+  const clusterShim: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = { isPrimary: true, isMaster: true, isWorker: false };
+  };
+
   return {
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
     "internal/perf/observe": internalPerfObserve,
+    dns: dnsShim,
+    cluster: clusterShim,
     v8: v8Shim,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {

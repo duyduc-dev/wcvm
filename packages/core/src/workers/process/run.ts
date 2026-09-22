@@ -3,6 +3,7 @@ import { resolveProgram } from "../../programs";
 import type { ISyscallClient } from "../../protocols/syscall";
 import type { IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/childProcess";
 import type { IFsWatchHost } from "../../runtime/bindings/fs";
+import type { INetHost } from "../../runtime/bindings/net";
 import type { IStdinHost } from "../../runtime/runtime";
 
 export type StdStream = "stdout" | "stderr";
@@ -28,6 +29,10 @@ export interface IRunParams {
   ipc?: IForkIpcHost;
   /** See IProgramContext.fsWatch. */
   fsWatch?: IFsWatchHost;
+  /** See IProgramContext.net. */
+  net?: INetHost;
+  /** See IProgramContext.netSync. */
+  netSync?: ISyscallClient;
 }
 
 const EXIT_COMMAND_NOT_FOUND = 127;
@@ -73,6 +78,8 @@ const runProcess = async (params: IRunParams): Promise<number> => {
       spawnSync: params.spawnSync,
       ipc: params.ipc,
       fsWatch: params.fsWatch,
+      net: params.net,
+      netSync: params.netSync,
       stdout: (data) => write("stdout", toBytes(data)),
     });
   } catch (error) {

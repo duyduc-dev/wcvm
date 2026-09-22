@@ -338,6 +338,16 @@ export const OP_SPAWN_SYNC = KERNEL_OPCODE_MIN;
 /** Sentinel for spawnSync's `status: null` (the child was killed by a signal). */
 export const SPAWN_SYNC_NO_STATUS = 0xffffffff;
 
+// A THIRD per-process SAB (kernel/netServer.ts), separate from spawnSync's: net.Server.listen()
+// needs a globally-coordinated, synchronous answer (port 0 -> the actual assigned port; an
+// explicit port already taken -> EADDRINUSE), matching real net.js's own contract (it emits
+// 'listening' right after handle.listen() returns 0, with no further async confirmation
+// awaited) - the only net operation that genuinely needs this. connect()/data/close are all
+// naturally async (kernel/processes.ts's ordinary postMessage routing, like child_process).
+//
+//   OP_NET_LISTEN u32 port (0 = auto-assign), u32 backlog -> u32 assignedPort (EADDRINUSE if taken)
+export const OP_NET_LISTEN = KERNEL_OPCODE_MIN + 1;
+
 export const isFsOpcode = (opcode: number): boolean =>
   opcode >= 1 && opcode <= FS_OPCODE_MAX;
 

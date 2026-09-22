@@ -54,6 +54,9 @@ const setupServer = () => {
     detachFsClient: () => {},
     attachSyncClient: () => ({ sab: new SharedArrayBuffer(8), port: {} as MessagePort }),
     detachSyncClient: () => {},
+    attachNetClient: () => ({ sab: new SharedArrayBuffer(8), port: {} as MessagePort }),
+    detachNetClient: () => {},
+    netRelay: { unlisten: () => {}, connect: () => {}, data: () => {}, shutdown: () => {}, close: () => {}, releasePid: () => {} },
     emit: () => {},
   });
   const server = createSpawnSyncServer({ processes: table, allocatePid: () => nextPid++ });

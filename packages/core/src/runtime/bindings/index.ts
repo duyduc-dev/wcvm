@@ -21,12 +21,12 @@ import {
   createPerformanceBinding,
   createPermissionBinding,
   createProfilerBinding,
-  createTcpWrapBinding,
   createTraceEventsBinding,
   createTtyWrapBinding,
   createUdpWrapBinding,
   createUvBinding,
 } from "./misc";
+import { createTcpWrapBinding, type INetHost } from "./net";
 import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
 import { createSymbolsBinding, createUtilBinding } from "./util";
@@ -47,6 +47,10 @@ interface IBindingContext {
   spawnSync?: ISyscallClient;
   /** Delivers fs.watch change events pushed from the kernel; without it, fs.watch() throws ENOSYS. */
   fsWatch?: IFsWatchHost;
+  /** The virtual network's async half (connect/data/close); without it, TCP methods return ENOSYS/ENOTCONN. */
+  net?: INetHost;
+  /** The virtual network's blocking half (net.Server.listen() only); without it, listen() returns ENOSYS. */
+  netSync?: ISyscallClient;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -76,7 +80,7 @@ const factories: Record<string, BindingFactory> = {
   spawn_sync: (ctx) => createSpawnSyncBinding(ctx),
   stream_wrap: (ctx) => createStreamWrapBinding(ctx),
   string_decoder: () => createStringDecoderBinding(),
-  tcp_wrap: () => createTcpWrapBinding(),
+  tcp_wrap: (ctx) => createTcpWrapBinding(ctx),
   trace_events: () => createTraceEventsBinding(),
   tty_wrap: () => createTtyWrapBinding(),
   symbols: () => createSymbolsBinding(),

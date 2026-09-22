@@ -14,6 +14,10 @@ export interface IProcessInit {
   syncSab: SharedArrayBuffer;
   /** Doorbell straight to the kernel worker for `syncSab`. */
   syncPort: MessagePort;
+  /** A third syscall buffer for net.Server.listen(), serviced by the kernel itself - see kernel/netServer.ts. */
+  netSab: SharedArrayBuffer;
+  /** Doorbell straight to the kernel worker for `netSab`. */
+  netPort: MessagePort;
   /** Whether this process was spawned via `fork()` and should get an IPC channel (`process.send`/`.on('message')`). */
   ipc: boolean;
 }
@@ -35,7 +39,19 @@ export type ChildEvent =
   | { type: "child:ipcOutEnd"; childPid: number }
   | { type: "child:exit"; childPid: number; exitCode: number; signal?: "SIGTERM" | "SIGKILL"; errorMessage?: string }
   /** A change reported for one of this process's own fs.watch/watchFile watches - see kernel/processes.ts's notifyWatch. */
-  | { type: "watchEvent"; watchId: number; eventType: "rename" | "change"; filename: string };
+  | { type: "watchEvent"; watchId: number; eventType: "rename" | "change"; filename: string }
+  /** The virtual network (kernel/netServer.ts): reply to this process's own net:connect (`ticket`
+   *  is what it sent), a new inbound connection on a port it's listening on, a byte chunk from
+   *  the peer on either side of an established connection, or that connection closing. */
+  | { type: "net:connectResult"; ticket: number; ok: true; connId: number }
+  | { type: "net:connectResult"; ticket: number; ok: false; code: string }
+  | { type: "net:incoming"; connId: number; port: number }
+  | { type: "net:data"; connId: number; chunk: Uint8Array }
+  /** The peer shut down its write side (half-close): EOF for our read side, but the connection
+   *  stays registered - we may still write, and (if the peer is only half-closed too) receive. */
+  | { type: "net:eof"; connId: number }
+  /** The peer fully closed: EOF for our read side, and the connection is gone for good. */
+  | { type: "net:close"; connId: number };
 
 /** Process worker -> kernel. */
 export type ProcessEvent =
@@ -52,4 +68,12 @@ export type ProcessEvent =
   | { type: "child:ipcEnd"; childPid: number }
   /** This process's own outgoing ipc message (only if it was itself fork()ed), or its disconnect. */
   | { type: "ipcOut"; chunk: Uint8Array }
-  | { type: "ipcOutEnd" };
+  | { type: "ipcOutEnd" }
+  /** The async half of the virtual network - see kernel/netServer.ts. `ticket` is this process's
+   *  own correlation id for net:connectResult (minted locally, like a child_process's childPid). */
+  | { type: "net:unlisten"; port: number }
+  | { type: "net:connect"; ticket: number; port: number }
+  | { type: "net:data"; connId: number; chunk: Uint8Array }
+  /** Half-close (done writing) vs full teardown - see kernel/netServer.ts's shutdown()/close(). */
+  | { type: "net:shutdown"; connId: number }
+  | { type: "net:close"; connId: number };
