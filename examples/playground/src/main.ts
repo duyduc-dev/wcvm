@@ -13,15 +13,14 @@ wc.diagnostics.onEvent((event) => {
 const app = document.querySelector("#app");
 if (app) app.textContent = "wcvm playground";
 
-wc.ready.then(
-  async () => {
-    if (app) app.textContent = "wcvm ready";
+try {
+  await wc.ready;
+  if (app) app.textContent = "wcvm ready";
 
-    const terminalEl = document.querySelector<HTMLElement>("#terminal");
-    const select = document.querySelector<HTMLSelectElement>("#program");
-    const restart = document.querySelector<HTMLButtonElement>("#restart");
-    if (!terminalEl || !select || !restart) return;
-
+  const terminalEl = document.querySelector<HTMLElement>("#terminal");
+  const select = document.querySelector<HTMLSelectElement>("#program");
+  const restart = document.querySelector<HTMLButtonElement>("#restart");
+  if (terminalEl && select && restart) {
     let session: Awaited<ReturnType<typeof attachTerminal>> | undefined;
     const start = async () => {
       session?.stop();
@@ -30,6 +29,7 @@ wc.ready.then(
     select.addEventListener("change", start);
     restart.addEventListener("click", start);
     await start();
-  },
-  (error: Error) => app && (app.textContent = `wcvm failed: ${error.message}`),
-);
+  }
+} catch (error) {
+  if (app) app.textContent = `wcvm failed: ${(error as Error).message}`;
+}
