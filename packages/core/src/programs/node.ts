@@ -8,9 +8,9 @@ const usage = (stderr: (text: string) => void, message: string) => {
 };
 
 /**
- * `node [script.js [args...]]` and `node -e "code"`: runs the vendored Node
- * runtime inside this process's worker. Loaded on demand so processes that
- * only run `echo` never build a runtime.
+ * `node [script.js [args...]]`, `node -e "code"`, or `node` with no script (an interactive
+ * REPL over stdin): runs the vendored Node runtime inside this process's worker. Loaded on
+ * demand so processes that only run `echo` never build a runtime.
  */
 const node: Program = async (ctx) => {
   const { args } = ctx;
@@ -39,10 +39,6 @@ const node: Program = async (ctx) => {
     break;
   }
 
-  if (evalSource === undefined && script === undefined) {
-    return usage(stderr, "an interactive REPL is not supported yet; pass a script or -e");
-  }
-
   const { createRuntime } = await import("../runtime/runtime");
   const scriptPath =
     script === undefined ? undefined : script.startsWith("/") ? script : `${ctx.cwd === "/" ? "" : ctx.cwd}/${script}`;
@@ -61,7 +57,9 @@ const node: Program = async (ctx) => {
     },
   });
 
-  return evalSource !== undefined ? runtime.runEval(evalSource) : runtime.runMain(script!);
+  if (evalSource !== undefined) return runtime.runEval(evalSource);
+  if (script !== undefined) return runtime.runMain(script);
+  return runtime.runRepl();
 };
 
 export { node };
