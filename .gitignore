@@ -1,5 +1,7 @@
 node_modules
-dist
+/packages/*/dist
+/examples/*/dist
+/apps/*/dist
 .turbo
 .claude/settings.local.json
 examples/playground/public
