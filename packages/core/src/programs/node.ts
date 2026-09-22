@@ -56,6 +56,7 @@ const node: Program = async (ctx) => {
       stdin: ctx.stdin,
       spawnSync: ctx.spawnSync,
       ipc: ctx.ipc,
+      fsWatch: ctx.fsWatch,
     },
   });
 

@@ -88,11 +88,22 @@ Done and verified in real Chromium:
   `v8` stub only exists so the module loads, never actually used for json mode). fork()'s default
   `stdio` is `'inherit'` (real fd-sharing this sandbox can't do) - pass `{ silent: true }` to get
   piped/captured stdout+stderr, same as real Node already lets you.
-- Tests: 443 Vitest + 65 Playwright (Chromium). See "Verifying".
+- `fs.watch`/`fs.watchFile` (real Node code, `internal/fs/watchers.js`): `watchFile` is pure local
+  polling (a native timer repeatedly calling `fs.stat`, `bindings/fs.ts`'s `StatWatcher`) - no
+  worker/kernel plumbing needed. `watch` is real push events: `Vfs.ts` gained a public `onChange`
+  hook every mutating method calls (including the fd-based ones, since `fs.writeFileSync` is
+  entirely fd-based here too - `open`+`write`+`close`, matching real Node's own C++ fast path);
+  `fs/FsServer.ts` owns the watch registry (two new opcodes, `OP_WATCH_START`/`STOP`) and dispatch;
+  the fs worker reaches the right process worker via a new unprompted `self.postMessage`
+  (`kernel/index.ts`'s `fsWorker.onmessage`, previously only used for the ready handshake, now
+  routes it to `kernel/processes.ts`'s new `notifyWatch`) - the same "kernel already has a
+  postMessage channel to every process worker" shape `spawnSync`/`fork()` used. Verified in real
+  Chromium not just for a process watching its own writes, but for the host's `wc.fs.*` waking a
+  process's watch, and one process's write waking a different process's watch.
+- Tests: 463 Vitest + 68 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): real `http`/`net` (TCP/UDP/DNS) + preview Service Worker,
-fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
-`fs.watch`, Python/Bun, Studio UI.
+fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -242,6 +253,13 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   because part of it doesn't apply to this sandbox (no fd here), re-read the WHOLE skipped
   function for other, unrelated things it also did - don't assume "the fd-related part was the
   only part."
+- `fs.writeFileSync`'s default flag is `O_CREAT|O_TRUNC`, and it's entirely fd-based here (`open`
+  then `write` then `close`, matching real Node's own C++ fast path) - a naive `fs.watch` change
+  hook on BOTH `open()`'s O_TRUNC branch and `write()` reported two `'change'` events for one
+  logical save. A plain Vitest assertion of one event per write caught this immediately (no
+  Chromium needed - it's pure Vfs/FsServer logic, no worker/SAB/timer involved). Fix: `open()`'s
+  own truncation doesn't report a change by itself; only a write that follows does. `fs.truncateSync`
+  isn't affected - it already goes through `open('r+')` + `ftruncate()`, which does report.
 
 ## Conventions
 
@@ -264,14 +282,3 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
   fail on push). `PUBLISHING.md` is outdated (still says `duckwc`).
 - The process worker bundle is ~1.6 MB (acorn added real weight, for ESM parsing) and every
   process parses it, even `echo`; split `node` into its own worker entry if startup cost matters.
-- `fs.watch`/`watchFile` return ENOSYS until the kernel has a watch operation - **next up on the
-  roadmap**, not yet investigated. Starting pointers: `watchFile` is likely near-free (real Node
-  implements it as pure-JS polling over `fs.stat`, which already fully works - check whether
-  `internal/fs/watchers.js`'s `StatWatcher` is vendored, and if not, whether vendoring it just
-  works). `fs.watch` is the real new work: the FS Worker only ever *answers* SAB requests today,
-  it has no channel to *push* an unprompted "path changed" event to a process worker. The natural
-  fix routes through the Kernel Worker (which already owns the process table and already has a
-  plain postMessage channel to every process worker) - the same *shape* of problem as
-  `spawnSync`'s new SAB channel and `fork()`'s IPC routing (both added recently), which are good
-  reference implementations. `internalBinding('fs_event_wrap')` already exists as a stub
-  (`createFsEventWrapBinding`) - check what it currently returns before assuming from scratch.

@@ -11,6 +11,16 @@ type FsWorkerMessage =
   | { type: "unregister"; clientId: number }
   | { type: "doorbell"; clientId: number };
 
+/** File System Worker -> kernel: unprompted (not a syscall response), so it's its own
+ *  postMessage, not part of the request/response SAB protocol - see FsServer's WatchEventReporter. */
+export interface FsWatchEvent {
+  type: "watchEvent";
+  clientId: number;
+  watchId: number;
+  eventType: "rename" | "change";
+  filename: string;
+}
+
 /**
  * The File System Worker's message loop, separated from `self` so it can run
  * (and be tested) anywhere. A doorbell means "this client has a request parked

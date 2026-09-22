@@ -33,7 +33,9 @@ export type ChildEvent =
   /** A child_process's own outgoing ipc message, or its disconnect - see bindings/childProcess.ts's ChildRouter. */
   | { type: "child:ipcOut"; childPid: number; chunk: Uint8Array }
   | { type: "child:ipcOutEnd"; childPid: number }
-  | { type: "child:exit"; childPid: number; exitCode: number; signal?: "SIGTERM" | "SIGKILL"; errorMessage?: string };
+  | { type: "child:exit"; childPid: number; exitCode: number; signal?: "SIGTERM" | "SIGKILL"; errorMessage?: string }
+  /** A change reported for one of this process's own fs.watch/watchFile watches - see kernel/processes.ts's notifyWatch. */
+  | { type: "watchEvent"; watchId: number; eventType: "rename" | "change"; filename: string };
 
 /** Process worker -> kernel. */
 export type ProcessEvent =

@@ -380,3 +380,72 @@ describe("Vfs times, links and entry kinds", () => {
     expect(code(() => vfs.readdirKinds("/d/b"))).toBe("ENOTDIR");
   });
 });
+
+describe("Vfs onChange (fs.watch/watchFile's raw material)", () => {
+  let changes: Array<[string, string]>;
+  beforeEach(() => {
+    changes = [];
+    vfs.onChange = (path, kind) => changes.push([path, kind]);
+  });
+
+  it("reports a new file as rename, an overwrite of an existing one as change", () => {
+    vfs.writeFile("/a.txt", bytes("one"));
+    vfs.writeFile("/a.txt", bytes("two"));
+    expect(changes).toEqual([["/a.txt", "rename"], ["/a.txt", "change"]]);
+  });
+
+  it("reports each newly created directory level under a recursive mkdir, but not one that already existed", () => {
+    vfs.mkdir("/a");
+    changes.length = 0;
+    vfs.mkdir("/a/b/c", { recursive: true });
+    expect(changes).toEqual([["/a/b", "rename"], ["/a/b/c", "rename"]]);
+  });
+
+  it("reports unlink, rmdir and rm as rename", () => {
+    vfs.writeFile("/a", bytes(""));
+    vfs.mkdir("/d");
+    vfs.mkdir("/e");
+    changes.length = 0;
+    vfs.unlink("/a");
+    vfs.rmdir("/d");
+    vfs.rm("/e", { recursive: true });
+    expect(changes).toEqual([["/a", "rename"], ["/d", "rename"], ["/e", "rename"]]);
+  });
+
+  it("reports both the old and new path on a rename, but not a same-file no-op rename", () => {
+    vfs.writeFile("/a", bytes(""));
+    changes.length = 0;
+    vfs.rename("/a", "/b");
+    expect(changes).toEqual([["/a", "rename"], ["/b", "rename"]]);
+    changes.length = 0;
+    vfs.rename("/b", "/b");
+    expect(changes).toEqual([]);
+  });
+
+  it("reports symlink and link as rename, chmod and utimes as change", () => {
+    vfs.writeFile("/a", bytes(""));
+    changes.length = 0;
+    vfs.symlink("/a", "/s");
+    vfs.link("/a", "/h");
+    vfs.chmod("/a", 0o600);
+    vfs.utimes("/a", 1000, 2000);
+    expect(changes).toEqual([["/s", "rename"], ["/h", "rename"], ["/a", "change"], ["/a", "change"]]);
+  });
+
+  it("reports a fd-created file as rename, and fd-based write/ftruncate/futimes as change on the path it was opened with", () => {
+    const fd = vfs.open("/a", O_WRONLY | O_CREAT);
+    vfs.write(fd, bytes("hi"), -1);
+    vfs.ftruncate(fd, 1);
+    vfs.futimes(fd, 1000, 2000);
+    expect(changes).toEqual([["/a", "rename"], ["/a", "change"], ["/a", "change"], ["/a", "change"]]);
+  });
+
+  it("does not itself report O_TRUNC on open - a subsequent write reports the change (avoids writeFileSync's default 'w' flag double-firing: truncate-on-open, then the write)", () => {
+    vfs.writeFile("/a", bytes("hello"));
+    changes.length = 0;
+    const fd = vfs.open("/a", O_WRONLY | O_TRUNC);
+    expect(changes).toEqual([]);
+    vfs.write(fd, bytes("hi"), -1);
+    expect(changes).toEqual([["/a", "change"]]);
+  });
+});

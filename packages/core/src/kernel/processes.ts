@@ -54,6 +54,9 @@ export interface IProcessTable {
   /** Write to / end a fork()ed process's incoming ipc channel; same no-op-if-unknown semantics. */
   writeIpc(pid: number, chunk: Uint8Array): void;
   endIpc(pid: number): void;
+  /** Delivers an fs.watch/watchFile change the fs worker reported for one of `pid`'s own
+   *  watches; a no-op if `pid` isn't running any more (see kernel/index.ts's fsWorker.onmessage). */
+  notifyWatch(pid: number, watchId: number, eventType: "rename" | "change", filename: string): void;
   has(pid: number): boolean;
   readonly size: number;
 }
@@ -171,6 +174,10 @@ const createProcessTable = ({
     workers.get(pid)?.worker.postMessage({ type: "ipcEnd" });
   };
 
+  const notifyWatch = (pid: number, watchId: number, eventType: "rename" | "change", filename: string) => {
+    workers.get(pid)?.worker.postMessage({ type: "watchEvent", watchId, eventType, filename });
+  };
+
   const spawn = (spec: ISpawnSpec) => {
     const { processId: pid, parentPid, onExit } = spec;
     // A sync spawn's caller is blocked on a SAB, not running a message loop - reporting a
@@ -273,6 +280,7 @@ const createProcessTable = ({
     endStdin,
     writeIpc,
     endIpc,
+    notifyWatch,
     has: (pid) => workers.has(pid),
     get size() {
       return workers.size;

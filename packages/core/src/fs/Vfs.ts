@@ -76,7 +76,17 @@ interface IFdEntry {
   node: Inode;
   position: number;
   flags: number;
+  /** The resolved path this fd was opened with, for watch reporting. A rename elsewhere after
+   *  open leaves this stale (POSIX fds aren't path-addressed) - a known, documented simplification. */
+  path: string;
 }
+
+/** "rename": a name appeared, disappeared or moved (mkdir, unlink, rm, rename, symlink, link,
+ *  a writeFile/open that creates a new file). "change": an existing file/dir's content or
+ *  attributes changed (writeFile/write/ftruncate on existing content, chmod, utimes). Mirrors
+ *  the two event kinds real fs.watch delivers (inotify's many event types, coalesced). */
+export type VfsChangeKind = "rename" | "change";
+export type VfsChangeReporter = (path: string, kind: VfsChangeKind) => void;
 
 interface IResolved {
   parent: IDirInode | null;
@@ -104,6 +114,12 @@ export class Vfs {
   private nextIno = 1;
   private readonly root: IDirInode;
   private readonly fds = new Map<number, IFdEntry>();
+
+  /** Fires after every mutation, real path plus what kind of change it was. A plain field
+   *  (not a constructor param) so a caller holding an existing Vfs (tests, FsServer's default
+   *  param) can still wire one in - see FsServer, the only real subscriber (fs.watch's registry
+   *  and matching logic live there, to keep this class free of watcher/client bookkeeping). */
+  onChange: VfsChangeReporter = () => {};
 
   constructor() {
     this.root = this.newDir(0o755);
@@ -307,6 +323,7 @@ export class Vfs {
       const { parent, name, node } = this.walk(path, false);
       if (node || !parent) throw new VfsError("EEXIST", path);
       this.link_(parent, name, this.newDir(mode));
+      this.onChange(path, "rename");
       return;
     }
 
@@ -323,6 +340,7 @@ export class Vfs {
         return;
       }
       this.link_(parent as IDirInode, name, this.newDir(mode));
+      this.onChange(current, "rename");
     });
   }
 
@@ -344,12 +362,14 @@ export class Vfs {
       if (node.kind !== "file") throw new VfsError("EINVAL", path);
       this.setSize(node, 0);
       this.putBytes(node, 0, data);
+      this.onChange(path, "change");
       return;
     }
     if (!parent) throw new VfsError("EISDIR", path);
     const file = this.newFile(options.mode ?? 0o644);
     this.putBytes(file, 0, data);
     this.link_(parent, name, file);
+    this.onChange(path, "rename");
   }
 
   unlink(path: string) {
@@ -357,6 +377,7 @@ export class Vfs {
     if (!node) throw new VfsError("ENOENT", path);
     if (node.kind === "dir") throw new VfsError("EISDIR", path);
     this.unlinkEntry(parent as IDirInode, name);
+    this.onChange(path, "rename");
   }
 
   rmdir(path: string) {
@@ -366,6 +387,7 @@ export class Vfs {
     if (!parent) throw new VfsError("EBUSY", path);
     if (node.entries.size > 0) throw new VfsError("ENOTEMPTY", path);
     this.unlinkEntry(parent, name);
+    this.onChange(path, "rename");
   }
 
   rm(path: string, options: { recursive?: boolean } = {}) {
@@ -376,6 +398,7 @@ export class Vfs {
       throw new VfsError("EISDIR", path);
     }
     this.unlinkEntry(parent, name);
+    this.onChange(path, "rename");
   }
 
   rename(from: string, to: string) {
@@ -405,6 +428,8 @@ export class Vfs {
     this.touch(source.parent);
     this.link_(target.parent, target.name, source.node);
     source.node.ctimeMs = Date.now();
+    this.onChange(from, "rename");
+    this.onChange(to, "rename");
   }
 
   /** True when `needle` is `dir` itself or lives anywhere beneath it. */
@@ -420,6 +445,7 @@ export class Vfs {
     const { parent, name, node } = this.walk(path, false);
     if (node || !parent) throw new VfsError("EEXIST", path);
     this.link_(parent, name, this.newSymlink(target));
+    this.onChange(path, "rename");
   }
 
   readlink(path: string): string {
@@ -432,6 +458,7 @@ export class Vfs {
     const node = this.lookup(path, true);
     node.mode = mode & 0o7777;
     node.ctimeMs = Date.now();
+    this.onChange(path, "change");
   }
 
   /** Hard link: `path` becomes another name for the same file. Directories cannot be linked. */
@@ -442,15 +469,19 @@ export class Vfs {
     if (node || !parent) throw new VfsError("EEXIST", path);
     source.nlink++;
     this.link_(parent, name, source);
+    this.onChange(path, "rename");
   }
 
   /** Sets access and modification times (milliseconds since the epoch). */
   utimes(path: string, atimeMs: number, mtimeMs: number, followLink = true) {
     this.setTimes(this.lookup(path, followLink), atimeMs, mtimeMs);
+    this.onChange(path, "change");
   }
 
   futimes(fd: number, atimeMs: number, mtimeMs: number) {
-    this.setTimes(this.entry(fd).node, atimeMs, mtimeMs);
+    const entry = this.entry(fd);
+    this.setTimes(entry.node, atimeMs, mtimeMs);
+    this.onChange(entry.path, "change");
   }
 
   private setTimes(node: Inode, atimeMs: number, mtimeMs: number) {
@@ -491,7 +522,7 @@ export class Vfs {
   // ---- file descriptors ----------------------------------------------------
 
   open(path: string, flags: number, mode = 0o666): number {
-    const { parent, name, node } = this.walk(path, true);
+    const { parent, name, node, realPath } = this.walk(path, true);
     let target: Inode;
 
     if (node) {
@@ -500,20 +531,22 @@ export class Vfs {
         throw new VfsError("EISDIR", path);
       }
       target = node;
-      if (flags & O_TRUNC && isWritable(flags) && node.kind === "file") {
-        this.setSize(node, 0);
-      }
+      // No onChange here: a truncate-then-write (writeFileSync's default flag, "w") would
+      // otherwise report two "change"s for one logical write. A truncate with nothing written
+      // after (fs.truncateSync) goes through open('r+') + ftruncate(), which already reports one.
+      if (flags & O_TRUNC && isWritable(flags) && node.kind === "file") this.setSize(node, 0);
     } else {
       if (!(flags & O_CREAT)) throw new VfsError("ENOENT", path);
       if (!parent) throw new VfsError("EISDIR", path);
       const file = this.newFile(mode & 0o7777);
       this.link_(parent, name, file);
       target = file;
+      this.onChange(realPath, "rename");
     }
 
     let fd = 3;
     while (this.fds.has(fd)) fd++;
-    this.fds.set(fd, { node: target, position: 0, flags });
+    this.fds.set(fd, { node: target, position: 0, flags, path: realPath });
     return fd;
   }
 
@@ -556,6 +589,7 @@ export class Vfs {
     if (position < 0 || entry.flags & O_APPEND) {
       entry.position = start + bytes.length;
     }
+    this.onChange(entry.path, "change");
     return bytes.length;
   }
 
@@ -568,5 +602,6 @@ export class Vfs {
     if (!isWritable(entry.flags)) throw new VfsError("EBADF");
     if (entry.node.kind !== "file") throw new VfsError("EINVAL");
     this.setSize(entry.node, length);
+    this.onChange(entry.path, "change");
   }
 }

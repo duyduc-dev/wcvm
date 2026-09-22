@@ -5,7 +5,7 @@ import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
 import { createPipeWrapBinding, createProcessWrapBinding, createSpawnSyncBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
-import { createFsBinding, createFsDirBinding, createFsEventWrapBinding } from "./fs";
+import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsWatchHost } from "./fs";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
 import {
   createAsyncContextFrameBinding,
@@ -45,6 +45,8 @@ interface IBindingContext {
   childProcess?: IChildProcessHost;
   /** Blocks on the kernel until a child exits, with its buffered output; without it, spawn_sync throws ENOSYS. */
   spawnSync?: ISyscallClient;
+  /** Delivers fs.watch change events pushed from the kernel; without it, fs.watch() throws ENOSYS. */
+  fsWatch?: IFsWatchHost;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -60,7 +62,7 @@ const factories: Record<string, BindingFactory> = {
   errors: () => createErrorsBinding(),
   fs: (ctx) => createFsBindingFor(ctx),
   fs_dir: (ctx) => createFsDirBinding(createFsBindingFor(ctx)),
-  fs_event_wrap: () => createFsEventWrapBinding(),
+  fs_event_wrap: (ctx) => createFsEventWrapBinding(ctx),
   messaging: () => createMessagingBinding(),
   mksnapshot: () => createMksnapshotBinding(),
   options: () => createOptionsBinding(),

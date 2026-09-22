@@ -37,6 +37,8 @@ import {
   OP_SYMLINK,
   OP_UNLINK,
   OP_UTIMES,
+  OP_WATCH_START,
+  OP_WATCH_STOP,
   OP_WRITE_FILE,
   SyscallError,
   bytesToU32,
@@ -91,6 +93,10 @@ export interface IFsClient {
   write(fd: number, data: Uint8Array, position?: number): number;
   fstat(fd: number): IFsStat;
   ftruncate(fd: number, length: number): void;
+  /** Registers a watch (fs.watch); throws ENOENT if `path` doesn't exist. Returns a watchId for watchStop. */
+  watchStart(path: string, recursive: boolean): number;
+  /** Unregisters a watch; a no-op for an unknown or already-stopped id, like close() on a bad fd would not be. */
+  watchStop(watchId: number): void;
 }
 
 const b = encodeString;
@@ -246,6 +252,11 @@ export const createFsClient = ({ call }: ISyscallClient): IFsClient => {
     fstat,
     ftruncate: (fd, length) => {
       call(OP_FTRUNCATE, encodeRequest([u32ToBytes(fd), f64ToBytes(length)]));
+    },
+    watchStart: (path, recursive) =>
+      bytesToU32(call(OP_WATCH_START, encodeRequest([b(path)], recursive ? FLAG_RECURSIVE : FLAG_NONE))),
+    watchStop: (watchId) => {
+      call(OP_WATCH_STOP, encodeRequest([u32ToBytes(watchId)]));
     },
   };
 };

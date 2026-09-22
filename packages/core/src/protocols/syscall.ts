@@ -289,6 +289,8 @@ export const respondOk = (
 //   OP_UTIMES     path, f64 atimeMs, f64 mtimeMs [FLAG_NO_FOLLOW] -> empty
 //   OP_FUTIMES    u32 fd, f64 atimeMs, f64 mtimeMs -> empty
 //   OP_READDIR_KINDS path                       -> JSON [name, "file"|"dir"|"symlink"][]
+//   OP_WATCH_START path            [FLAG_RECURSIVE] -> u32 watchId (ENOENT if path doesn't exist)
+//   OP_WATCH_STOP  u32 watchId                  -> empty (unknown/already-stopped id: also empty)
 export const OP_READ_FILE = 1;
 export const OP_WRITE_FILE = 2;
 export const OP_EXISTS = 3;
@@ -314,6 +316,8 @@ export const OP_LINK = 22;
 export const OP_UTIMES = 23;
 export const OP_FUTIMES = 24;
 export const OP_READDIR_KINDS = 25;
+export const OP_WATCH_START = 26;
+export const OP_WATCH_STOP = 27;
 
 export const FS_OPCODE_MAX = 63;
 export const KERNEL_OPCODE_MIN = 64;

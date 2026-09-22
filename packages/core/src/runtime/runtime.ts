@@ -6,6 +6,7 @@ import type { IFsClient } from "../fs/fsClient";
 import type { ISyscallClient } from "../protocols/syscall";
 import { createInternalBinding, type IBindingContext } from "./bindings";
 import { createForkIpcPipe, type IChildProcessHost, type IForkIpcHost } from "./bindings/childProcess";
+import type { IFsWatchHost } from "./bindings/fs";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
 import { createEsmResolver } from "./esm/resolve";
@@ -33,6 +34,8 @@ export interface IRuntimeHost {
   spawnSync?: ISyscallClient;
   /** This process's own `fork()` IPC channel; set only when it was itself spawned via `fork()`. */
   ipc?: IForkIpcHost;
+  /** Delivers fs.watch change events pushed from the kernel; without it, fs.watch() throws ENOSYS. */
+  fsWatch?: IFsWatchHost;
 }
 
 export interface IRuntimeOptions {
@@ -86,6 +89,7 @@ const createRuntime = (options: IRuntimeOptions) => {
     writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
     childProcess: host.childProcess,
     spawnSync: host.spawnSync,
+    fsWatch: host.fsWatch,
   };
   const internalBinding = createInternalBinding(bindingCtx);
   loader = createBuiltinLoader({ process, internalBinding, primordials });

@@ -35,6 +35,8 @@ import {
   OP_SYMLINK,
   OP_UNLINK,
   OP_UTIMES,
+  OP_WATCH_START,
+  OP_WATCH_STOP,
   OP_WRITE_FILE,
   bytesToF64,
   bytesToU32,
@@ -48,7 +50,7 @@ import {
   respondOk,
   u32ToBytes,
 } from "../protocols/syscall";
-import { Vfs } from "./Vfs";
+import { Vfs, type VfsChangeKind } from "./Vfs";
 
 const EMPTY = new Uint8Array(0);
 const json = (value: unknown) => encodeString(JSON.stringify(value));
@@ -62,16 +64,56 @@ const at = (fields: Uint8Array[], index: number): Uint8Array => {
 
 type Handler = (fields: Uint8Array[], flags: number, clientId: number) => Uint8Array;
 
+/** clientId owning a watch, the eventType a change was reported as, and filename relative to the watched path. */
+export type WatchEventReporter = (clientId: number, watchId: number, eventType: VfsChangeKind, filename: string) => void;
+
+interface IWatch {
+  clientId: number;
+  /** Watched path, real/resolved (as returned by the vfs - matches onChange's own paths). */
+  path: string;
+  recursive: boolean;
+}
+
+const basename = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
+/** True when `path` is `watchPath` itself, or (recursively, or as a direct child otherwise) beneath it. A
+ *  watch on a FILE only ever matches exactly - nothing can be "beneath" a file's own path in this scheme. */
+const watchMatches = (watch: IWatch, path: string): boolean => {
+  if (path === watch.path) return true;
+  const prefix = watch.path === "/" ? "/" : `${watch.path}/`;
+  if (!path.startsWith(prefix)) return false;
+  return watch.recursive || !path.slice(prefix.length).includes("/");
+};
+
+/** filename delivered to the callback: the watched file's own basename, or the path relative to a watched directory. */
+const watchRelativeName = (watch: IWatch, path: string): string => {
+  if (path === watch.path) return basename(path);
+  const prefix = watch.path === "/" ? "/" : `${watch.path}/`;
+  return path.slice(prefix.length);
+};
+
 class FsServer {
   private readonly clients = new Map<number, ISyscallViews>();
   /** fds each client opened, so a client that dies without closing them cannot leak them. */
   private readonly openFds = new Map<number, Set<number>>();
   private readonly handlers: Map<number, Handler>;
+  private readonly watches = new Map<number, IWatch>();
+  private nextWatchId = 1;
+  private readonly onWatchEvent: WatchEventReporter;
 
   readonly vfs: Vfs;
 
-  constructor(vfs: Vfs = new Vfs()) {
+  /** `onWatchEvent` is how a real transport (the File System Worker) delivers a change to
+   *  whichever client is watching - see workers/fs/worker.ts. Defaults to a no-op so FsServer
+   *  stays directly testable (service() driven) without one. */
+  constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}) {
     this.vfs = vfs;
+    this.onWatchEvent = onWatchEvent;
+    vfs.onChange = (path, kind) => {
+      for (const [watchId, watch] of this.watches) {
+        if (watchMatches(watch, path)) this.onWatchEvent(watch.clientId, watchId, kind, watchRelativeName(watch, path));
+      }
+    };
     const path = (fields: Uint8Array[], i = 0) => decodeBytes(at(fields, i));
 
     this.handlers = new Map<number, Handler>([
@@ -201,6 +243,26 @@ class FsServer {
           return EMPTY;
         },
       ],
+      [
+        OP_WATCH_START,
+        (f, flags, client) => {
+          // Resolved, not the path as given: onChange() always reports the vfs's own resolved
+          // paths (see walk()'s realPath), so matching against anything else - a symlink to the
+          // watched directory, say - would silently never fire. Throws ENOENT if missing,
+          // matching real fs.watch's default throwIfNoEntry.
+          const target = vfs.realpath(path(f));
+          const watchId = this.nextWatchId++;
+          this.watches.set(watchId, { clientId: client, path: target, recursive: (flags & FLAG_RECURSIVE) !== 0 });
+          return u32ToBytes(watchId);
+        },
+      ],
+      [
+        OP_WATCH_STOP,
+        (f) => {
+          this.watches.delete(bytesToU32(at(f, 0)));
+          return EMPTY;
+        },
+      ],
     ]);
   }
 
@@ -210,6 +272,9 @@ class FsServer {
 
   unregisterClient(clientId: number): void {
     this.clients.delete(clientId);
+    for (const [watchId, watch] of this.watches) {
+      if (watch.clientId === clientId) this.watches.delete(watchId);
+    }
     for (const fd of this.openFds.get(clientId) ?? []) {
       try {
         this.vfs.close(fd);
