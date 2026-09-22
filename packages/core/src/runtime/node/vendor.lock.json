@@ -100,6 +100,7 @@
     "internal/dgram": "73e0473fab2c7cbd9316a0336bfa0ed240225f729c12ab001175c64551db0d10",
     "internal/socket_list": "f28aa47cd9e0cbe1bc3ae03b669f2a05a97557492f4448b5907ddefa8f0b4fe3",
     "internal/deps/acorn/acorn/dist/acorn": "2261c5f0e4abe860e889dfc67081683a4ba4d27deb7f4cbc8ad06a1b7fdd510c",
-    "internal/streams/fast-utf8-stream": "616dd036d28e5ba37efab0e51401f09d6d1bb55424805557a9f02eb837edf2a1"
+    "internal/streams/fast-utf8-stream": "616dd036d28e5ba37efab0e51401f09d6d1bb55424805557a9f02eb837edf2a1",
+    "internal/child_process/serialization": "59f0124b35fa9127200c10c5aa206b60ceaf0951d11947ce3e9a4afb1844f4f2"
   }
 }

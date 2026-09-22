@@ -55,6 +55,7 @@ const node: Program = async (ctx) => {
       childProcess: ctx.childProcess,
       stdin: ctx.stdin,
       spawnSync: ctx.spawnSync,
+      ipc: ctx.ipc,
     },
   });
 

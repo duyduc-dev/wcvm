@@ -19,6 +19,7 @@ import f_internal_async_context_frame from "./lib/internal/async_context_frame.j
 import f_internal_async_hooks from "./lib/internal/async_hooks.js";
 import f_internal_buffer from "./lib/internal/buffer.js";
 import f_internal_child_process from "./lib/internal/child_process.js";
+import f_internal_child_process_serialization from "./lib/internal/child_process/serialization.js";
 import f_internal_console_constructor from "./lib/internal/console/constructor.js";
 import f_internal_console_global from "./lib/internal/console/global.js";
 import f_internal_constants from "./lib/internal/constants.js";
@@ -123,6 +124,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/async_hooks": f_internal_async_hooks,
   "internal/buffer": f_internal_buffer,
   "internal/child_process": f_internal_child_process,
+  "internal/child_process/serialization": f_internal_child_process_serialization,
   "internal/console/constructor": f_internal_console_constructor,
   "internal/console/global": f_internal_console_global,
   "internal/constants": f_internal_constants,

@@ -62,12 +62,28 @@ Done and verified in real Chromium:
   `timeout` kills the child with SIGTERM via a plain `setTimeout` in the kernel. Combined
   stdout+stderr must fit the 1 MiB SAB window (`EMSGSIZE` otherwise, not chunked); only the default
   `stdio: 'pipe'` is honoured (a custom `stdio` array is ignored - stdout/stderr are always
-  captured). `fork()`/IPC remains not done (needs vendoring `internal/child_process/serialization`
-  plus `NODE_CHANNEL_FD`/`_forkChild` bootstrap wiring - a structurally different, async problem).
-- Tests: 427 Vitest + 61 Playwright (Chromium). See "Verifying".
+  captured).
+- `child_process.fork()`/IPC (real Node code): unlike `execSync`/`spawnSync`, this is an async
+  problem, not a blocking one - it reuses `spawn()`'s existing `pipe_wrap`/`process_wrap` machinery
+  almost entirely unchanged (`fork()` itself just calls `spawn("/bin/node", [...execArgv,
+  modulePath, ...args], options)`). The one genuinely new piece: `Pipe` gained a `kind: "stdio" |
+  "ipc"` tag so its writes route through new `IChildProcessHost.writeIpc`/`endIpc` methods instead
+  of `writeStdin`/`endStdin` (the kernel needs to route the two differently); `bindings/
+  childProcess.ts`'s `createForkIpcPipe` builds the CHILD's own side (its channel to its own
+  parent) by reusing the SAME `ctx` object already passed to `createInternalBinding`, since
+  `setupChannel`'s `channel.onread` reads the realm's shared `streamBaseState`. `runtime.ts` calls
+  `setupChannel(process, pipe, "json")` directly, bypassing vendored `_forkChild`/`NODE_CHANNEL_FD`
+  entirely (no real fd to pass around) - see "Hard-won gotchas" for two real bugs this surfaced
+  (`Pipe.deliver()`'s EOF signal, and `Pipe.close()` needing to propagate to the other side).
+  Vendored `internal/child_process/serialization` for real (was missing); only `serialization:
+  'json'` (the real default) works - `'advanced'` needs a real V8 serializer (`runtime/shims.ts`'s
+  `v8` stub only exists so the module loads, never actually used for json mode). fork()'s default
+  `stdio` is `'inherit'` (real fd-sharing this sandbox can't do) - pass `{ silent: true }` to get
+  piped/captured stdout+stderr, same as real Node already lets you.
+- Tests: 440 Vitest + 64 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): `child_process.fork` (IPC), real `http`/`net` (TCP/UDP/DNS)
-+ preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
+Not done (roadmap order, see PLAN.md): real `http`/`net` (TCP/UDP/DNS) + preview Service Worker,
+fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
 `fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
@@ -188,6 +204,20 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   process workers always wire both `childProcess` and `spawnSync` unconditionally, so this only
   bites test setups that supply one without the other (`runtime/spawnSync.test.ts` needs a
   no-op `childProcess` fake even though it never exercises async spawn).
+- `setupChannel`'s (fork() IPC) own `channel.onread` checks the raw ArrayBuffer's truthiness
+  for EOF (`if (arrayBuffer) {...} else {...disconnect...}`), unlike the generic stdout/stderr
+  Readable wrapping (`internal/stream_base_commons.js`'s `onStreamRead`), which keys off
+  `streamBaseState[kReadBytesOrError]`'s sign instead. `Pipe.deliver()` used to pass a real (if
+  empty) `ArrayBuffer` for EOF either way - harmless for the generic case, but meant
+  `setupChannel` never saw a disconnect. Fixed to pass `undefined` for EOF; verified safe for
+  the other consumers first (they don't check the buffer's truthiness).
+- A real OS pipe closing its local end signals EOF to the other end automatically; ours doesn't
+  exist, so `Pipe.close()` must say so explicitly. Found via `fork()`: `child.disconnect()`'s
+  real vendored implementation calls `channel.close()` directly (not `shutdown()`, which is
+  where the other endStdin/endIpc plumbing lived) - the forked child's `process.on('disconnect',
+  ...)` silently never fired until `close()` was also taught to call `host.endIpc()` for the ipc
+  case. Only the mandatory Chromium e2e caught this (a fake-host Vitest test can't tell the
+  difference between "no real corresponding process" and "forgot to notify it").
 
 ## Conventions
 

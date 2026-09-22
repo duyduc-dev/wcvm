@@ -9,13 +9,15 @@ const createFakeHost = () => {
   const kills: Array<{ childPid: number; signal: string | undefined }> = [];
   const stdinWrites: Array<{ childPid: number; chunk: Uint8Array }> = [];
   const stdinEnds: number[] = [];
-  let onSpawn: ((childPid: number) => void) | undefined;
+  const ipcWrites: Array<{ childPid: number; chunk: Uint8Array }> = [];
+  const ipcEnds: number[] = [];
+  let onSpawn: ((childPid: number, ipc?: boolean) => void) | undefined;
   let onKill: ((childPid: number, signal: string | undefined) => void) | undefined;
 
   const host: IChildProcessHost = {
-    spawn: (childPid, command, args, cwd, env) => {
+    spawn: (childPid, command, args, cwd, env, ipc) => {
       spawns.push({ childPid, command, args, cwd, env });
-      onSpawn?.(childPid);
+      onSpawn?.(childPid, ipc);
     },
     kill: (childPid, signal) => {
       kills.push({ childPid, signal });
@@ -23,6 +25,8 @@ const createFakeHost = () => {
     },
     writeStdin: (childPid, chunk) => stdinWrites.push({ childPid, chunk }),
     endStdin: (childPid) => stdinEnds.push(childPid),
+    writeIpc: (childPid, chunk) => ipcWrites.push({ childPid, chunk }),
+    endIpc: (childPid) => ipcEnds.push(childPid),
     onEvent: (h) => {
       handler = h;
     },
@@ -34,8 +38,10 @@ const createFakeHost = () => {
     kills,
     stdinWrites,
     stdinEnds,
+    ipcWrites,
+    ipcEnds,
     emit,
-    onSpawn: (fn: (childPid: number) => void) => (onSpawn = fn),
+    onSpawn: (fn: (childPid: number, ipc?: boolean) => void) => (onSpawn = fn),
     onKill: (fn: (childPid: number, signal: string | undefined) => void) => (onKill = fn),
   };
 };

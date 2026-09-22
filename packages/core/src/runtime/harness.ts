@@ -1,6 +1,6 @@
 import { createLoopbackFs } from "../testing/loopbackFs";
 import type { ISyscallClient } from "../protocols/syscall";
-import type { IChildProcessHost } from "./bindings/childProcess";
+import type { IChildProcessHost, IForkIpcHost } from "./bindings/childProcess";
 import { createRuntime, type IRuntimeOptions, type IStdinHost } from "./runtime";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -14,6 +14,7 @@ export const runScript = async (
     childProcess?: IChildProcessHost;
     stdin?: IStdinHost;
     spawnSync?: ISyscallClient;
+    ipc?: IForkIpcHost;
   } = {},
 ) => {
   const { fs, vfs } = createLoopbackFs();
@@ -35,6 +36,7 @@ export const runScript = async (
       childProcess: options.childProcess,
       stdin: options.stdin,
       spawnSync: options.spawnSync,
+      ipc: options.ipc,
     },
   });
   options.setup?.(runtime);

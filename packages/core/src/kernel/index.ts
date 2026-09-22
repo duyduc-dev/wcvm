@@ -84,6 +84,8 @@ const createKernelHost = async ({
       spawn: (spec) => processes.spawn(spec),
       writeStdin: (pid, chunk) => processes.writeStdin(pid, chunk),
       endStdin: (pid) => processes.endStdin(pid),
+      writeIpc: (pid, chunk) => processes.writeIpc(pid, chunk),
+      endIpc: (pid) => processes.endIpc(pid),
       kill: (pid, signal) => processes.kill(pid, signal),
       has: (pid) => processes.has(pid),
       get size() {

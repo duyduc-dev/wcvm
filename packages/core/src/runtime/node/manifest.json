@@ -93,6 +93,7 @@
     "internal/readline/promises": "builtin",
     "child_process": "builtin",
     "internal/child_process": "builtin",
+    "internal/child_process/serialization": "builtin",
     "net": "builtin",
     "internal/net": "builtin",
     "internal/stream_base_commons": "builtin",

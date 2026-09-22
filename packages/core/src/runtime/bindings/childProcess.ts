@@ -20,14 +20,20 @@ import { uvCode, uvException } from "./uvErrors";
 
 /** Fulfilled by the process worker (see workers/process/worker.ts). */
 export type ChildProcessEvent =
-  | { type: "data"; childPid: number; stream: "stdout" | "stderr"; chunk: Uint8Array }
-  | { type: "exit"; childPid: number; exitCode: number; signal?: "SIGTERM" | "SIGKILL" };
+  | { type: "data"; childPid: number; stream: "stdout" | "stderr" | "ipc"; chunk: Uint8Array }
+  | { type: "exit"; childPid: number; exitCode: number; signal?: "SIGTERM" | "SIGKILL" }
+  /** The child called `process.disconnect()` (or exited without one - see ChildRouter.dispatch's exit case too). */
+  | { type: "ipcDisconnect"; childPid: number };
 
 export interface IChildProcessHost {
-  spawn(childPid: number, command: string, args: string[], cwd: string | undefined, env: Record<string, string> | undefined): void;
+  /** `ipc: true` gives the spawned child a `fork()` IPC channel (see kernel/processes.ts's `ipc` flag). */
+  spawn(childPid: number, command: string, args: string[], cwd: string | undefined, env: Record<string, string> | undefined, ipc?: boolean): void;
   kill(childPid: number, signal?: string): void;
   writeStdin(childPid: number, chunk: Uint8Array): void;
   endStdin(childPid: number): void;
+  /** Writes to / ends a `fork()`ed child's IPC channel - a separate channel from stdin, so the kernel can route it distinctly. */
+  writeIpc(childPid: number, chunk: Uint8Array): void;
+  endIpc(childPid: number): void;
   /** Registers the one handler for every child's data/exit events. */
   onEvent(handler: (event: ChildProcessEvent) => void): void;
 }
@@ -49,6 +55,15 @@ const K_LAST_WRITE_WAS_ASYNC = 3;
 const UV_EOF = -4095;
 const SIGTERM = 15;
 const SIGKILL = 9;
+// Internal map key for a spawned child's ipc pipe in ChildRouter.pipes - not a claim about a
+// real fd; the ipc slot's actual position in a custom `stdio` array can vary (real Node's
+// default puts it at index 3, but a script can reorder stdio), so it's tracked separately from
+// the fd-indexed stdio pipes rather than trusting whatever index it happened to land at.
+const IPC_FD = 3;
+// pipe_wrap's PipeConstants.IPC (see createPipeWrapBinding's `constants` below) - the `type`
+// tag on a Pipe instance used as an IPC channel; real Node checks it in a couple of places
+// (e.g. `pipe.ipc`-style branches), though nothing here currently reads it back.
+const PIPE_TYPE_IPC = 2;
 // Comfortably unique across a session's realistic process counts, and never
 // overlaps host-assigned top-level pids (a plain small incrementing counter).
 const CHILD_PID_MULTIPLIER = 1_000_000;
@@ -83,10 +98,15 @@ class Pipe {
   reading = false;
   bytesRead = 0;
   bytesWritten = 0;
-  /** stdin (fd 0, we write to the child) vs stdout/stderr (we read); set by Process.spawn. */
+  /** stdin (fd 0, we write to the child) vs stdout/stderr (we read); set by Process.spawn.
+   *  The ipc pipe is "out" too (writes route through the host) but, unlike stdin, is also
+   *  pushed to for incoming data - see `kind` below and ChildRouter.dispatch's "ipc" case. */
   direction: "in" | "out" | null = null;
   /** The child this pipe belongs to; set by Process.spawn alongside `direction`. */
   childPid: number | null = null;
+  /** Which host methods an "out" pipe's writes/shutdown route through - stdin's or a fork()
+   *  IPC channel's (a separate channel so the kernel can route it distinctly from stdin). */
+  kind: "stdio" | "ipc" = "stdio";
   // Not `private`: an exported factory subclasses this, and TS can't emit a
   // declaration type for an exported class with private inherited members.
   queue: QueuedRead[] = [];
@@ -155,7 +175,8 @@ class Pipe {
    *  Not `private`, for the same declaration-emit reason as the fields above. */
   deliverWrite(bytes: Uint8Array): number {
     if (this.direction !== "out" || this.childPid === null) return uvCode("ENOSYS");
-    this.host.writeStdin(this.childPid, bytes);
+    if (this.kind === "ipc") this.host.writeIpc(this.childPid, bytes);
+    else this.host.writeStdin(this.childPid, bytes);
     this.bytesWritten += bytes.length;
     this.state[K_BYTES_WRITTEN] = bytes.length;
     this.state[K_LAST_WRITE_WAS_ASYNC] = 0;
@@ -163,15 +184,34 @@ class Pipe {
   }
 
   shutdown(): number {
-    if (this.direction === "out" && this.childPid !== null) this.host.endStdin(this.childPid);
+    if (this.direction === "out" && this.childPid !== null) {
+      if (this.kind === "ipc") this.host.endIpc(this.childPid);
+      else this.host.endStdin(this.childPid);
+    }
     return 1; // finished synchronously; net.js calls the callback itself.
   }
 
   close(callback?: () => void): void {
+    // A real OS pipe closing its local end signals EOF to the other end automatically; ours
+    // doesn't exist, so tell the kernel explicitly. Needed for fork()'s child.disconnect(),
+    // whose real vendored implementation (internal/child_process.js's `_disconnect`) calls
+    // channel.close() directly, not shutdown() - guarded by `!this.closed` so this only ever
+    // fires once. Stdio pipes don't need the equivalent: they're always torn down via
+    // shutdown()/the child's own exit instead, never a bare close() mid-life.
+    if (!this.closed && this.kind === "ipc" && this.direction === "out" && this.childPid !== null) {
+      this.host.endIpc(this.childPid);
+    }
     this.closed = true;
     this.queue.length = 0;
     if (callback) queueMicrotask(callback);
   }
+
+  /** No-ops by default (matches Process's own ref/unref) - overridden per-instance where a
+   *  real keep-alive is needed (the ipc pipe: see createForkIpcPipe below - setupChannel's
+   *  Control class calls channel.ref()/unref() to keep a process alive only while it has a
+   *  'message'/'disconnect' listener). */
+  ref(): void {}
+  unref(): void {}
 
   /** Internal: fed by the router, never called by vendored code. */
   push(chunk: Uint8Array | null): void {
@@ -185,7 +225,7 @@ class Pipe {
     while (this.queue.length > 0) {
       const item = this.queue.shift()!;
       if ("eof" in item) {
-        this.deliver(UV_EOF, new ArrayBuffer(0), 0);
+        this.deliver(UV_EOF, undefined, 0);
       } else {
         this.bytesRead += item.chunk.byteLength;
         this.deliver(item.chunk.byteLength, item.chunk.buffer, item.chunk.byteOffset);
@@ -193,7 +233,11 @@ class Pipe {
     }
   }
 
-  deliver(nread: number, buffer: ArrayBufferLike, offset: number): void {
+  /** `buffer` is `undefined` for EOF - real Node consumers key off `nread`'s sign
+   *  (`internal/stream_base_commons.js`'s `onStreamRead`), but `setupChannel`'s own `onread`
+   *  (fork() IPC) checks the buffer's truthiness directly, so EOF must not be a truthy empty
+   *  ArrayBuffer here. */
+  deliver(nread: number, buffer: ArrayBufferLike | undefined, offset: number): void {
     this.state[K_READ_BYTES_OR_ERROR] = nread;
     this.state[K_ARRAY_BUFFER_OFFSET] = offset;
     this.onread?.(buffer as ArrayBuffer);
@@ -205,7 +249,9 @@ interface ISpawnOptions {
   args?: string[];
   cwd?: string;
   envPairs?: string[];
-  stdio: Array<{ type: string; handle?: Pipe }>;
+  /** `getValidStdio` (internal/child_process.js) sets `.ipc: true` on the slot it created for
+   *  `fork()`'s IPC channel - everything else about it (type, handle) looks like a plain pipe. */
+  stdio: Array<{ type: string; handle?: Pipe; ipc?: boolean }>;
 }
 
 const envFromPairs = (pairs: string[] | undefined): Record<string, string> => {
@@ -232,15 +278,24 @@ class Process {
     this.pid = childPid;
     this.router.registerProcess(childPid, this);
 
+    let ipc = false;
     options.stdio.forEach((slot, fd) => {
       if (slot?.handle instanceof Pipe) {
-        slot.handle.direction = fd === 0 ? "out" : "in";
-        slot.handle.childPid = childPid;
-        this.router.registerPipe(childPid, fd, slot.handle);
+        if (slot.ipc) {
+          ipc = true;
+          slot.handle.kind = "ipc";
+          slot.handle.direction = "out";
+          slot.handle.childPid = childPid;
+          this.router.registerPipe(childPid, IPC_FD, slot.handle);
+        } else {
+          slot.handle.direction = fd === 0 ? "out" : "in";
+          slot.handle.childPid = childPid;
+          this.router.registerPipe(childPid, fd, slot.handle);
+        }
       }
     });
 
-    this.router.host.spawn(childPid, options.file, (options.args ?? []).slice(1), options.cwd, envFromPairs(options.envPairs));
+    this.router.host.spawn(childPid, options.file, (options.args ?? []).slice(1), options.cwd, envFromPairs(options.envPairs), ipc);
     return 0;
   }
 
@@ -290,12 +345,18 @@ class ChildRouter {
 
   private dispatch(event: ChildProcessEvent): void {
     if (event.type === "data") {
-      this.pipes.get(`${event.childPid}:${event.stream === "stdout" ? 1 : 2}`)?.push(event.chunk);
+      const fd = event.stream === "stdout" ? 1 : event.stream === "stderr" ? 2 : IPC_FD;
+      this.pipes.get(`${event.childPid}:${fd}`)?.push(event.chunk);
+      return;
+    }
+    if (event.type === "ipcDisconnect") {
+      this.pipes.get(`${event.childPid}:${IPC_FD}`)?.push(null);
       return;
     }
     this.pipes.get(`${event.childPid}:1`)?.push(null);
     this.pipes.get(`${event.childPid}:2`)?.push(null);
-    for (const fd of [0, 1, 2]) this.pipes.delete(`${event.childPid}:${fd}`);
+    this.pipes.get(`${event.childPid}:${IPC_FD}`)?.push(null);
+    for (const fd of [0, 1, 2, IPC_FD]) this.pipes.delete(`${event.childPid}:${fd}`);
 
     const entry = this.processes.get(event.childPid);
     this.processes.delete(event.childPid);
@@ -337,7 +398,7 @@ export const createPipeWrapBinding = (ctx: IChildProcessContext) => {
       }
     },
     PipeConnectWrap: class PipeConnectWrap {},
-    constants: { SOCKET: 0, SERVER: 1, IPC: 2 },
+    constants: { SOCKET: 0, SERVER: 1, IPC: PIPE_TYPE_IPC },
   };
 };
 
@@ -350,6 +411,54 @@ export const createProcessWrapBinding = (ctx: IChildProcessContext) => {
       }
     },
   };
+};
+
+export interface IForkIpcHost {
+  /** Sends one already-framed outgoing ipc message (built by setupChannel) to this process's own parent. */
+  send(chunk: Uint8Array): void;
+  /** This end of the channel is done (`process.disconnect()`). */
+  end(): void;
+  /** Registers the one handler for incoming ipc chunks from the parent; `null` = the parent disconnected or exited. */
+  onData(handler: (chunk: Uint8Array | null) => void): void;
+}
+
+/**
+ * A forked child's own channel to its parent (the other end of the ipc `Pipe` `Process.spawn()`
+ * sets up above, but from this process's own side, where there's no "childPid" - there's only
+ * one such channel, to whichever process the kernel knows spawned this one). Shares this realm's
+ * `stream_wrap` state via the SAME `ctx` reference already passed to `createInternalBinding`:
+ * `setupChannel`'s `channel.onread` reads `streamBaseState[kReadBytesOrError]`, the identical
+ * Int32Array `internalBinding('stream_wrap')` already handed to vendored JS - a different `ctx`
+ * object here would build a second, disconnected router/state and reads would never surface.
+ */
+export const createForkIpcPipe = (ctx: IChildProcessContext, ipc: IForkIpcHost): Pipe => {
+  const router = routerFor(ctx);
+  const adapter: IChildProcessHost = {
+    spawn: () => {},
+    kill: () => {},
+    writeStdin: () => {},
+    endStdin: () => {},
+    writeIpc: (_childPid, chunk) => ipc.send(chunk),
+    endIpc: () => ipc.end(),
+    onEvent: () => {},
+  };
+  const pipe = new Pipe(PIPE_TYPE_IPC, router.state, adapter);
+  pipe.kind = "ipc";
+  pipe.direction = "out";
+  pipe.childPid = 0; // unused by `adapter` (only one channel per process), but deliverWrite/shutdown require non-null
+  // setupChannel's Control class calls channel.ref()/unref() to keep this process alive only
+  // while it has a 'message'/'disconnect' listener (real vendored ref-counting logic) - tie
+  // that to the actual event loop, the same way runtime.ts already does for process.stdin.
+  let release: (() => void) | null = null;
+  pipe.ref = () => {
+    release ??= ctx.loop.ref();
+  };
+  pipe.unref = () => {
+    release?.();
+    release = null;
+  };
+  ipc.onData((chunk) => pipe.push(chunk));
+  return pipe;
 };
 
 // internalBinding('spawn_sync'): genuinely synchronous, unlike spawn()'s pipe_wrap/process_wrap

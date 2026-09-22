@@ -153,11 +153,37 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     module.exports = { hasObserver: () => false, startPerf: () => {}, stopPerf: () => {} };
   };
 
+  /**
+   * v8's serialize/deserialize sits on a real V8 ValueSerializer C++ binding we don't
+   * implement. `internal/child_process/serialization.js` needs `v8.DefaultSerializer`/
+   * `DefaultDeserializer` to exist as extendable classes at module load time (`class
+   * ChildProcessSerializer extends v8.DefaultSerializer`) - extending only wires up the
+   * prototype chain, it never constructs the base class. fork()'s default and only supported
+   * IPC serialization mode here, "json", never actually instantiates them.
+   */
+  const v8Shim: BuiltinFactory = (_exports, _require, module) => {
+    const notImplemented = () => {
+      throw new Error("v8 serialize/deserialize is not implemented");
+    };
+    class DefaultSerializer {
+      constructor() {
+        notImplemented();
+      }
+    }
+    class DefaultDeserializer {
+      constructor() {
+        notImplemented();
+      }
+    }
+    module.exports = { DefaultSerializer, DefaultDeserializer, serialize: notImplemented, deserialize: notImplemented };
+  };
+
   return {
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
     "internal/perf/observe": internalPerfObserve,
+    v8: v8Shim,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {
         BuiltinModule,

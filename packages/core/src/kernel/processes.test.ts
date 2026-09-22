@@ -250,6 +250,68 @@ describe("child_process routing", () => {
 
     expect(t.workers[1].childEvents).toEqual([{ type: "stdin", chunk }, { type: "stdinEnd" }]);
   });
+
+  it("a child:spawn with ipc:true is passed through to the child's own init", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "node", args: ["/child.js"], ipc: true });
+
+    expect(t.workers[1].inits[0]).toMatchObject({ ipc: true });
+  });
+
+  it("a child:spawn with no ipc flag defaults the child's init to ipc: false", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "echo", args: [] });
+
+    expect(t.workers[1].inits[0]).toMatchObject({ ipc: false });
+  });
+
+  it("a child:ipc/child:ipcEnd message from a parent worker delivers to its child's own worker", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "node", args: ["/child.js"], ipc: true });
+    const chunk = new Uint8Array([9]);
+
+    t.workers[0].emit({ type: "child:ipc", childPid: 1_000_001, chunk });
+    t.workers[0].emit({ type: "child:ipcEnd", childPid: 1_000_001 });
+
+    expect(t.workers[1].childEvents).toEqual([{ type: "ipc", chunk }, { type: "ipcEnd" }]);
+  });
+
+  it("a child's own ipcOut/ipcOutEnd relay to its parent worker as child:ipcOut/child:ipcOutEnd", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    t.workers[0].emit({ type: "child:spawn", childPid: 1_000_001, command: "node", args: ["/child.js"], ipc: true });
+    const chunk = new Uint8Array([3]);
+
+    t.workers[1].emit({ type: "ipcOut", chunk });
+    t.workers[1].emit({ type: "ipcOutEnd" });
+
+    expect(t.workers[0].childEvents).toEqual([
+      { type: "child:ipcOut", childPid: 1_000_001, chunk },
+      { type: "child:ipcOutEnd", childPid: 1_000_001 },
+    ]);
+  });
+
+  it("a top-level process's own ipcOut has no parent to relay to, and is silently dropped", () => {
+    t.table.spawn({ processId: 1, command: "node", args: [] });
+    expect(() => t.workers[0].emit({ type: "ipcOut", chunk: new Uint8Array([1]) })).not.toThrow();
+    expect(t.events).toEqual([]);
+  });
+});
+
+describe("ipc", () => {
+  it("writeIpc/endIpc deliver ipc/ipcEnd straight to that process's worker", () => {
+    t.table.spawn({ processId: 1, command: "node", args: ["/child.js"], ipc: true });
+    const chunk = new Uint8Array([1, 2, 3]);
+
+    t.table.writeIpc(1, chunk);
+    t.table.endIpc(1);
+
+    expect(t.workers[0].childEvents).toEqual([{ type: "ipc", chunk }, { type: "ipcEnd" }]);
+  });
+
+  it("writeIpc/endIpc on an unknown or already-exited pid does nothing", () => {
+    expect(() => t.table.writeIpc(99, new Uint8Array())).not.toThrow();
+    expect(() => t.table.endIpc(99)).not.toThrow();
+  });
 });
 
 describe("stdin", () => {

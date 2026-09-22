@@ -38,6 +38,9 @@ export interface ISpawnSpec {
   onExit?: (result: { code: number; signal?: Signal; stdout: Uint8Array; stderr: Uint8Array }) => void;
   /** Killed with SIGTERM if still running after this many ms (execSync/spawnSync's `timeout`). */
   timeoutMs?: number;
+  /** Set for a `fork()`ed child: it gets a second, bidirectional ipc channel (see spawn()'s
+   *  `IProcessInit.ipc` and workers/process/worker.ts's own `ipc` host object). */
+  ipc?: boolean;
 }
 
 export type Signal = "SIGTERM" | "SIGKILL";
@@ -48,6 +51,9 @@ export interface IProcessTable {
   /** Silently does nothing for an unknown or already-exited pid, like kill(). */
   writeStdin(pid: number, chunk: Uint8Array): void;
   endStdin(pid: number): void;
+  /** Write to / end a fork()ed process's incoming ipc channel; same no-op-if-unknown semantics. */
+  writeIpc(pid: number, chunk: Uint8Array): void;
+  endIpc(pid: number): void;
   has(pid: number): boolean;
   readonly size: number;
 }
@@ -157,6 +163,14 @@ const createProcessTable = ({
     workers.get(pid)?.worker.postMessage({ type: "stdinEnd" });
   };
 
+  const writeIpc = (pid: number, chunk: Uint8Array) => {
+    workers.get(pid)?.worker.postMessage({ type: "ipc", chunk });
+  };
+
+  const endIpc = (pid: number) => {
+    workers.get(pid)?.worker.postMessage({ type: "ipcEnd" });
+  };
+
   const spawn = (spec: ISpawnSpec) => {
     const { processId: pid, parentPid, onExit } = spec;
     // A sync spawn's caller is blocked on a SAB, not running a message loop - reporting a
@@ -198,7 +212,7 @@ const createProcessTable = ({
           forwardOutput(pid, data.type, data.chunk);
           break;
         case "child:spawn":
-          spawn({ processId: data.childPid, command: data.command, args: data.args, cwd: data.cwd, env: data.env, parentPid: pid });
+          spawn({ processId: data.childPid, command: data.command, args: data.args, cwd: data.cwd, env: data.env, parentPid: pid, ipc: data.ipc });
           break;
         case "child:kill":
           kill(data.childPid, data.signal);
@@ -208,6 +222,18 @@ const createProcessTable = ({
           break;
         case "child:stdinEnd":
           endStdin(data.childPid);
+          break;
+        case "child:ipc":
+          writeIpc(data.childPid, data.chunk);
+          break;
+        case "child:ipcEnd":
+          endIpc(data.childPid);
+          break;
+        case "ipcOut":
+          parentOf(pid)?.postMessage({ type: "child:ipcOut", childPid: pid, chunk: data.chunk });
+          break;
+        case "ipcOutEnd":
+          parentOf(pid)?.postMessage({ type: "child:ipcOutEnd", childPid: pid });
           break;
       }
     };
@@ -229,6 +255,7 @@ const createProcessTable = ({
         fsPort: client.port,
         syncSab: syncClient.sab,
         syncPort: syncClient.port,
+        ipc: spec.ipc ?? false,
       },
       [client.port, syncClient.port],
     );
@@ -244,6 +271,8 @@ const createProcessTable = ({
     kill,
     writeStdin,
     endStdin,
+    writeIpc,
+    endIpc,
     has: (pid) => workers.has(pid),
     get size() {
       return workers.size;
