@@ -8,6 +8,7 @@ import type { IFsClient } from "../../fs/fsClient";
 import type { IStdinHost } from "../../runtime/runtime";
 import { resolveProgram } from "..";
 import type { IProgramContext, Program } from "../types";
+import { createLineReader } from "./lineReader";
 import { IPipeline, IScript, ISimpleCommand, parse } from "./parse";
 import { ShellSyntaxError } from "./tokenize";
 
@@ -169,8 +170,7 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
   return results.at(-1) ?? 0;
 };
 
-const runScript = async (script: IScript, ctx: IProgramContext): Promise<number> => {
-  const state = { cwd: ctx.cwd };
+const runScript = async (script: IScript, ctx: IProgramContext, state: { cwd: string } = { cwd: ctx.cwd }): Promise<number> => {
   let status = 0;
   for (const part of script.parts) {
     if (part.op === "&&" && status !== 0) continue;
@@ -178,6 +178,42 @@ const runScript = async (script: IScript, ctx: IProgramContext): Promise<number>
     status = await runPipeline(part.pipeline, ctx, state);
   }
   return status;
+};
+
+const EXIT_COMMAND = /^exit(?:\s+(\d+))?$/;
+
+/**
+ * `sh` with no `-c`/script: reads commands one line at a time from stdin, running each through
+ * the same parse+runPipeline machinery as a script file, with `cwd` persisted across lines so
+ * `cd` sticks. A syntax error on one line is reported and the session keeps going, unlike a
+ * script file (which aborts on its first error).
+ */
+const runReplSh = async (ctx: IProgramContext): Promise<number> => {
+  if (!ctx.stdin) return 0;
+  const prompt = ctx.env.PS1 ?? "$ ";
+  const reader = createLineReader(ctx.stdin);
+  const state = { cwd: ctx.cwd };
+  let status = 0;
+
+  for (;;) {
+    ctx.stdout(prompt);
+    const line = await reader.nextLine();
+    if (line === null) {
+      ctx.stdout("\n");
+      return status;
+    }
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+
+    const exitMatch = EXIT_COMMAND.exec(trimmed);
+    if (exitMatch) return exitMatch[1] ? Number(exitMatch[1]) : status;
+
+    try {
+      status = await runScript(parse(line), ctx, state);
+    } catch (error) {
+      ctx.stderr(`sh: ${error instanceof ShellSyntaxError ? error.message : String(error)}\n`);
+    }
+  }
 };
 
 const sh: Program = async (ctx) => {
@@ -190,12 +226,14 @@ const sh: Program = async (ctx) => {
       return 2;
     }
     source = args[1];
-  } else if (args[0] !== undefined && !args[0].startsWith("-")) {
+  } else if (args[0] === undefined) {
+    return runReplSh(ctx);
+  } else if (!args[0].startsWith("-")) {
     const data = readFileFor(ctx.fs, ctx.cwd, args[0], args[0], ctx.stderr);
     if (data === undefined) return 127;
     source = new TextDecoder().decode(data);
   } else {
-    ctx.stderr("sh: an interactive REPL is not supported yet; pass -c or a script file\n");
+    ctx.stderr(`sh: unknown option: ${args[0]}\n`);
     return 2;
   }
 
