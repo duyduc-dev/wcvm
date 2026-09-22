@@ -116,13 +116,19 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   hands it straight to `internal/child_process.js`'s real, exported `setupChannel(process, pipe,
   "json")` - called directly from `runtime.ts`'s bootstrap, bypassing vendored `_forkChild`/
   `NODE_CHANNEL_FD` entirely (no real fd to pass around; `_forkChild`'s own body is a few lines,
-  reimplemented as our own non-vendored glue, the same way `process.stdin`'s Readable already is).
+  reimplemented as our own non-vendored glue, the same way `process.stdin`'s Readable already is)
+  - including the ref-counting `_forkChild` wires up separately from `setupChannel` itself
+  (`process.on('newListener'/'removeListener', ...)` calling `control.refCounted()`/
+  `unrefCounted()`), which keeps the process alive only while it has a `'message'`/`'disconnect'`
+  listener - miss that piece and a forked child exits immediately instead of staying alive,
+  the entire point of `fork()` (see "Lessons learned").
   Vendored `internal/child_process/serialization` for real (was missing - added to
   `manifest.json`); only `serialization: 'json'` (the real default) works, since `'advanced'`
   needs a real V8 serializer (`runtime/shims.ts`'s `v8` stub exists only so the module *loads* -
-  see "Known differences"). See "Lessons learned" for two real bugs only the mandatory Chromium
-  e2e caught (`Pipe.deliver()`'s EOF signal; `Pipe.close()` needing to notify the other side).
-Verified by Vitest (440) and Playwright in real Chromium (64), including a script reading a
+  see "Known differences"). See "Lessons learned" for three real bugs only the mandatory
+  Chromium e2e (and one Vitest test racing against a real timeout) caught (`Pipe.deliver()`'s EOF
+  signal; `Pipe.close()` needing to notify the other side; the missing ref-counting wiring above).
+Verified by Vitest (443) and Playwright in real Chromium (65), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: real `http`/`net` (TCP/UDP/DNS), `worker_threads`, `fs.watch`/`watchFile` (ENOSYS),
@@ -394,3 +400,36 @@ host -> kernel -> process worker -> SAB -> FS worker -> back.
   child's own `process.on('disconnect', ...)` silently never fired until `close()` was also
   taught to notify the kernel. Only the mandatory Chromium e2e caught this; a fake-host Vitest
   test has no real counterpart process to fail to notify, so it can't tell the difference.
+- Fixed the nested-interactive-stdin gap noted when the terminal demo was built: an in-process
+  program (`cat`, `node`, a nested `sh`) sh's REPL dispatches to shares the exact same
+  `IStdinHost` object sh's own `lineReader` is reading from, and `onData` only ever keeps the
+  ONE most recently registered handler - so the nested program's registration silently displaced
+  the REPL's own. Fix has two parts: `programs/sh/lineReader.ts`'s `ILineReader` gained
+  `reattach()` (re-registers its own already-known handler), called by `runReplSh` after every
+  line, so the REPL reclaims its slot once whatever it just ran has exited; and
+  `workers/process/worker.ts`'s stdin now remembers `stdinEnded` and replays a `null` to any
+  handler that registers afterward, in case real EOF arrived while the nested program was still
+  the active listener (otherwise a `reattach()` after that would wait forever for input that
+  already stopped for good). Verified at the exact bug (a real Chromium session: `node` typed
+  at the sh prompt, `.exit`ed, then further sh input still reaches it) - the mechanism itself
+  (`reattach()`, the EOF replay) is also unit-tested directly (`lineReader.test.ts`), since
+  orchestrating the full nested-REPL timing reliably in Vitest (no real async yields between
+  synchronous test writes) is more fragile than testing where the fix actually lives.
+- Skipping a piece of real Node bootstrap because part of it doesn't apply here doesn't mean the
+  WHOLE thing doesn't apply. `fork()`'s IPC skips vendored `_forkChild` because it opens a real
+  fd we don't have - but `_forkChild` ALSO does something unrelated to the fd, right after
+  calling `setupChannel`: it wires `process.on('newListener'/'removeListener', (name) => {...
+  control.refCounted()/unrefCounted(); })`, which is what makes `channel.ref()`/`.unref()` (and
+  therefore a live `'message'` listener keeping the process alive) do anything at all -
+  `setupChannel` itself never touches ref-counting. Missing this made a forked child exit
+  immediately instead of staying alive, which is fork()'s entire reason to exist. It surfaced as
+  two Vitest tests that "sometimes returned empty output" - looked exactly like a timing race
+  (and was originally misdiagnosed as one, "fixed" by tuning a `setTimeout` delay that couldn't
+  possibly have mattered given the actual call chain is fully synchronous up to the loop's first
+  await) - but was actually "whether the reply got processed before the idle process exited" is
+  luck when nothing is really keeping it alive. Found for certain by literally counting calls to
+  the `ref()` override (zero) and by racing the real behavior against a real timeout in a
+  dedicated Vitest test instead of trusting output content. Once fixed, two Chromium e2e test
+  scripts that had relied on the SAME missing behavior (a lone `process.on('message', ...)`
+  "conveniently" letting the process exit on idle) started hanging until they were taught to
+  `process.exit()` explicitly, like a correctly-behaved forked worker should.

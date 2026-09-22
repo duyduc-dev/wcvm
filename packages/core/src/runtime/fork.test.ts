@@ -122,6 +122,8 @@ describe("fork() - child side (setupChannel wired directly by runtime.ts)", () =
         process.on("message", (m) => {
           console.log("child got", JSON.stringify(m));
           process.send({ echo: m });
+          process.exit(0); // a real fork()ed child with a live 'message' listener stays alive
+          // forever otherwise (see the dedicated test below) - it must exit explicitly once done.
         });
         `,
       },
@@ -148,13 +150,34 @@ describe("fork() - child side (setupChannel wired directly by runtime.ts)", () =
     expect(r).toMatchObject({ code: 0, stdout: "done\n" });
   });
 
+  it("a live 'message' listener keeps the process alive - real fork()'s whole point", async () => {
+    // Regression test: setupChannel itself does NOT wire up the ref-counting that keeps a
+    // forked child alive while it has a 'message'/'disconnect' listener - real _forkChild does
+    // that (with process.on('newListener'/'removeListener', ...) calling control.refCounted()/
+    // unrefCounted()), and runtime.ts bypasses _forkChild entirely (no real fd to give it).
+    // Without replicating that wiring, a script that does nothing but
+    // `process.on('message', ...)` would exit immediately instead of waiting to be useful -
+    // defeating the entire purpose of fork(). Race the real thing against a real timeout to
+    // prove it's still running, rather than asserting on wall-clock duration directly.
+    const fake = createFakeIpc();
+    const outcome = await Promise.race([
+      runScript({ "/app/main.js": `process.on("message", () => {}); console.log("registered");` }, "/app/main.js", {
+        cwd: "/app",
+        childProcess: noopChildProcessHost,
+        ipc: fake.ipc,
+      }).then(() => "resolved" as const),
+      new Promise<"still-alive">((resolve) => setTimeout(() => resolve("still-alive"), 200)),
+    ]);
+    expect(outcome).toBe("still-alive");
+  });
+
   it("the parent disconnecting (EOF) fires 'disconnect' on the child's process", async () => {
     const fake = createFakeIpc();
     const r = await runScript(
       {
         "/app/main.js": `
         process.on("message", () => {});
-        process.on("disconnect", () => console.log("disconnected"));
+        process.on("disconnect", () => { console.log("disconnected"); process.exit(0); });
         `,
       },
       "/app/main.js",
