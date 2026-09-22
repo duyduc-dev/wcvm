@@ -521,6 +521,68 @@ test.describe("node", () => {
     });
   });
 
+  test.describe("fork() / IPC", () => {
+    test("a forked child receives a message and replies, over a real bidirectional ipc channel", async ({ page }) => {
+      await writeFiles(page, {
+        "/app/child.js": `
+          process.on("message", (m) => {
+            process.send({ echo: m });
+          });
+        `,
+      });
+      const r = await spawn(page, "node", [
+        "-e",
+        "const child = require('child_process').fork('/app/child.js', { silent: true });" +
+          "child.on('message', (m) => { console.log('parent got', JSON.stringify(m)); child.disconnect(); });" +
+          "child.send({ hello: 'world' });",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: 'parent got {"echo":{"hello":"world"}}\n' });
+    });
+
+    test("the child's own process.send/on('message') work the other way too - it can speak first", async ({ page }) => {
+      await writeFiles(page, {
+        "/app/child.js": `
+          process.send({ ready: true });
+          process.on("message", (m) => {
+            if (m.stop) process.exit(0);
+          });
+        `,
+      });
+      const r = await spawn(page, "node", [
+        "-e",
+        "const child = require('child_process').fork('/app/child.js', { silent: true });" +
+          "child.on('message', (m) => { console.log(JSON.stringify(m)); child.send({ stop: true }); });",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: '{"ready":true}\n' });
+    });
+
+    test("child.disconnect() ends the channel; the child sees 'disconnect' and exits on its own", async ({ page }) => {
+      // Fork's default stdio is 'inherit' (real fd-sharing this sandbox can't do), so a
+      // disconnected child's own stdout has nowhere to go - confirm it ran via a file instead,
+      // the same way subtree-kill above observes child-side behavior externally.
+      await writeFiles(page, {
+        "/app/child.js": `
+          console.log("child: started");
+          process.on("message", () => {});
+          process.on("disconnect", () => console.log("child: disconnected"));
+        `,
+      });
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const proc = await wc.spawn("node", [
+          "-e",
+          "const child = require('child_process').fork('/app/child.js', { silent: true });" +
+            "child.stdout.on('data', (c) => process.stdout.write(c));" +
+            "setTimeout(() => child.disconnect(), 50);" +
+            "child.on('exit', (code) => console.log('child exited', code));",
+        ]);
+        const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exit]);
+        return { out, err, code: exit.exitCode };
+      });
+      expect(r).toMatchObject({ code: 0, out: "child: started\nchild: disconnected\nchild exited 0\n", err: "" });
+    });
+  });
+
   test.describe("stdin", () => {
     test("process.stdin delivers what the host writes, and ends when the host closes it", async ({ page }) => {
       const r = await page.evaluate(async () => {

@@ -1,6 +1,6 @@
 import { createFsClient } from "../../fs/fsClient";
 import { createSyscallClient, makeViews } from "../../protocols/syscall";
-import type { ChildProcessEvent, IChildProcessHost } from "../../runtime/bindings/childProcess";
+import type { ChildProcessEvent, IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/childProcess";
 import type { IStdinHost } from "../../runtime/runtime";
 import { ChildEvent, IProcessInit, ProcessEvent } from "./messages";
 import { runProcess } from "./run";
@@ -12,10 +12,12 @@ const post = (event: ProcessEvent) => self.postMessage(event);
 let onChildEvent: ((event: ChildProcessEvent) => void) | null = null;
 
 const childProcess: IChildProcessHost = {
-  spawn: (childPid, command, args, cwd, env) => post({ type: "child:spawn", childPid, command, args, cwd, env }),
+  spawn: (childPid, command, args, cwd, env, ipc) => post({ type: "child:spawn", childPid, command, args, cwd, env, ipc }),
   kill: (childPid, signal) => post({ type: "child:kill", childPid, signal }),
   writeStdin: (childPid, chunk) => post({ type: "child:stdin", childPid, chunk }),
   endStdin: (childPid) => post({ type: "child:stdinEnd", childPid }),
+  writeIpc: (childPid, chunk) => post({ type: "child:ipc", childPid, chunk }),
+  endIpc: (childPid) => post({ type: "child:ipcEnd", childPid }),
   onEvent: (handler) => {
     onChildEvent = handler;
   },
@@ -38,6 +40,27 @@ const stdin: IStdinHost = {
 const deliverStdin = (chunk: Uint8Array | null) => {
   if (onStdinData) onStdinData(chunk);
   else pendingStdin.push(chunk);
+};
+
+// This process's own fork() IPC channel, if it was spawned with one (see start()'s `init.ipc`).
+// Mirrors stdin's own buffer-until-registered pattern - the kernel may deliver an incoming ipc
+// chunk before the runtime has finished bootstrapping setupChannel.
+let onIpcData: ((chunk: Uint8Array | null) => void) | null = null;
+const pendingIpc: Array<Uint8Array | null> = [];
+
+const ipc: IForkIpcHost = {
+  send: (chunk) => post({ type: "ipcOut", chunk }),
+  end: () => post({ type: "ipcOutEnd" }),
+  onData: (handler) => {
+    onIpcData = handler;
+    for (const chunk of pendingIpc) handler(chunk);
+    pendingIpc.length = 0;
+  },
+};
+
+const deliverIpc = (chunk: Uint8Array | null) => {
+  if (onIpcData) onIpcData(chunk);
+  else pendingIpc.push(chunk);
 };
 
 const start = async (init: IProcessInit) => {
@@ -67,6 +90,7 @@ const start = async (init: IProcessInit) => {
       childProcess,
       stdin,
       spawnSync,
+      ipc: init.ipc ? ipc : undefined,
     });
   } catch (error) {
     post({
@@ -92,9 +116,21 @@ self.onmessage = (event: MessageEvent<IProcessInit | ChildEvent>) => {
     case "stdinEnd":
       deliverStdin(null);
       break;
+    case "ipc":
+      deliverIpc(data.chunk);
+      break;
+    case "ipcEnd":
+      deliverIpc(null);
+      break;
     case "child:stdout":
     case "child:stderr":
       onChildEvent?.({ type: "data", childPid: data.childPid, stream: data.type === "child:stdout" ? "stdout" : "stderr", chunk: data.chunk });
+      break;
+    case "child:ipcOut":
+      onChildEvent?.({ type: "data", childPid: data.childPid, stream: "ipc", chunk: data.chunk });
+      break;
+    case "child:ipcOutEnd":
+      onChildEvent?.({ type: "ipcDisconnect", childPid: data.childPid });
       break;
     case "child:exit":
       onChildEvent?.({ type: "exit", childPid: data.childPid, exitCode: data.exitCode, signal: data.signal });

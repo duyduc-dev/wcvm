@@ -23,6 +23,8 @@ const noopChildProcessHost: IChildProcessHost = {
   kill: () => {},
   writeStdin: () => {},
   endStdin: () => {},
+  writeIpc: () => {},
+  endIpc: () => {},
   onEvent: () => {},
 };
 

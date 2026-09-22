@@ -4,8 +4,8 @@
 
 import type { IFsClient } from "../fs/fsClient";
 import type { ISyscallClient } from "../protocols/syscall";
-import { createInternalBinding } from "./bindings";
-import type { IChildProcessHost } from "./bindings/childProcess";
+import { createInternalBinding, type IBindingContext } from "./bindings";
+import { createForkIpcPipe, type IChildProcessHost, type IForkIpcHost } from "./bindings/childProcess";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
 import { createEsmResolver } from "./esm/resolve";
@@ -31,6 +31,8 @@ export interface IRuntimeHost {
   stdin?: IStdinHost;
   /** Backs child_process.execSync/spawnSync; without it, they throw ENOSYS. */
   spawnSync?: ISyscallClient;
+  /** This process's own `fork()` IPC channel; set only when it was itself spawned via `fork()`. */
+  ipc?: IForkIpcHost;
 }
 
 export interface IRuntimeOptions {
@@ -72,7 +74,11 @@ const createRuntime = (options: IRuntimeOptions) => {
   const loop = new EventLoop(host.loopHost);
   const primordials = createPrimordials();
   let loader: ReturnType<typeof createBuiltinLoader>;
-  const internalBinding = createInternalBinding({
+  // Named so it can also be handed to createForkIpcPipe below, unchanged: routerFor's cache in
+  // bindings/childProcess.ts is keyed by this exact object reference, and setupChannel's
+  // channel.onread reads streamBaseState off the SAME router - a different reference would
+  // silently build a second, disconnected one.
+  const bindingCtx: IBindingContext = {
     requireBuiltin: (id) => loader.requireBuiltin(id),
     loop,
     fs,
@@ -80,7 +86,8 @@ const createRuntime = (options: IRuntimeOptions) => {
     writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
     childProcess: host.childProcess,
     spawnSync: host.spawnSync,
-  });
+  };
+  const internalBinding = createInternalBinding(bindingCtx);
   loader = createBuiltinLoader({ process, internalBinding, primordials });
   const { requireBuiltin } = loader;
 
@@ -98,6 +105,18 @@ const createRuntime = (options: IRuntimeOptions) => {
   const taskQueues = requireBuiltin("internal/process/task_queues");
   const { nextTick, runNextTicks } = taskQueues.setupTaskQueue();
   process.nextTick = nextTick;
+
+  // fork() IPC: process.send()/.on('message')/.channel/.disconnect(), for a process that was
+  // itself spawned via fork(). Real Node's bootstrap does this via `_forkChild(fd, mode)`
+  // reading NODE_CHANNEL_FD - we have neither a real fd nor that env var, so this reimplements
+  // just _forkChild's own few lines (not vendored) instead: build a Pipe wired to the host's
+  // ipc capability, and hand it to setupChannel (internal/child_process.js, real vendored logic)
+  // directly. Only "json" serialization is supported (the real default; "advanced" needs a real
+  // V8 serializer we don't have - see runtime/shims.ts's v8 stub).
+  if (host.ipc) {
+    const pipe = createForkIpcPipe(bindingCtx, host.ipc);
+    requireBuiltin("internal/child_process").setupChannel(process, pipe, "json");
+  }
 
   // timers
   const timers = requireBuiltin("timers");
