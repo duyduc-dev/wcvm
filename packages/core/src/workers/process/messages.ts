@@ -10,6 +10,10 @@ export interface IProcessInit {
   sab: SharedArrayBuffer;
   /** Doorbell to the fs worker: post anything to say "my SAB has a request". */
   fsPort: MessagePort;
+  /** A second syscall buffer for execSync/spawnSync, serviced by the kernel itself. */
+  syncSab: SharedArrayBuffer;
+  /** Doorbell straight to the kernel worker for `syncSab`. */
+  syncPort: MessagePort;
 }
 
 /**

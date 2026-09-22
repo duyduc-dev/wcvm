@@ -5,6 +5,17 @@
 // host (see kernel/processes.ts's `parentPid`). See internal/stream_base_commons.js
 // and internal/child_process.js for the exact contract these classes fulfil.
 
+import {
+  OP_SPAWN_SYNC,
+  SPAWN_SYNC_NO_STATUS,
+  bytesToU32,
+  decodeBytes,
+  decodeRequest,
+  encodeRequest,
+  encodeString,
+  u32ToBytes,
+  type ISyscallClient,
+} from "../../protocols/syscall";
 import { uvCode, uvException } from "./uvErrors";
 
 /** Fulfilled by the process worker (see workers/process/worker.ts). */
@@ -340,3 +351,48 @@ export const createProcessWrapBinding = (ctx: IChildProcessContext) => {
     },
   };
 };
+
+// internalBinding('spawn_sync'): genuinely synchronous, unlike spawn()'s pipe_wrap/process_wrap
+// above - it blocks this whole worker (Atomics.wait on a second, per-process SAB serviced by
+// the kernel itself, kernel/spawnSyncServer.ts) until the child has fully exited, with its
+// complete stdout/stderr already known. See internal/child_process.js's spawnSync(): it expects
+// exactly `{ pid, output: [stdin, stdout, stderr], status, signal }` back.
+interface ISpawnSyncOptions {
+  file: string;
+  args?: string[];
+  cwd?: string | URL;
+  envPairs?: string[];
+  timeout?: number;
+  /** Only stdio[0]'s `.input` (spawnSync's `input` option) is honoured; stdout/stderr are
+   *  always captured regardless of a custom `stdio` array - a documented simplification. */
+  stdio: Array<{ type: string; input?: Uint8Array }>;
+}
+
+export const createSpawnSyncBinding = (ctx: { spawnSync?: ISyscallClient; requireBuiltin: (id: string) => any }) => ({
+  spawn: (options: ISpawnSyncOptions) => {
+    if (!ctx.spawnSync) throw uvException("ENOSYS", "spawnSync");
+
+    const request = encodeRequest([
+      encodeString(options.file),
+      encodeString(JSON.stringify((options.args ?? []).slice(1))),
+      encodeString(typeof options.cwd === "string" ? options.cwd : ""),
+      encodeString(JSON.stringify(envFromPairs(options.envPairs))),
+      options.stdio[0]?.input ?? new Uint8Array(0),
+      u32ToBytes(options.timeout ?? 0),
+    ]);
+
+    const payload = ctx.spawnSync.call(OP_SPAWN_SYNC, request);
+    const { fields } = decodeRequest(payload);
+    const [pidBytes, statusBytes, signalBytes, stdoutBytes, stderrBytes] = fields;
+    const status = bytesToU32(statusBytes);
+    const signal = decodeBytes(signalBytes);
+    const { Buffer } = ctx.requireBuiltin("buffer");
+
+    return {
+      pid: bytesToU32(pidBytes),
+      output: [null, Buffer.from(stdoutBytes), Buffer.from(stderrBytes)],
+      status: status === SPAWN_SYNC_NO_STATUS ? null : status,
+      signal: signal || null,
+    };
+  },
+});

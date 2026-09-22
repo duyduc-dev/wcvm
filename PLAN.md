@@ -53,8 +53,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   subtree (`kernel/processes.ts`'s `finalize`'s `cascade` recursion over `childrenOf`): a
   `child_process` has no live parent left to answer to once its ancestor is gone, so it would
   otherwise strand a Process Worker in the tab forever. `detached` is accepted by the vendored
-  options but not honoured, so there's no opt-out from this yet. Not done: `execSync`/`spawnSync`
-  (would need a second, blocking process<->kernel channel, like the fs SAB), `fork()`/IPC.
+  options but not honoured, so there's no opt-out from this yet. `execSync`/`spawnSync` are also
+  Node's real modules now (see below); not done: `fork()`/IPC.
 - ESM (`import`/`export`): real ESM, not a CJS transpile - `runtime/esm/` resolves the static
   import graph itself (Node's own resolution algorithm, simplified: no extension guessing or
   directory-index fallback for relative specifiers; `package.json` "exports" with
@@ -85,10 +85,27 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   top-level `let`/`const` need a small rewrite to `var` first (`runtime/replTransform.ts`) for
   this to actually work. `.exit` or stdin EOF (Ctrl-D) ends the session; a thrown error prints
   `Uncaught <inspected error>` and the session keeps going, matching Node's real REPL.
-Verified by Vitest (412) and Playwright in real Chromium (56), including a script reading a
+- `child_process.execSync`/`spawnSync` are Node's real modules too, backed by a genuinely
+  synchronous `spawn_sync` binding (`runtime/bindings/childProcess.ts`'s `createSpawnSyncBinding`)
+  - unlike async `spawn()`'s `pipe_wrap`/`process_wrap`, this really blocks the calling Process
+  Worker (`Atomics.wait`) until the child has fully exited. It uses a SECOND per-process SAB
+  (`OP_SPAWN_SYNC`, `protocols/syscall.ts`) whose servicer runs directly in the Kernel Worker,
+  not the FS Worker (`kernel/spawnSyncServer.ts` - process supervision lives in the kernel, a
+  different thread from the fs SAB's FS Worker servicer). `kernel/processes.ts`'s `onExit` hook
+  buffers the child's whole stdout/stderr (instead of streaming it live to a parent worker or the
+  host) and delivers it all at once, when the child exits, alongside its status/signal - real
+  `spawnSync` semantics need the complete output atomically, not a stream. The `input` option is
+  written to the child's stdin, which is then always ended (no interactive follow-up - matches
+  real batch semantics); `timeout` kills the child with SIGTERM via a plain `setTimeout` in the
+  kernel (not a virtual event loop - the Kernel Worker doesn't run one). See "Known differences"
+  for the two simplifications (output must fit the SAB window; only default `stdio: 'pipe'` is
+  honoured). `fork()`/IPC remains not done - see below.
+Verified by Vitest (427) and Playwright in real Chromium (61), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
-Not done: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (TCP/UDP/DNS),
+Not done: `child_process.fork` (IPC - needs vendoring `internal/child_process/serialization` and
+`NODE_CHANNEL_FD`/`_forkChild` bootstrap wiring; structurally an async IPC problem, not a
+blocking one, so it doesn't reuse `spawnSync`'s new SAB channel), real `http`/`net` (TCP/UDP/DNS),
 `worker_threads`, `fs.watch`/`watchFile` (ENOSYS), `process.binding`, `node -p`.
 
 ### How the Node runtime is put together (src/runtime/)
@@ -150,6 +167,13 @@ Not done: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (TCP/UD
 - The REPL's `require(...)` (exposed as a real global for the session, via `modules.require` -
   `runtime.ts`'s `runRepl`) has no accompanying `module`/`exports`/`__filename`/`__dirname`
   parity the way a real Node REPL's context provides - deliberately out of scope for now.
+- `spawnSync`/`execSync`'s captured stdout+stderr must fit in the second SAB's single 1 MiB data
+  window (`EMSGSIZE` otherwise) - unlike fs's chunked big reads, there's no multi-round-trip
+  retrieval for large synchronous output. A custom `stdio` array isn't honoured either: stdout
+  and stderr are always piped and captured regardless of what the caller asked for (`inherit`,
+  `ignore`, a numeric fd, ...) - only the default `stdio: 'pipe'` behavior is implemented
+  (`runtime/bindings/childProcess.ts`'s `createSpawnSyncBinding`). `killSignal` is restricted to
+  `SIGTERM`/`SIGKILL` like async `kill()` already is; anything else is coerced to `SIGTERM`.
 
 ## Architecture to build (from vivari)
 
@@ -213,9 +237,10 @@ module: `Thing.test.ts`).
   `path`, `events`, `buffer`.
 - Decided: vendor Node's real `lib/` + our `internalBinding` (vivari "Path B").
 - Done: `fs`, `fs/promises`, `os`, `string_decoder`, `stream`, `assert`, `readline`,
-  `readline/promises`, `child_process.spawn`/`exec`/`execFile` (async only), ESM (`import`/
+  `readline/promises`, `child_process.spawn`/`exec`/`execFile` (async), `child_process.execSync`/
+  `spawnSync` (genuinely blocking, over a second SAB - see "Current state"), ESM (`import`/
   `export`, real via the browser's own `import()` - see "Current state").
-- Remaining: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (Phase 6).
+- Remaining: `child_process.fork` (IPC), real `http`/`net` (Phase 6).
 
 ### Phase 5 - Shell  (DONE)
 - Small `sh`: `;` `&&` `||`, pipes, redirects, `node <file>`, an interactive REPL (done; see
@@ -309,3 +334,13 @@ host -> kernel -> process worker -> SAB -> FS worker -> back.
   reaching `runtime.ts`'s own uncaught-exception handling - surfaced as a wrong exit code, only
   in real Chromium. Defer with `process.nextTick(() => process.exit())` so the throw happens
   from a clean call stack (`runtime/repl.ts`).
+- `require("child_process")` builds its `pipe_wrap`/`process_wrap` router (`ChildRouter`)
+  eagerly at module load - it throws `ENOSYS` immediately if `childProcess` isn't wired, even
+  for a script that only ever calls `execSync`/`spawnSync`. Real process workers always wire
+  both capabilities unconditionally, so this is invisible in production; it only bit a test
+  (`runtime/spawnSync.test.ts`) that supplied `spawnSync` without a `childProcess` fake too.
+- A servicer's `service(clientId)` must wrap request decoding in try/catch and respond with an
+  error instead of letting a bad frame throw uncaught (`fs/FsServer.ts`'s existing pattern;
+  `kernel/spawnSyncServer.ts` mirrors it) - the doorbell handler that calls it has no other
+  safety net, so an unhandled throw there would take down the whole Kernel Worker, not just the
+  one caller. A quick test with a malformed opcode/body catches this immediately.

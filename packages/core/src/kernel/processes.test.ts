@@ -10,6 +10,11 @@ const setup = () => {
     port: { id } as unknown as MessagePort,
   }));
   const detach = vi.fn();
+  const attachSync = vi.fn((id: number) => ({
+    sab: new SharedArrayBuffer(8),
+    port: { id } as unknown as MessagePort,
+  }));
+  const detachSync = vi.fn();
   const table = createProcessTable({
     createProcessWorker: () => {
       const worker = createFakeProcessWorker();
@@ -18,9 +23,11 @@ const setup = () => {
     },
     attachFsClient: attach,
     detachFsClient: detach,
+    attachSyncClient: attachSync,
+    detachSyncClient: detachSync,
     emit: (m) => events.push(m),
   });
-  return { table, workers, events, attach, detach };
+  return { table, workers, events, attach, detach, attachSync, detachSync };
 };
 
 let t: ReturnType<typeof setup>;
@@ -151,6 +158,8 @@ describe("process table", () => {
       },
       attachFsClient: t.attach,
       detachFsClient: t.detach,
+      attachSyncClient: t.attachSync,
+      detachSyncClient: t.detachSync,
       emit: (m) => events.push(m),
     });
     table.spawn({ processId: 1, command: "x", args: [] });

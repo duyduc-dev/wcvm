@@ -318,6 +318,22 @@ export const OP_READDIR_KINDS = 25;
 export const FS_OPCODE_MAX = 63;
 export const KERNEL_OPCODE_MIN = 64;
 
+// Opcodes >= KERNEL_OPCODE_MIN are serviced by the Kernel Worker directly (a
+// second SAB per process, doorbell straight to the kernel - see
+// kernel/spawnSyncServer.ts), not the File System Worker.
+//
+//   OP_SPAWN_SYNC command, argsJson, cwd, envJson, input, u32 timeoutMs
+//     -> u32 pid, status (u32, 0xFFFFFFFF = null/killed-by-signal), signal
+//        (UTF-8, empty = none), stdout bytes, stderr bytes - same
+//        encodeRequest/decodeRequest field framing as a request, reused for
+//        the response.
+//     Combined stdout+stderr must fit in one DATA_BYTES window (EMSGSIZE
+//     otherwise) - unlike fs, large output isn't chunked across calls.
+export const OP_SPAWN_SYNC = KERNEL_OPCODE_MIN;
+
+/** Sentinel for spawnSync's `status: null` (the child was killed by a signal). */
+export const SPAWN_SYNC_NO_STATUS = 0xffffffff;
+
 export const isFsOpcode = (opcode: number): boolean =>
   opcode >= 1 && opcode <= FS_OPCODE_MAX;
 

@@ -52,11 +52,23 @@ Done and verified in real Chromium:
   "Known differences" in PLAN.md), with top-level `let`/`const` rewritten to `var` first
   (`runtime/replTransform.ts`, using the vendored acorn) since two separate `eval()` calls do NOT
   share lexical bindings the way Node's real REPL's reused `vm.Context` does.
-- Tests: 412 Vitest + 56 Playwright (Chromium). See "Verifying".
+- `child_process.execSync`/`spawnSync` (real Node code): genuinely blocking, unlike async
+  `spawn()`'s `pipe_wrap`/`process_wrap` - the calling Process Worker parks on a SECOND, per-process
+  SAB (`OP_SPAWN_SYNC`, `protocols/syscall.ts`) whose servicer runs directly in the Kernel Worker
+  (`kernel/spawnSyncServer.ts`), not the FS Worker, since process supervision lives there
+  (`kernel/processes.ts`'s `onExit` buffers the child's full stdout/stderr instead of streaming it,
+  and delivers it all at once when the child exits). The `input` option is delivered then the
+  child's stdin is always ended (no interactive follow-up input, matching real batch semantics);
+  `timeout` kills the child with SIGTERM via a plain `setTimeout` in the kernel. Combined
+  stdout+stderr must fit the 1 MiB SAB window (`EMSGSIZE` otherwise, not chunked); only the default
+  `stdio: 'pipe'` is honoured (a custom `stdio` array is ignored - stdout/stderr are always
+  captured). `fork()`/IPC remains not done (needs vendoring `internal/child_process/serialization`
+  plus `NODE_CHANNEL_FD`/`_forkChild` bootstrap wiring - a structurally different, async problem).
+- Tests: 427 Vitest + 61 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): `child_process.execSync`/`spawnSync`/`fork` (IPC), real
-`http`/`net` (TCP/UDP/DNS) + preview Service Worker, fetcher worker + real `npm`, OPFS persistence,
-Vite dev server/HMR, `fs.watch`, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): `child_process.fork` (IPC), real `http`/`net` (TCP/UDP/DNS)
++ preview Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR,
+`fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -75,7 +87,10 @@ Process Worker (src/workers/process/): runProcess -> a built-in program (src/pro
   its own SharedArrayBuffer (`src/protocols/syscall.ts`): 24-byte control + 1 MiB data window; the
   process writes a request and parks on `Atomics.wait`; the FS worker answers and `Atomics.notify`s.
   Everything must fit the 1 MiB window; big reads/writes are chunked in `fs/fsClient.ts`.
-  Out-of-band events (stdout, exit) use `postMessage`, never the SAB.
+  Out-of-band events (stdout, exit) use `postMessage`, never the SAB. Every process also gets a
+  SECOND SAB for `execSync`/`spawnSync` (opcodes >= `KERNEL_OPCODE_MIN`), whose servicer runs
+  directly in the Kernel Worker, not the FS Worker (`kernel/spawnSyncServer.ts`, registered next to
+  the fs client in `kernel/index.ts`'s `attachSyncClient`) - process supervision lives there.
 - **Requires cross-origin isolation** (COOP `same-origin` + COEP `require-corp`); `boot()` throws
   `ERR_NOT_ISOLATED` otherwise.
 - **Node runtime** (`src/runtime/`):
@@ -167,6 +182,12 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   uncaught-exception handling - it surfaced as a wrong exit code, only in real Chromium, never in
   Vitest. Defer with `process.nextTick(() => process.exit())` instead, so the throw happens from
   a clean call stack.
+- `require("child_process")` builds its `pipe_wrap`/`process_wrap` router (`ChildRouter`) eagerly
+  at module load, regardless of whether a script ever calls async `spawn()` - it throws `ENOSYS`
+  immediately if `childProcess` isn't wired, even for a script that only wants `execSync`. Real
+  process workers always wire both `childProcess` and `spawnSync` unconditionally, so this only
+  bites test setups that supply one without the other (`runtime/spawnSync.test.ts` needs a
+  no-op `childProcess` fake even though it never exercises async spawn).
 
 ## Conventions
 

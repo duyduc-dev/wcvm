@@ -1,4 +1,5 @@
 import type { IFsClient } from "../fs/fsClient";
+import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost } from "../runtime/bindings/childProcess";
 import type { IStdinHost } from "../runtime/runtime";
 
@@ -19,6 +20,8 @@ export interface IProgramContext {
   childProcess?: IChildProcessHost;
   /** This process's own stdin; undefined outside a real process worker. */
   stdin?: IStdinHost;
+  /** Backs `node`'s child_process.execSync/spawnSync; undefined outside a real process worker. */
+  spawnSync?: ISyscallClient;
 }
 
 /** Resolves to the process exit status. */

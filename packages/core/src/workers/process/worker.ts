@@ -47,6 +47,10 @@ const start = async (init: IProcessInit) => {
       notify: () => init.fsPort.postMessage(null),
     }),
   );
+  const spawnSync = createSyscallClient({
+    ...makeViews(init.syncSab),
+    notify: () => init.syncPort.postMessage(null),
+  });
 
   let code: number;
   try {
@@ -62,6 +66,7 @@ const start = async (init: IProcessInit) => {
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       childProcess,
       stdin,
+      spawnSync,
     });
   } catch (error) {
     post({
