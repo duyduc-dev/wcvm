@@ -190,3 +190,11 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
 - The process worker bundle is ~1.6 MB (acorn added real weight, for ESM parsing) and every
   process parses it, even `echo`; split `node` into its own worker entry if startup cost matters.
 - `fs.watch`/`watchFile` return ENOSYS until the kernel has a watch operation.
+- Typing a bare `node` (or `sh`) at an interactive `sh` REPL's prompt to nest one REPL inside
+  another isn't supported: `IStdinHost.onData` only keeps the ONE most recently registered
+  handler (see `workers/process/worker.ts`), so the child's runtime silently steals the parent
+  `sh` REPL's own stdin registration; when the child exits, the parent's `lineReader` is left
+  holding a stale handler reference and stops receiving further input. The playground's terminal
+  demo (`examples/playground/src/terminal.ts`) sidesteps this by only ever spawning one
+  interactive program directly (a picker, not nesting) - fixing it for real needs some kind of
+  stdin-ownership handoff/stack in the kernel, not attempted yet.
