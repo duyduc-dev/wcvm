@@ -140,10 +140,98 @@ describe("sh <file>", () => {
   });
 });
 
-describe("sh with no script", () => {
-  it("refuses an interactive REPL", async () => {
+describe("sh REPL", () => {
+  const makeStdin = () => {
+    let handler: ((chunk: Uint8Array | null) => void) | undefined;
+    const stdin: IStdinHost = { onData: (h) => (handler = h) };
+    const encoder = new TextEncoder();
+    return {
+      stdin,
+      write: (text: string) => handler!(encoder.encode(text)),
+      end: () => handler!(null),
+    };
+  };
+
+  it("runs each line as it arrives, prompting between them", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("echo one\necho two\n");
+    io.end();
+    const r = await promise;
+    expect(r).toMatchObject({ status: 0, out: "$ one\n$ two\n$ \n" });
+  });
+
+  it("cd persists across lines", async () => {
+    t.fs.mkdir("/w");
+    t.fs.writeFile("/w/f", "x");
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("cd /w\n");
+    io.write("ls\n");
+    io.end();
+    const r = await promise;
+    expect(r.out).toContain("f\n");
+  });
+
+  it("a syntax error on one line is reported but the session keeps going", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("echo a |\n");
+    io.write("echo b\n");
+    io.end();
+    const r = await promise;
+    expect(r.err).toContain("sh:");
+    expect(r.out).toContain("b\n");
+    expect(r.status).toBe(0);
+  });
+
+  it("blank lines are ignored", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("\n");
+    io.write("echo x\n");
+    io.end();
+    const r = await promise;
+    expect(r.out).toContain("x\n");
+  });
+
+  it("exit with no argument keeps the last command's status", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("false\n");
+    io.write("exit\n");
+    const r = await promise;
+    expect(r.status).toBe(1);
+  });
+
+  it("exit N ends the session with that status", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("exit 7\n");
+    const r = await promise;
+    expect(r.status).toBe(7);
+  });
+
+  it("EOF with a trailing line lacking a newline still runs it", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.write("echo trailing");
+    io.end();
+    const r = await promise;
+    expect(r.out).toContain("trailing\n");
+    expect(r.status).toBe(0);
+  });
+
+  it("EOF with nothing pending exits 0", async () => {
+    const io = makeStdin();
+    const promise = t.run([], "/", io.stdin);
+    io.end();
+    const r = await promise;
+    expect(r.status).toBe(0);
+  });
+
+  it("with no stdin at all, exits immediately", async () => {
     const r = await t.run([]);
-    expect(r.status).toBe(2);
-    expect(r.err).toContain("interactive REPL is not supported");
+    expect(r.status).toBe(0);
   });
 });
