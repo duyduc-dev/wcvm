@@ -264,4 +264,14 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
   fail on push). `PUBLISHING.md` is outdated (still says `duckwc`).
 - The process worker bundle is ~1.6 MB (acorn added real weight, for ESM parsing) and every
   process parses it, even `echo`; split `node` into its own worker entry if startup cost matters.
-- `fs.watch`/`watchFile` return ENOSYS until the kernel has a watch operation.
+- `fs.watch`/`watchFile` return ENOSYS until the kernel has a watch operation - **next up on the
+  roadmap**, not yet investigated. Starting pointers: `watchFile` is likely near-free (real Node
+  implements it as pure-JS polling over `fs.stat`, which already fully works - check whether
+  `internal/fs/watchers.js`'s `StatWatcher` is vendored, and if not, whether vendoring it just
+  works). `fs.watch` is the real new work: the FS Worker only ever *answers* SAB requests today,
+  it has no channel to *push* an unprompted "path changed" event to a process worker. The natural
+  fix routes through the Kernel Worker (which already owns the process table and already has a
+  plain postMessage channel to every process worker) - the same *shape* of problem as
+  `spawnSync`'s new SAB channel and `fork()`'s IPC routing (both added recently), which are good
+  reference implementations. `internalBinding('fs_event_wrap')` already exists as a stub
+  (`createFsEventWrapBinding`) - check what it currently returns before assuming from scratch.
