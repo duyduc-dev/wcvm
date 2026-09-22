@@ -14,6 +14,9 @@ export interface IProcessTableParams {
   /** Registers a new syscall client with the fs worker. */
   attachFsClient: (clientId: number) => { sab: SharedArrayBuffer; port: MessagePort };
   detachFsClient: (clientId: number) => void;
+  /** Registers a new syscall client for execSync/spawnSync, serviced by the kernel itself. */
+  attachSyncClient: (clientId: number) => { sab: SharedArrayBuffer; port: MessagePort };
+  detachSyncClient: (clientId: number) => void;
   /** Sends an event to the host (`process:stdout`, `process:exit`, ...). */
   emit: (message: KernelMessage) => void;
 }
@@ -26,6 +29,15 @@ export interface ISpawnSpec {
   env?: Record<string, string>;
   /** Set for a child_process spawned from inside another process; see spawn()'s routing. */
   parentPid?: number;
+  /**
+   * Set for a synchronous child (execSync/spawnSync - see kernel/spawnSyncServer.ts): its
+   * stdout/stderr are buffered instead of forwarded live, and delivered here, all at once,
+   * once it exits - the caller is blocked on a SAB, not running a message loop that could
+   * receive `child:*` events like a real parent worker.
+   */
+  onExit?: (result: { code: number; signal?: Signal; stdout: Uint8Array; stderr: Uint8Array }) => void;
+  /** Killed with SIGTERM if still running after this many ms (execSync/spawnSync's `timeout`). */
+  timeoutMs?: number;
 }
 
 export type Signal = "SIGTERM" | "SIGKILL";
@@ -48,13 +60,32 @@ const baseEnv = (cwd: string): Record<string, string> => ({
   PWD: cwd,
 });
 
+interface ISyncEntry {
+  onExit: NonNullable<ISpawnSpec["onExit"]>;
+  stdout: Uint8Array[];
+  stderr: Uint8Array[];
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+const concatBytes = (parts: Uint8Array[]): Uint8Array => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+};
+
 const createProcessTable = ({
   createProcessWorker,
   attachFsClient,
   detachFsClient,
+  attachSyncClient,
+  detachSyncClient,
   emit,
 }: IProcessTableParams): IProcessTable => {
-  const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number }>();
+  const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number; sync?: ISyncEntry }>();
 
   /** A child_process's parent, if it's both a child and still alive; undefined routes to the host. */
   const parentOf = (pid: number): IProcessWorkerLike | undefined => {
@@ -90,13 +121,17 @@ const createProcessTable = ({
     const parent = cascade ? undefined : parentOf(pid);
     const children = childrenOf(pid);
     workers.delete(pid);
+    if (entry.sync?.timer !== undefined) clearTimeout(entry.sync.timer);
     // Stop the worker before detaching, so it cannot issue a request that the
     // fs worker would then service for a client that no longer exists.
     entry.worker.onmessage = null;
     entry.worker.onerror = null;
     entry.worker.terminate();
     detachFsClient(pid);
-    if (!cascade) {
+    detachSyncClient(pid);
+    if (entry.sync) {
+      entry.sync.onExit({ code, signal: extra.signal, stdout: concatBytes(entry.sync.stdout), stderr: concatBytes(entry.sync.stderr) });
+    } else if (!cascade) {
       if (parent) parent.postMessage({ type: "child:exit", childPid: pid, exitCode: code, ...extra });
       else emit({ type: "process:exit", processId: pid, exitCode: code, ...extra });
     }
@@ -104,6 +139,11 @@ const createProcessTable = ({
   };
 
   const forwardOutput = (pid: number, stream: "stdout" | "stderr", chunk: Uint8Array) => {
+    const entry = workers.get(pid);
+    if (entry?.sync) {
+      entry.sync[stream].push(chunk);
+      return;
+    }
     const parent = parentOf(pid);
     if (parent) parent.postMessage({ type: `child:${stream}`, childPid: pid, chunk });
     else emit({ type: `process:${stream}`, processId: pid, chunk });
@@ -118,33 +158,34 @@ const createProcessTable = ({
   };
 
   const spawn = (spec: ISpawnSpec) => {
-    const { processId: pid, parentPid } = spec;
+    const { processId: pid, parentPid, onExit } = spec;
+    // A sync spawn's caller is blocked on a SAB, not running a message loop - reporting a
+    // failure via emit()/a parent postMessage would leave it parked forever.
+    const reportFailure = (errorMessage: string) => {
+      if (onExit) onExit({ code: 1, stdout: new Uint8Array(0), stderr: new Uint8Array(0) });
+      else emit({ type: "process:exit", processId: pid, exitCode: 1, errorMessage });
+    };
+
     if (workers.has(pid)) {
-      emit({
-        type: "process:exit",
-        processId: pid,
-        exitCode: 1,
-        errorMessage: `Process ${pid} already exists`,
-      });
+      reportFailure(`Process ${pid} already exists`);
       return;
     }
 
     const cwd = spec.cwd || "/";
     let worker: IProcessWorkerLike;
     let client: { sab: SharedArrayBuffer; port: MessagePort };
+    let syncClient: { sab: SharedArrayBuffer; port: MessagePort };
     try {
       worker = createProcessWorker(pid);
       client = attachFsClient(pid);
+      syncClient = attachSyncClient(pid);
     } catch (cause) {
-      emit({
-        type: "process:exit",
-        processId: pid,
-        exitCode: 1,
-        errorMessage: `Failed to start process: ${(cause as Error).message}`,
-      });
+      reportFailure(`Failed to start process: ${(cause as Error).message}`);
       return;
     }
-    workers.set(pid, { worker, parentPid });
+    const sync: ISyncEntry | undefined = onExit ? { onExit, stdout: [], stderr: [] } : undefined;
+    if (sync && spec.timeoutMs) sync.timer = setTimeout(() => kill(pid, "SIGTERM"), spec.timeoutMs);
+    workers.set(pid, { worker, parentPid, sync });
 
     worker.onmessage = (event) => {
       const data = event.data;
@@ -186,8 +227,10 @@ const createProcessTable = ({
         env: { ...baseEnv(cwd), ...spec.env },
         sab: client.sab,
         fsPort: client.port,
+        syncSab: syncClient.sab,
+        syncPort: syncClient.port,
       },
-      [client.port],
+      [client.port, syncClient.port],
     );
   };
 

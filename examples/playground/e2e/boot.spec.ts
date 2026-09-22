@@ -471,6 +471,56 @@ test.describe("node", () => {
     });
   });
 
+  test.describe("execSync / spawnSync", () => {
+    test("spawnSync blocks until the child exits and returns its buffered output", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { spawnSync } = require('child_process');" +
+          "const r = spawnSync('echo', ['from spawnSync']);" +
+          "console.log(JSON.stringify({ status: r.status, signal: r.signal, out: r.stdout.toString() }));",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: JSON.stringify({ status: 0, signal: null, out: "from spawnSync\n" }) + "\n" });
+    });
+
+    test("execSync returns stdout and throws on a nonzero exit", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const { execSync } = require('child_process');" +
+          "console.log(execSync('echo hi', { encoding: 'utf8' }));" +
+          "try { execSync('false'); console.log('should have thrown'); }" +
+          "catch (e) { console.log('threw:', e.message.split('\\n')[0]); }",
+      ]);
+      expect(r.out).toBe("hi\n\nthrew: Command failed: false\n");
+    });
+
+    test("the `input` option feeds the child's stdin", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const r = require('child_process').spawnSync('cat', [], { input: 'piped in via spawnSync' });" +
+          "console.log(r.stdout.toString());",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: "piped in via spawnSync\n" });
+    });
+
+    test("a real script running through sh -c is spawned and awaited synchronously", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const r = require('child_process').spawnSync('sh', ['-c', 'echo one; echo two']);" +
+          "console.log(r.stdout.toString());",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: "one\ntwo\n\n" });
+    });
+
+    test("a timeout kills a still-running child and reports the signal", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const r = require('child_process').spawnSync('sleep', ['5'], { timeout: 100 });" +
+          "console.log(JSON.stringify({ status: r.status, signal: r.signal }));",
+      ]);
+      expect(r).toMatchObject({ code: 0, out: JSON.stringify({ status: null, signal: "SIGTERM" }) + "\n" });
+    });
+  });
+
   test.describe("stdin", () => {
     test("process.stdin delivers what the host writes, and ends when the host closes it", async ({ page }) => {
       const r = await page.evaluate(async () => {

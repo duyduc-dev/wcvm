@@ -258,7 +258,3 @@ export const createCaresWrapBinding = () => ({
   GetNameInfoReqWrap: class GetNameInfoReqWrap {},
   ChannelWrap: class ChannelWrap {},
 });
-
-// child_process.spawnSync/execFileSync (out of scope for now: needs a second,
-// blocking process<->kernel channel like the fs SAB).
-export const createSpawnSyncBinding = () => ({ spawn: notSupported("spawnSync") });

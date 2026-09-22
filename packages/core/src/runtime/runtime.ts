@@ -3,6 +3,7 @@
 // lib/internal/bootstrap/node.js (task queue, then timers, then globals).
 
 import type { IFsClient } from "../fs/fsClient";
+import type { ISyscallClient } from "../protocols/syscall";
 import { createInternalBinding } from "./bindings";
 import type { IChildProcessHost } from "./bindings/childProcess";
 import { createModuleSystem } from "./cjs";
@@ -28,6 +29,8 @@ export interface IRuntimeHost {
   childProcess?: IChildProcessHost;
   /** Feeds process.stdin; without it, stdin behaves as already at EOF. */
   stdin?: IStdinHost;
+  /** Backs child_process.execSync/spawnSync; without it, they throw ENOSYS. */
+  spawnSync?: ISyscallClient;
 }
 
 export interface IRuntimeOptions {
@@ -76,6 +79,7 @@ const createRuntime = (options: IRuntimeOptions) => {
     process,
     writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
     childProcess: host.childProcess,
+    spawnSync: host.spawnSync,
   });
   loader = createBuiltinLoader({ process, internalBinding, primordials });
   const { requireBuiltin } = loader;

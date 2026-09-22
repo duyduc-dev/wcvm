@@ -1,4 +1,5 @@
 import { createLoopbackFs } from "../testing/loopbackFs";
+import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost } from "./bindings/childProcess";
 import { createRuntime, type IRuntimeOptions, type IStdinHost } from "./runtime";
 
@@ -12,6 +13,7 @@ export const runScript = async (
     setup?: (runtime: ReturnType<typeof createRuntime>) => void;
     childProcess?: IChildProcessHost;
     stdin?: IStdinHost;
+    spawnSync?: ISyscallClient;
   } = {},
 ) => {
   const { fs, vfs } = createLoopbackFs();
@@ -32,6 +34,7 @@ export const runScript = async (
       write: (stream, chunk) => (stream === "stdout" ? out : err).push(decoder.decode(chunk)),
       childProcess: options.childProcess,
       stdin: options.stdin,
+      spawnSync: options.spawnSync,
     },
   });
   options.setup?.(runtime);

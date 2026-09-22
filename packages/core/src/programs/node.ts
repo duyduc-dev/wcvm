@@ -54,6 +54,7 @@ const node: Program = async (ctx) => {
       write: (stream, chunk) => (stream === "stdout" ? ctx.stdout(chunk) : ctx.stderr(chunk)),
       childProcess: ctx.childProcess,
       stdin: ctx.stdin,
+      spawnSync: ctx.spawnSync,
     },
   });
 

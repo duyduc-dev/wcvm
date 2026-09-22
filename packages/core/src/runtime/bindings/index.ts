@@ -1,8 +1,9 @@
 import { WcvmError } from "../../errors/WcvmError";
 import type { IFsClient } from "../../fs/fsClient";
+import type { ISyscallClient } from "../../protocols/syscall";
 import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
-import { createPipeWrapBinding, createProcessWrapBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
+import { createPipeWrapBinding, createProcessWrapBinding, createSpawnSyncBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
 import { createFsBinding, createFsDirBinding, createFsEventWrapBinding } from "./fs";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
@@ -20,7 +21,6 @@ import {
   createPerformanceBinding,
   createPermissionBinding,
   createProfilerBinding,
-  createSpawnSyncBinding,
   createTcpWrapBinding,
   createTraceEventsBinding,
   createTtyWrapBinding,
@@ -43,6 +43,8 @@ interface IBindingContext {
   writeStdio?: (fd: 1 | 2, chunk: Uint8Array) => void;
   /** Spawns/kills child_process children via the kernel; without it, pipe_wrap/process_wrap are unavailable. */
   childProcess?: IChildProcessHost;
+  /** Blocks on the kernel until a child exits, with its buffered output; without it, spawn_sync throws ENOSYS. */
+  spawnSync?: ISyscallClient;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -69,7 +71,7 @@ const factories: Record<string, BindingFactory> = {
   pipe_wrap: (ctx) => createPipeWrapBinding(ctx),
   process_wrap: (ctx) => createProcessWrapBinding(ctx),
   profiler: () => createProfilerBinding(),
-  spawn_sync: () => createSpawnSyncBinding(),
+  spawn_sync: (ctx) => createSpawnSyncBinding(ctx),
   stream_wrap: (ctx) => createStreamWrapBinding(ctx),
   string_decoder: () => createStringDecoderBinding(),
   tcp_wrap: () => createTcpWrapBinding(),

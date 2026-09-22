@@ -12,6 +12,7 @@ import {
   IProcessTable,
   IProcessWorkerLike,
 } from "./processes";
+import { createSpawnSyncServer } from "./spawnSyncServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IFsWorkerLike {
@@ -36,6 +37,12 @@ interface IKernelHostParams {
 }
 
 const KERNEL_FS_CLIENT_ID = 0;
+
+// Pids for execSync/spawnSync's synchronously-spawned children: a plain counter, chosen well
+// out of range of both host-assigned top-level pids (small) and async child_process pids
+// (`ownPid * 1_000_000 + counter`, bindings/childProcess.ts) - `workers.has(pid)` in
+// processes.ts would catch a collision regardless.
+const SYNC_PID_START = 3_000_000_000;
 
 const createKernelHost = async ({
   createFsWorker,
@@ -69,6 +76,23 @@ const createKernelHost = async ({
     }),
   );
 
+  let nextSyncPid = SYNC_PID_START;
+  const spawnSyncServer = createSpawnSyncServer({
+    // `processes` is defined just below, in the same closure - only ever called later,
+    // once a real spawn request comes in, by which point it's fully initialized.
+    processes: {
+      spawn: (spec) => processes.spawn(spec),
+      writeStdin: (pid, chunk) => processes.writeStdin(pid, chunk),
+      endStdin: (pid) => processes.endStdin(pid),
+      kill: (pid, signal) => processes.kill(pid, signal),
+      has: (pid) => processes.has(pid),
+      get size() {
+        return processes.size;
+      },
+    },
+    allocatePid: () => nextSyncPid++,
+  });
+
   const processes = createProcessTable({
     createProcessWorker,
     emit,
@@ -83,6 +107,14 @@ const createKernelHost = async ({
     },
     detachFsClient: (clientId) =>
       fsWorker.postMessage({ type: "unregister", clientId }),
+    attachSyncClient: (clientId) => {
+      const buffer = createSyscallBuffer();
+      const { port1, port2 } = new MessageChannel();
+      spawnSyncServer.registerClient(clientId, buffer);
+      port1.onmessage = () => spawnSyncServer.service(clientId);
+      return { sab: buffer, port: port2 };
+    },
+    detachSyncClient: (clientId) => spawnSyncServer.unregisterClient(clientId),
   });
 
   return {
