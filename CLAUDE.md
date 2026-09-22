@@ -28,7 +28,9 @@ Done and verified in real Chromium:
 - `sh -c "..."` / `sh script.sh` (`programs/sh/`): `;`/`&&`/`||` sequencing, `|` pipes (in-memory,
   everything is one worker), `>`/`>>`/`<` redirects, `cd` as a shell builtin. Runs over the same
   built-in registry as everything else, including `node` and recursively `sh` itself. No `$`
-  expansion, globbing, subshells, control flow or `&` background jobs.
+  expansion, globbing, subshells, control flow or `&` background jobs. `sh` with no `-c`/script is
+  an interactive REPL: reads commands one line at a time from stdin (`programs/sh/lineReader.ts`),
+  `cwd` persisted across lines so `cd` sticks; `exit`/`exit N` ends it.
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
@@ -43,12 +45,18 @@ Done and verified in real Chromium:
   genuinely circular static import throws `ERR_CIRCULAR_ESM_NOT_SUPPORTED` (a dynamic `import()`
   breaks the cycle instead). See PLAN.md "Current state" and "Known differences"
   (`import.meta.url` is the module's blob URL, not its real path).
-- Tests: 382 Vitest + 49 Playwright (Chromium). See "Verifying".
+- `node` with no script/`-e` is an interactive REPL (`runtime/repl.ts`): built on the vendored,
+  TTY-independent `readline`, not Node's real `repl` module (that needs raw-mode TTY/tab-completion
+  machinery `tty_wrap` deliberately stubs out). Variables persist across lines via indirect
+  `eval()` against the process's own real global object (only correct inside a real Worker - see
+  "Known differences" in PLAN.md), with top-level `let`/`const` rewritten to `var` first
+  (`runtime/replTransform.ts`, using the vendored acorn) since two separate `eval()` calls do NOT
+  share lexical bindings the way Node's real REPL's reused `vm.Context` does.
+- Tests: 412 Vitest + 56 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): an interactive REPL (`node` or `sh`),
-`child_process.execSync`/`spawnSync`/`fork` (IPC), real `http`/`net` (TCP/UDP/DNS) + preview
-Service Worker, fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, `fs.watch`,
-Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): `child_process.execSync`/`spawnSync`/`fork` (IPC), real
+`http`/`net` (TCP/UDP/DNS) + preview Service Worker, fetcher worker + real `npm`, OPFS persistence,
+Vite dev server/HMR, `fs.watch`, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -146,6 +154,19 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   found: a script whose whole body is one `import` has nothing else to call `process.exit()`).
   Real usage (the built `dist/`, no dev server) never sees this; building for e2e tests just
   matches that and is also faster to boot per test run.
+- Two separate indirect `eval()` calls in the same realm do NOT share `let`/`const` bindings
+  (confirmed in real Chromium: `(0,eval)("let x=1")` then `(0,eval)("x")` throws
+  `ReferenceError`) - only `var`/function declarations attach to the real global object and
+  persist. That's a V8/DevTools/`vm.Context`-specific "REPL mode" feature, not a property of
+  plain `eval()`. The REPL (`runtime/repl.ts`) works around it by rewriting top-level
+  `let`/`const` to `var` before evaluating (`runtime/replTransform.ts`). Vitest can't catch this
+  either way - it only shows up once you actually run two lines through a real REPL session.
+- Throwing `ProcessExit` synchronously from inside a `readline` `"line"`/`"close"` listener (e.g.
+  a naive `.exit` handler calling `process.exit()` directly) can get intercepted by the vendored
+  stream internals that called that listener, instead of reaching `runtime.ts`'s own
+  uncaught-exception handling - it surfaced as a wrong exit code, only in real Chromium, never in
+  Vitest. Defer with `process.nextTick(() => process.exit())` instead, so the throw happens from
+  a clean call stack.
 
 ## Conventions
 

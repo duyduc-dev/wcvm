@@ -12,6 +12,8 @@ import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
 import { createPrimordials } from "./primordials";
 import { createProcessObject, NODE_VERSION, ProcessExit } from "./process";
+import { startRepl } from "./repl";
+import { liftTopLevelDeclarations } from "./replTransform";
 
 export interface IStdinHost {
   /** Registers the one handler for incoming stdin; a null chunk means EOF. */
@@ -312,8 +314,26 @@ const createRuntime = (options: IRuntimeOptions) => {
   /** Runs source text as `node -e` would. */
   const runEval = (source: string): Promise<number> => execute(() => modules.runEval(source));
 
+  /**
+   * Starts an interactive session: reads lines from stdin, evaluates each against this
+   * process's own real global object (so declarations persist across lines, like Node's own
+   * REPL), and prints the result. See runtime/repl.ts.
+   */
+  const runRepl = (): Promise<number> =>
+    execute(() => {
+      Object.defineProperty(globalObject, "require", {
+        value: (request: string) => modules.require(request, process.cwd()),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+      const acorn = requireBuiltin("internal/deps/acorn/acorn/dist/acorn");
+      const evaluate = (code: string) => (0, eval)(liftTopLevelDeclarations(acorn, code));
+      startRepl({ process, requireBuiltin, evaluate, prompt: "> " });
+    });
+
   return {
-    process, loop, loader, globals, globalObject, modules, runMain, runEval, stdout, stderr,
+    process, loop, loader, globals, globalObject, modules, runMain, runEval, runRepl, stdout, stderr,
     reportUnhandledRejection, reportRejectionHandled,
   };
 };

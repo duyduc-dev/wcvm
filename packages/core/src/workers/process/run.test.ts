@@ -116,13 +116,16 @@ describe("the node command", () => {
     expect(r.err).toContain("Error: kaboom");
   });
 
-  it("fails cleanly for a missing script, bad options and no arguments", async () => {
+  it("fails cleanly for a missing script or a bad option", async () => {
     const missing = await runNode(["nope.js"]);
     expect(missing.code).toBe(1);
     expect(missing.err).toContain("Cannot find module");
     expect((await runNode(["--bogus"])).code).toBe(9);
     expect((await runNode(["-e"])).code).toBe(9);
-    expect((await runNode([])).code).toBe(9);
+  });
+
+  it("with no arguments and no stdin, starts a REPL that exits cleanly on immediate EOF", async () => {
+    expect(await runNode([])).toEqual({ code: 0, out: "> ", err: "" });
   });
 
   it("node --version prints the vendored Node version", async () => {
