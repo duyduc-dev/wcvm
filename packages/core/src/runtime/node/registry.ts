@@ -22,6 +22,7 @@ import f_internal_child_process from "./lib/internal/child_process.js";
 import f_internal_console_constructor from "./lib/internal/console/constructor.js";
 import f_internal_console_global from "./lib/internal/console/global.js";
 import f_internal_constants from "./lib/internal/constants.js";
+import f_internal_deps_acorn_acorn_dist_acorn from "./lib/internal/deps/acorn/acorn/dist/acorn.js";
 import f_internal_dgram from "./lib/internal/dgram.js";
 import f_internal_errors from "./lib/internal/errors.js";
 import f_internal_errors_error_source from "./lib/internal/errors/error_source.js";
@@ -65,6 +66,7 @@ import f_internal_streams_destroy from "./lib/internal/streams/destroy.js";
 import f_internal_streams_duplex from "./lib/internal/streams/duplex.js";
 import f_internal_streams_duplexpair from "./lib/internal/streams/duplexpair.js";
 import f_internal_streams_end_of_stream from "./lib/internal/streams/end-of-stream.js";
+import f_internal_streams_fast_utf8_stream from "./lib/internal/streams/fast-utf8-stream.js";
 import f_internal_streams_from from "./lib/internal/streams/from.js";
 import f_internal_streams_legacy from "./lib/internal/streams/legacy.js";
 import f_internal_streams_operators from "./lib/internal/streams/operators.js";
@@ -124,6 +126,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/console/constructor": f_internal_console_constructor,
   "internal/console/global": f_internal_console_global,
   "internal/constants": f_internal_constants,
+  "internal/deps/acorn/acorn/dist/acorn": f_internal_deps_acorn_acorn_dist_acorn,
   "internal/dgram": f_internal_dgram,
   "internal/errors": f_internal_errors,
   "internal/errors/error_source": f_internal_errors_error_source,
@@ -166,6 +169,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/streams/duplex": f_internal_streams_duplex,
   "internal/streams/duplexpair": f_internal_streams_duplexpair,
   "internal/streams/end-of-stream": f_internal_streams_end_of_stream,
+  "internal/streams/fast-utf8-stream": f_internal_streams_fast_utf8_stream,
   "internal/streams/from": f_internal_streams_from,
   "internal/streams/legacy": f_internal_streams_legacy,
   "internal/streams/operators": f_internal_streams_operators,

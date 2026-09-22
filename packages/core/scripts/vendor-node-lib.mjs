@@ -33,6 +33,10 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const fileFor = (id) => join(libDir, `${id}.js`);
 const sourceUrl = (path) => `https://raw.githubusercontent.com/nodejs/node/${version}/${path}`;
 
+// `internal/deps/X` ids are third-party code Node vendors outside `lib/`
+// (e.g. acorn, at `deps/X.js`); everything else is `lib/<id>.js`.
+const repoPathFor = (id) => (id.startsWith("internal/deps/") ? `${id.slice("internal/".length)}.js` : `lib/${id}.js`);
+
 // curl, not fetch: it honours the https_proxy the sandbox needs.
 const download = (path) =>
   execFileSync("curl", ["-sS", "-f", "-m", "60", sourceUrl(path)], {
@@ -41,8 +45,8 @@ const download = (path) =>
   });
 
 const header = (id, kind) =>
-  `// VENDORED VERBATIM from Node.js ${version} - lib/${id}.js\n` +
-  `// Source: https://github.com/nodejs/node/blob/${version}/lib/${id}.js\n` +
+  `// VENDORED VERBATIM from Node.js ${version} - ${repoPathFor(id)}\n` +
+  `// Source: https://github.com/nodejs/node/blob/${version}/${repoPathFor(id)}\n` +
   `// Only this header and the function wrapper are added; do not edit the body.\n` +
   `// Regenerate with: node scripts/vendor-node-lib.mjs\n` +
   `export default function (${PARAMS[kind]}) {\n`;
@@ -73,7 +77,7 @@ for (const [id, kind = "builtin"] of Object.entries(modules)) {
   }
 
   if (existsSync(file) && lock.files[id]) continue;
-  const body = download(`lib/${id}.js`);
+  const body = download(repoPathFor(id));
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, wrap(id, kind, body));
   lock.files[id] = sha256(body);

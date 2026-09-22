@@ -143,21 +143,6 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
   };
 
   /**
-   * Node vendors the real acorn tokenizer (from `deps/acorn`, outside `lib/`, so
-   * our `lib/`-only vendoring pipeline cannot fetch it) so `assert`'s no-message
-   * path can quote the literal failing expression. `getErrorSourcePositions`
-   * (bindings/misc.ts) can recover real file/line/column via V8's CallSite API,
-   * but not source text with no JS equivalent, so it always reports an empty
-   * source line - and tokenizing "" always yields zero tokens. A tokenizer
-   * that always returns no tokens is therefore exact for this system, not an
-   * approximation: `assert(x)` still throws AssertionError, just without the
-   * source-expression quote in its message.
-   */
-  const internalAcorn: BuiltinFactory = (_exports, _require, module) => {
-    module.exports = { Parser: { tokenizer: () => [] } };
-  };
-
-  /**
    * `internal/perf/observe` is a large PerformanceObserver implementation;
    * net.js requires it unconditionally at module load but only calls it from
    * `connect()` (real TCP, which we don't support). No observer is ever
@@ -172,7 +157,6 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
-    "internal/deps/acorn/acorn/dist/acorn": internalAcorn,
     "internal/perf/observe": internalPerfObserve,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {

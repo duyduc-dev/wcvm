@@ -6,6 +6,8 @@ import type { IFsClient } from "../fs/fsClient";
 import { createInternalBinding } from "./bindings";
 import type { IChildProcessHost } from "./bindings/childProcess";
 import { createModuleSystem } from "./cjs";
+import { createEsmLoader } from "./esm/loader";
+import { createEsmResolver } from "./esm/resolve";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
 import { createPrimordials } from "./primordials";
@@ -279,9 +281,31 @@ const createRuntime = (options: IRuntimeOptions) => {
     return exitCode ?? 0;
   };
 
+  // Format detection alone (extension + nearest package.json "type") needs no
+  // parser, so it's cheap enough to build eagerly. The full ESM loader is
+  // built lazily off it: most processes (echo, plain CJS scripts) never
+  // touch ESM, and acorn is a real (~6k line) parser we shouldn't pay to
+  // load for them.
+  const esmResolver = createEsmResolver({ fs, path: nodePath, builtins: loader });
+  let esmLoader: ReturnType<typeof createEsmLoader> | undefined;
+  const getEsmLoader = () => {
+    esmLoader ??= createEsmLoader({
+      fs,
+      path: nodePath,
+      acorn: requireBuiltin("internal/deps/acorn/acorn/dist/acorn"),
+      builtins: loader,
+      requireCjs: (path) => modules.require(path),
+      loop,
+      globalObject,
+    });
+    return esmLoader;
+  };
+
   /** Runs the script at `entry` (absolute or cwd-relative). */
   const runMain = (entry: string): Promise<number> => {
-    process.argv[1] = entry.startsWith("/") ? entry : nodePath.resolve(process.cwd(), entry);
+    const resolved = entry.startsWith("/") ? entry : nodePath.resolve(process.cwd(), entry);
+    process.argv[1] = resolved;
+    if (esmResolver.formatOfPath(resolved) === "esm") return execute(() => getEsmLoader().importEntry(resolved));
     return execute(() => modules.runMain(entry));
   };
 

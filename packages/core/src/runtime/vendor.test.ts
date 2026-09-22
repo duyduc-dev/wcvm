@@ -23,7 +23,6 @@ describe("vendored Node lib", () => {
     "internal/encoding",
     "internal/blob",
     "internal/bootstrap/realm",
-    "internal/deps/acorn/acorn/dist/acorn",
     "internal/perf/observe",
   ];
 
