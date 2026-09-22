@@ -3,9 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <title>wcvm playground</title>
+    <style>
+      body { margin: 0; font-family: monospace; background: #1e1e1e; color: #ddd; }
+      #app { padding: 4px 8px; font-size: 13px; }
+      #controls { padding: 0 8px 8px; }
+      #terminal { padding: 0 8px; }
+    </style>
   </head>
   <body>
     <div id="app"></div>
+    <div id="controls">
+      <label>Session: <select id="program"><option value="sh">sh</option><option value="node">node</option></select></label>
+      <button id="restart">restart</button>
+    </div>
+    <div id="terminal"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
