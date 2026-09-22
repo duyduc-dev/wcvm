@@ -525,6 +525,80 @@ test.describe("node", () => {
       expect(r).toEqual({ code: 0, out: "from parent to child\n", err: "" });
     });
   });
+
+  test.describe("esm", () => {
+    test("static import: named and default exports, live via the browser's real linking", async ({ page }) => {
+      await writeFiles(page, {
+        "/lib.mjs": "export const greeting = 'hello esm';\nexport default 42;\n",
+        "/main.mjs": "import def, { greeting } from './lib.mjs';\nconsole.log(greeting, def);\n",
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: "hello esm 42\n", err: "" });
+    });
+
+    test("dynamic import() and top-level await both work", async ({ page }) => {
+      await writeFiles(page, {
+        "/lib.mjs": "export const x = 1;\n",
+        "/main.mjs": "const m = await import('./lib.mjs');\nconsole.log(m.x);\n",
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: "1\n", err: "" });
+    });
+
+    test("importing a CJS file from ESM: default is module.exports, named exports are its own keys", async ({ page }) => {
+      await writeFiles(page, {
+        "/lib.cjs": "module.exports = { a: 1, b: 2 };\n",
+        "/main.mjs": "import mod, { a, b } from './lib.cjs';\nconsole.log(JSON.stringify(mod), a, b);\n",
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: '{"a":1,"b":2} 1 2\n', err: "" });
+    });
+
+    test("a node: builtin can be imported from ESM, named exports included", async ({ page }) => {
+      await writeFiles(page, { "/main.mjs": "import { basename } from 'node:path';\nconsole.log(basename('/a/b.js'));\n" });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: "b.js\n", err: "" });
+    });
+
+    test("a JSON file can be imported with `with { type: 'json' }`", async ({ page }) => {
+      await writeFiles(page, {
+        "/data.json": '{"a":1,"b":[2,3]}',
+        "/main.mjs": "import data from './data.json' with { type: 'json' };\nconsole.log(JSON.stringify(data));\n",
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: '{"a":1,"b":[2,3]}\n', err: "" });
+    });
+
+    test("a node_modules package resolves through its package.json \"exports\" field", async ({ page }) => {
+      await writeFiles(page, {
+        "/node_modules/pkg/package.json": '{"name":"pkg","exports":{"import":"./esm.mjs","require":"./cjs.cjs"}}',
+        "/node_modules/pkg/esm.mjs": "export const via = 'esm-exports';\n",
+        "/main.mjs": "import { via } from 'pkg';\nconsole.log(via);\n",
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: "esm-exports\n", err: "" });
+    });
+
+    test("a package.json \"type\": \"module\" makes its plain .js files ESM", async ({ page }) => {
+      await writeFiles(page, {
+        "/pkg/package.json": '{"type":"module"}',
+        "/pkg/lib.js": "export const y = 99;\n",
+        "/pkg/main.js": "import { y } from './lib.js';\nconsole.log(y);\n",
+      });
+      const r = await spawn(page, "node", ["/pkg/main.js"]);
+      expect(r).toEqual({ code: 0, out: "99\n", err: "" });
+    });
+
+    test("a genuinely circular static import throws a clear error instead of a silent wrong value", async ({ page }) => {
+      await writeFiles(page, {
+        "/a.mjs": "import { b } from './b.mjs';\nexport const a = 1;\nconsole.log('a', b);\n",
+        "/b.mjs": "import { a } from './a.mjs';\nexport const b = 2;\nconsole.log('b', a);\n",
+      });
+      const r = await spawn(page, "node", ["/a.mjs"]);
+      expect(r.code).toBe(1);
+      expect(r.err).toContain("Circular static ESM import");
+    });
+  });
 });
 
 test.describe("sh", () => {

@@ -98,6 +98,8 @@
     "internal/stream_base_commons": "builtin",
     "dgram": "builtin",
     "internal/dgram": "builtin",
-    "internal/socket_list": "builtin"
+    "internal/socket_list": "builtin",
+    "internal/deps/acorn/acorn/dist/acorn": "builtin",
+    "internal/streams/fast-utf8-stream": "builtin"
   }
 }

@@ -6,7 +6,7 @@ tree but recoverable from git history (see `git show 5e7e388:PROGRESS.md`).
 
 ## Current state
 
-Done: Phases 0-5 except ESM (Phase 4). `boot()` returns `{ spawn, fs, diagnostics, ready }`.
+Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
 - Kernel worker boots a File System Worker (in-memory `Vfs`) and serves `wc.fs.*`.
 - `spawn(command, args, { cwd, env })` runs a command in its own `Process Worker PID N`
   (own SAB + doorbell port to the fs worker) and returns `stdout`/`stderr`/`stdin` streams,
@@ -48,11 +48,30 @@ Done: Phases 0-5 except ESM (Phase 4). `boot()` returns `{ spawn, fs, diagnostic
   otherwise strand a Process Worker in the tab forever. `detached` is accepted by the vendored
   options but not honoured, so there's no opt-out from this yet. Not done: `execSync`/`spawnSync`
   (would need a second, blocking process<->kernel channel, like the fs SAB), `fork()`/IPC.
-Verified by Vitest (353) and Playwright in real Chromium (41), including a script reading a
+- ESM (`import`/`export`): real ESM, not a CJS transpile - `runtime/esm/` resolves the static
+  import graph itself (Node's own resolution algorithm, simplified: no extension guessing or
+  directory-index fallback for relative specifiers; `package.json` "exports" with
+  `import`/`node`/`default` conditions for bare specifiers, `main`/`index.js` as a fallback only
+  when a package has no "exports" at all), rewrites each module's specifiers to `blob:` URLs
+  (parsed with Node's own vendored acorn, dependency-first so a module is only blobbed once
+  every static dependency already has one), then lets the browser's real dynamic `import()` do
+  the actual linking/evaluation - real live bindings, real circular-import semantics (among
+  non-cyclic modules), real top-level await, none of it reimplemented. A `node:` builtin or a
+  plain CJS file imported from ESM gets a synthetic wrapper module (`export default <value>;`
+  plus one `export const <key> = <value>[key];` per enumerable own key, for named-import
+  parity); same idea for a `with { type: "json" }` import. Dynamic `import()` calls (literal or
+  computed argument) are rewritten to a runtime bridge function that resolves lazily, so they
+  have none of static import's limits. Genuinely circular static imports (A statically imports
+  B which statically imports A) throw `ERR_CIRCULAR_ESM_NOT_SUPPORTED` instead of silently
+  breaking live bindings: a Blob's content is fixed at creation, unlike a real fetchable URL a
+  server could answer lazily, so creating A's blob needs B's URL and vice versa - a dynamic
+  `import()` breaks the cycle instead, same as it does in real bundled/served ESM. See "Known
+  differences" for `import.meta.url`.
+Verified by Vitest (382) and Playwright in real Chromium (49), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
-Not done: ESM (`import`), `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (TCP/UDP/
-DNS), `worker_threads`, `fs.watch`/`watchFile` (ENOSYS), `process.binding`, an interactive REPL
+Not done: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (TCP/UDP/DNS),
+`worker_threads`, `fs.watch`/`watchFile` (ENOSYS), `process.binding`, an interactive REPL
 (`node` or `sh`), `node -p`.
 
 ### How the Node runtime is put together (src/runtime/)
@@ -85,14 +104,21 @@ DNS), `worker_threads`, `fs.watch`/`watchFile` (ENOSYS), `process.binding`, an i
   uid/gid report 1000. `fs.watch` needs the kernel's OP_WATCH (not built yet).
 - fd numbers come from one VFS table shared by all processes (each process's fds are closed
   when it exits or is killed, checked in Chromium), so they are not 3,4,5... per process.
-- The process worker bundle is ~1.2 MB because it contains the whole runtime; every process
-  pays to parse it even for `echo`. Split `node` into its own worker entry if that shows up.
-- `assert`'s "show the failing expression" enrichment (`assert(x)` with no message) needs Node's
-  vendored acorn tokenizer, which lives outside `lib/` (`deps/acorn`) and our vendoring pipeline
-  only fetches `lib/**`; `internalBinding('errors').getErrorSourcePositions` (`bindings/misc.ts`)
-  gets real file/line/column from V8's `Error.prepareStackTrace`, but always reports an empty
-  source line, so the shimmed tokenizer (`runtime/shims.ts`) always yields zero tokens - correct
-  for that empty input, not an approximation. `assert(x)` still throws `AssertionError` either way.
+- The process worker bundle is ~1.6 MB because it contains the whole runtime (acorn, vendored
+  for ESM, is real added weight); every process pays to parse it even for `echo`. Split `node`
+  into its own worker entry if that shows up.
+- `assert`'s "show the failing expression" enrichment (`assert(x)` with no message) tokenizes the
+  failing line with Node's real vendored acorn (`internal/deps/acorn`, outside `lib/` - vendored
+  via `scripts/vendor-node-lib.mjs`'s `repoPathFor`, added for ESM's own parsing needs; see
+  "ES modules" above) via `internal/errors/error_source.js`'s `getFirstExpression`. That part is
+  real. What's not: `internalBinding('errors').getErrorSourcePositions` (`bindings/misc.ts`) gets
+  real file/line/column from V8's `Error.prepareStackTrace`, but has no way to recover the
+  literal source text a `v8::Message` would carry, so `sourceLine` is always `""` - the real
+  tokenizer runs on an empty string, correctly yields zero tokens, and the enrichment degrades to
+  a plain message. `assert(x)` still throws `AssertionError` either way.
+- ESM's `import.meta.url` is the module's `blob:` URL (what it was actually `import()`ed from),
+  not its real VFS path as a `file://` URL - a Blob has no path of its own to report
+  (`runtime/esm/loader.ts`).
 
 ## Architecture to build (from vivari)
 
@@ -150,14 +176,15 @@ module: `Thing.test.ts`).
 - stdin delivered out-of-band (`postMessage`), not through the SAB, since a running process
   is not parked on it (done; see "Current state").
 
-### Phase 4 - Node runtime in the process worker  (MOSTLY DONE; ESM next)
+### Phase 4 - Node runtime in the process worker  (DONE)
 - Sync CommonJS loader (`node_modules` resolution), per-process event loop
   (nextTick, microtasks, timers, setImmediate), builtins: `process`, `fs`,
   `path`, `events`, `buffer`.
 - Decided: vendor Node's real `lib/` + our `internalBinding` (vivari "Path B").
 - Done: `fs`, `fs/promises`, `os`, `string_decoder`, `stream`, `assert`, `readline`,
-  `readline/promises`, `child_process.spawn`/`exec`/`execFile` (async only; see "Current state").
-- Remaining: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (Phase 6), ESM.
+  `readline/promises`, `child_process.spawn`/`exec`/`execFile` (async only), ESM (`import`/
+  `export`, real via the browser's own `import()` - see "Current state").
+- Remaining: `child_process.execSync`/`spawnSync`/`fork`, real `http`/`net` (Phase 6).
 
 ### Phase 5 - Shell  (DONE, except an interactive REPL)
 - Small `sh`: `;` `&&` `||`, pipes, redirects, `node <file>` (done; see "Current state").
