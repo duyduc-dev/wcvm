@@ -1,21 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
+  FLAG_RECURSIVE,
   I_OPCODE,
   I_REQ_LEN,
   I_RES_LEN,
   I_STATE,
   OP_READ_FILE,
+  OP_WATCH_START,
+  OP_WATCH_STOP,
   STATE_REQUEST,
   STATE_RESPONSE_ERR,
   STATE_RESPONSE_OK,
+  bytesToU32,
   createSyscallBuffer,
   decodeBytes,
   encodeRequest,
   encodeString,
   makeViews,
+  u32ToBytes,
 } from "../protocols/syscall";
 import { spawnFixtureWorker } from "../testing/spawnFixtureWorker";
-import { FsServer } from "./FsServer";
+import { FsServer, type WatchEventReporter } from "./FsServer";
 
 // Publishes a request the way a parked client would, without a second thread,
 // so the server's behavior can be checked in isolation.
@@ -23,9 +28,10 @@ const publish = (
   sab: SharedArrayBuffer,
   opcode: number,
   fields: Uint8Array[] = [],
+  flags = 0,
 ) => {
   const { ctrl, data } = makeViews(sab);
-  const frame = encodeRequest(fields);
+  const frame = encodeRequest(fields, flags);
   data.set(frame, 0);
   Atomics.store(ctrl, I_OPCODE, opcode);
   Atomics.store(ctrl, I_REQ_LEN, frame.length);
@@ -226,5 +232,117 @@ describe("FsServer file descriptor ownership", () => {
     expect(() => server.vfs.fstat(fdB)).not.toThrow();
     server.unregisterClient(2);
     expect(() => server.vfs.fstat(fdB)).toThrow();
+  });
+});
+
+describe("FsServer fs.watch registry", () => {
+  type Event = [clientId: number, watchId: number, eventType: string, filename: string];
+
+  const makeServer = () => {
+    const events: Event[] = [];
+    const onWatchEvent: WatchEventReporter = (clientId, watchId, eventType, filename) => events.push([clientId, watchId, eventType, filename]);
+    const server = new FsServer(undefined, onWatchEvent);
+    return { server, events };
+  };
+
+  const watchStart = (server: FsServer, sab: SharedArrayBuffer, client: number, path: string, recursive = false): number => {
+    publish(sab, OP_WATCH_START, [encodeString(path)], recursive ? FLAG_RECURSIVE : 0);
+    server.service(client);
+    return bytesToU32(outcome(sab).payload);
+  };
+
+  it("returns a watchId and reports ENOENT for a path that doesn't exist", () => {
+    const { server } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.writeFile("/a.txt", encodeString(""));
+
+    const id = watchStart(server, sab, 1, "/a.txt");
+    expect(id).toBeGreaterThan(0);
+
+    publish(sab, OP_WATCH_START, [encodeString("/missing")]);
+    server.service(1);
+    expect(decodeBytes(outcome(sab).payload)).toBe("ENOENT");
+  });
+
+  it("delivers a change on a watched file to the client that registered it", () => {
+    const { server, events } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.writeFile("/a.txt", encodeString(""));
+
+    const id = watchStart(server, sab, 1, "/a.txt");
+    server.vfs.writeFile("/a.txt", encodeString("hi"));
+    expect(events).toEqual([[1, id, "change", "a.txt"]]);
+  });
+
+  it("a non-recursive directory watch fires for a direct child but not a nested grandchild", () => {
+    const { server, events } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.mkdir("/proj/src", { recursive: true });
+
+    const id = watchStart(server, sab, 1, "/proj");
+    server.vfs.writeFile("/proj/a.txt", encodeString(""));
+    server.vfs.writeFile("/proj/src/b.txt", encodeString(""));
+    expect(events).toEqual([[1, id, "rename", "a.txt"]]);
+  });
+
+  it("a recursive directory watch fires for a nested grandchild too, with a relative filename", () => {
+    const { server, events } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.mkdir("/proj/src", { recursive: true });
+
+    const id = watchStart(server, sab, 1, "/proj", true);
+    server.vfs.writeFile("/proj/src/b.txt", encodeString(""));
+    expect(events).toEqual([[1, id, "rename", "src/b.txt"]]);
+  });
+
+  it("watching a file only matches that exact file, not a sibling with the same prefix", () => {
+    const { server, events } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.writeFile("/a.txt", encodeString(""));
+    server.vfs.writeFile("/a.txt.bak", encodeString(""));
+
+    watchStart(server, sab, 1, "/a.txt");
+    server.vfs.writeFile("/a.txt.bak", encodeString("x"));
+    expect(events).toEqual([]);
+  });
+
+  it("OP_WATCH_STOP ends delivery; stopping an unknown id is a no-op, not an error", () => {
+    const { server, events } = makeServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.writeFile("/a.txt", encodeString(""));
+
+    const id = watchStart(server, sab, 1, "/a.txt");
+    publish(sab, OP_WATCH_STOP, [u32ToBytes(id)]);
+    server.service(1);
+    expect(outcome(sab).state).toBe(STATE_RESPONSE_OK);
+
+    server.vfs.writeFile("/a.txt", encodeString("x"));
+    expect(events).toEqual([]);
+
+    publish(sab, OP_WATCH_STOP, [u32ToBytes(999)]);
+    server.service(1);
+    expect(outcome(sab).state).toBe(STATE_RESPONSE_OK);
+  });
+
+  it("unregisterClient purges that client's watches, and only that client's", () => {
+    const { server, events } = makeServer();
+    const a = createSyscallBuffer();
+    const b = createSyscallBuffer();
+    server.registerClient(1, a);
+    server.registerClient(2, b);
+    server.vfs.writeFile("/a.txt", encodeString(""));
+
+    const idA = watchStart(server, a, 1, "/a.txt");
+    const idB = watchStart(server, b, 2, "/a.txt");
+    server.unregisterClient(1);
+    server.vfs.writeFile("/a.txt", encodeString("x"));
+    expect(events).toEqual([[2, idB, "change", "a.txt"]]);
+    expect(idA).not.toBe(idB);
   });
 });

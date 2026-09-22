@@ -28,6 +28,31 @@ export interface IFsBindingContext {
 
 const kUsePromises = Symbol("fs_use_promises_symbol");
 const STAT_FIELDS = 18;
+
+// StatWatcher's poll timer is a native handle, invisible to Node's own JS timers module (real
+// libuv's uv_fs_poll is its own handle type, unrelated to uv_timer) - captured at module-import
+// time so it can't be intercepted by Node's own same-named globals once installed onto a real
+// worker's `self` (see eventLoop.ts's nativeSetTimeout for the same gotcha).
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
+const scheduleNative = (fn: () => void, ms: number): (() => void) => {
+  const id = nativeSetTimeout(fn, ms);
+  return () => nativeClearTimeout(id);
+};
+
+/** Concatenates two same-shape stat arrays (new block, then old), matching getStatsFromBinding's expected layout. */
+const combineStats = (curr: Float64Array | BigInt64Array, prev: Float64Array | BigInt64Array, bigint: boolean): Float64Array | BigInt64Array => {
+  if (bigint) {
+    const out = new BigInt64Array(STAT_FIELDS * 2);
+    out.set(curr as BigInt64Array, 0);
+    out.set(prev as BigInt64Array, STAT_FIELDS);
+    return out;
+  }
+  const out = new Float64Array(STAT_FIELDS * 2);
+  out.set(curr as Float64Array, 0);
+  out.set(prev as Float64Array, STAT_FIELDS);
+  return out;
+};
 const UMASK = 0o022;
 
 const { O_DIRECTORY, S_IFIFO, S_IFDIR, S_IFLNK, S_IFREG, W_OK, X_OK, R_OK } = FS_CONSTANTS;
@@ -105,6 +130,7 @@ const resolvingClient = (fs: IFsClient, cwd: () => string): IFsClient => {
     link: (a, b) => fs.link(abs(a), abs(b)),
     utimes: (p, a, m, o) => fs.utimes(abs(p), a, m, o),
     open: (p, f, m) => fs.open(abs(p), f, m),
+    watchStart: (p, recursive) => fs.watchStart(abs(p), recursive),
   };
 };
 
@@ -300,14 +326,73 @@ const createFsBinding = (ctx: IFsBindingContext) => {
     bigintStatFsValues: new BigInt64Array(7),
     FSReqCallback,
     FileHandle,
+    // fs.watchFile: pure polling, no fs worker / kernel plumbing at all - unlike FSEvent below,
+    // a StatWatcher is entirely local to this process, repeatedly calling the same fs.stat() a
+    // script could call itself. onchange fires (status, [...curr, ...prev]) whenever something
+    // actually differs from the previous poll, INCLUDING the very first poll after start()
+    // establishes a baseline it does not itself report - real libuv's uv_fs_poll behaves the
+    // same way (the first successful stat only seeds ctx->statbuf, no callback yet).
     StatWatcher: class StatWatcher {
-      constructor(_bigint?: boolean) {}
-      start() {
-        return uvCode("ENOSYS");
+      readonly bigint: boolean;
+      cancel: (() => void) | null = null;
+      release: (() => void) | null = null;
+      refed = true;
+      prev: Float64Array | BigInt64Array | null = null;
+      prevStatus = -1;
+      onchange: ((status: number, stats: Float64Array | BigInt64Array) => void) | undefined;
+
+      constructor(bigint?: boolean) {
+        this.bigint = !!bigint;
       }
-      close() {}
-      ref() {}
-      unref() {}
+
+      start(path: string, interval: number): number {
+        if (this.cancel) return 0;
+        const ms = Math.max(1, interval);
+        const tick = () => {
+          let status: number;
+          let curr: Float64Array | BigInt64Array;
+          try {
+            curr = statArray(fs.stat(path), this.bigint);
+            status = 0;
+          } catch {
+            curr = this.bigint ? new BigInt64Array(STAT_FIELDS) : new Float64Array(STAT_FIELDS);
+            status = -1;
+          }
+          const prev = this.prev;
+          const prevStatus = this.prevStatus;
+          this.prev = curr;
+          this.prevStatus = status;
+          this.cancel = scheduleNative(tick, ms);
+          if (prev === null) return; // first poll: baseline only, matches real uv_fs_poll
+          let changed = status !== prevStatus;
+          for (let i = 0; !changed && i < curr.length; i++) changed = curr[i] !== prev[i];
+          if (!changed) return;
+          const combined = combineStats(curr, prev, this.bigint);
+          loop.post(() => this.onchange?.(status, combined));
+        };
+        this.cancel = scheduleNative(tick, ms);
+        if (this.refed) this.release = loop.ref();
+        return 0;
+      }
+      close() {
+        this.cancel?.();
+        this.cancel = null;
+        this.release?.();
+        this.release = null;
+        this.prev = null;
+      }
+      ref() {
+        this.refed = true;
+        if (this.cancel && !this.release) this.release = loop.ref();
+      }
+      unref() {
+        this.refed = false;
+        this.release?.();
+        this.release = null;
+      }
+      getAsyncId() {
+        return 0;
+      }
     },
 
     access: (path: string, mode: number, req: unknown) =>
@@ -551,20 +636,92 @@ const createFsDirBinding = (fsBinding: ReturnType<typeof createFsBinding>) => ({
   opendirSync: (path: string) => fsBinding.opendir(path, undefined, undefined),
 });
 
-const createFsEventWrapBinding = () => ({
-  FSEvent: class FSEvent {
+export interface IFsWatchHost {
+  /** Registers the one handler for incoming watch events pushed from the kernel (a `fs.watch`
+   *  change reported for one of this process's own watches - see workers/process/worker.ts). */
+  onEvent(handler: (event: { watchId: number; eventType: "rename" | "change"; filename: string }) => void): void;
+}
+
+export interface IFsEventWrapContext {
+  fs?: IFsClient;
+  loop: EventLoop;
+  requireBuiltin(id: string): any;
+  /** Without it, fs.watch() throws ENOSYS - same optional-host-capability pattern as
+   *  childProcess for pipe_wrap/process_wrap: real usage always wires one, some tests don't need to. */
+  fsWatch?: IFsWatchHost;
+}
+
+/**
+ * fs.watch: real push events (unlike fs.watchFile's local polling above), so this needs the fs
+ * worker's own watch registry (FsServer, reached over the fs client's watchStart/watchStop) and
+ * a way to receive its pushed change events (ctx.fsWatch, routed kernel -> this process worker
+ * -> here - see kernel/index.ts's fsWorker.onmessage and kernel/processes.ts's notifyWatch).
+ * One subscription per realm dispatches by watchId to whichever FSEvent instance owns it.
+ */
+const createFsEventWrapBinding = (ctx: IFsEventWrapContext) => {
+  const instances = new Map<number, FSEvent>();
+  let subscribed = false;
+
+  class FSEvent {
     initialized = false;
-    onchange: unknown;
-    start() {
-      return uvCode("ENOSYS");
+    onchange: ((status: number, eventType: string, filename: string | Uint8Array) => void) | undefined;
+    watchId: number | undefined;
+    encoding = "utf8";
+    release: (() => void) | null = null;
+
+    start(path: string, persistent: boolean, recursive: boolean, encoding: string): number {
+      if (!ctx.fs || !ctx.fsWatch) return uvCode("ENOSYS");
+      if (!subscribed) {
+        subscribed = true;
+        ctx.fsWatch.onEvent(({ watchId, eventType, filename }) => instances.get(watchId)?.deliver(eventType, filename));
+      }
+      let watchId: number;
+      try {
+        watchId = ctx.fs.watchStart(path, recursive);
+      } catch (error) {
+        return hasErrno(error) ? uvCode(error.code) : uvCode("EIO");
+      }
+      this.watchId = watchId;
+      this.encoding = encoding;
+      this.initialized = true;
+      instances.set(watchId, this);
+      if (persistent) this.release = ctx.loop.ref();
+      return 0;
     }
-    close() {}
-    ref() {}
-    unref() {}
+
+    deliver(eventType: "rename" | "change", filename: string) {
+      const name = this.encoding === "buffer" ? ctx.requireBuiltin("buffer").Buffer.from(filename) : filename;
+      ctx.loop.post(() => this.onchange?.(0, eventType, name));
+    }
+
+    close() {
+      if (!this.initialized) return;
+      this.initialized = false;
+      if (this.watchId !== undefined) {
+        instances.delete(this.watchId);
+        ctx.fs?.watchStop(this.watchId);
+      }
+      this.release?.();
+      this.release = null;
+      // Drops onchange too, not just the registry entry: a burst of changes from one
+      // writeFileSync can already have several deliveries in flight (each its own loop.post()),
+      // and closing mid-burst - as a "stop after the Nth change" callback naturally would -
+      // should not still call back for ones that hadn't run yet.
+      this.onchange = undefined;
+    }
+    ref() {
+      if (this.initialized && !this.release) this.release = ctx.loop.ref();
+    }
+    unref() {
+      this.release?.();
+      this.release = null;
+    }
     getAsyncId() {
       return 0;
     }
-  },
-});
+  }
+
+  return { FSEvent };
+};
 
 export { createFsBinding, createFsDirBinding, createFsEventWrapBinding, kUsePromises, S_IFDIR, S_IFLNK, S_IFREG };

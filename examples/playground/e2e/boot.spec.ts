@@ -713,6 +713,97 @@ test.describe("node", () => {
       expect(r.err).toContain("Circular static ESM import");
     });
   });
+
+  test.describe("fs.watch", () => {
+    // The single-threaded Vitest suite (packages/core/src/runtime/fsWatch.test.ts) already
+    // covers fs.watch/fs.watchFile's detailed semantics (eventType, recursive, filenames, ...)
+    // against a real FsServer, just not over a real postMessage/worker boundary. These three
+    // exercise exactly that boundary: the fs worker's watch registry -> kernel -> a DIFFERENT
+    // real Process Worker than the one that caused the change - the one thing that can't be
+    // faked in Vitest.
+
+    test("the host's own wc.fs.writeFile is seen by a process's fs.watch, in a real worker", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.fs.mkdir("/proj");
+        await wc.fs.writeFile("/proj/a.txt", "one");
+        const proc = await wc.spawn("node", [
+          "-e",
+          "const fs = require('fs');" +
+            "const w = fs.watch('/proj', (eventType, filename) => {" +
+            "  w.close();" +
+            "  console.log(eventType, filename);" +
+            "});" +
+            "console.log('ready');",
+        ]);
+        // Waits for the script's own "ready\n" (printed right after fs.watch()'s synchronous
+        // registration call returns) before writing - wc.spawn() resolving only means the
+        // worker started, not that its script has reached the fs.watch() call yet.
+        const reader = proc.stdout.getReader();
+        const first = await reader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("watcher did not become ready");
+        await wc.fs.writeFile("/proj/a.txt", "two");
+        const rest = await new Response(
+          new ReadableStream({
+            async pull(c) {
+              const { done, value } = await reader.read();
+              if (done) c.close();
+              else c.enqueue(value);
+            },
+          }),
+        ).text();
+        const [err, exit] = await Promise.all([new Response(proc.stderr).text(), proc.exit]);
+        return { code: exit.exitCode, rest, err };
+      });
+      expect(r).toEqual({ code: 0, rest: "change a.txt\n", err: "" });
+    });
+
+    test("one process's fs.watch sees another real process's write, routed through the kernel", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.fs.mkdir("/shared");
+        const watcher = await wc.spawn("node", [
+          "-e",
+          "const fs = require('fs');" +
+            "const w = fs.watch('/shared', { recursive: true }, (eventType, filename) => {" +
+            "  w.close();" +
+            "  console.log(eventType, filename);" +
+            "});" +
+            "console.log('ready');",
+        ]);
+        const reader = watcher.stdout.getReader();
+        const first = await reader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("watcher did not become ready");
+        const writer = await wc.spawn("node", ["-e", "require('fs').writeFileSync('/shared/from-writer.txt', 'hi')"]);
+        const rest = await new Response(
+          new ReadableStream({
+            async pull(c) {
+              const { done, value } = await reader.read();
+              if (done) c.close();
+              else c.enqueue(value);
+            },
+          }),
+        ).text();
+        const [watcherErr, watcherExit, writerExit] = await Promise.all([new Response(watcher.stderr).text(), watcher.exit, writer.exit]);
+        return { code: watcherExit.exitCode, rest, err: watcherErr, writerCode: writerExit.exitCode };
+      });
+      expect(r).toEqual({ code: 0, rest: "rename from-writer.txt\n", err: "", writerCode: 0 });
+    });
+
+    test("fs.watchFile really polls on a real native timer in a real worker, and unwatchFile lets the process exit", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const fs = require('fs');" +
+          "fs.writeFileSync('/a.txt', 'one');" +
+          "fs.watchFile('/a.txt', { interval: 20 }, (curr, prev) => {" +
+          "  fs.unwatchFile('/a.txt');" +
+          "  console.log('changed', curr.size, prev.size);" +
+          "});" +
+          "setTimeout(() => fs.writeFileSync('/a.txt', 'a much longer body'), 60);",
+      ]);
+      expect(r).toEqual({ code: 0, out: "changed 18 3\n", err: "" });
+    });
+  });
 });
 
 test.describe("sh", () => {

@@ -1,7 +1,11 @@
 import { FsServer } from "../../fs/FsServer";
+import type { FsWatchEvent } from "./handler";
 import { createFsWorkerHandler, FsWorkerMessage } from "./handler";
 
-const handle = createFsWorkerHandler(new FsServer());
+const server = new FsServer(undefined, (clientId, watchId, eventType, filename) => {
+  self.postMessage({ type: "watchEvent", clientId, watchId, eventType, filename } satisfies FsWatchEvent);
+});
+const handle = createFsWorkerHandler(server);
 
 self.onmessage = (e: MessageEvent<FsWorkerMessage>) => handle(e.data);
 

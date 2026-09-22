@@ -1,6 +1,7 @@
 import { createFsClient } from "../../fs/fsClient";
 import { createSyscallClient, makeViews } from "../../protocols/syscall";
 import type { ChildProcessEvent, IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/childProcess";
+import type { IFsWatchHost } from "../../runtime/bindings/fs";
 import type { IStdinHost } from "../../runtime/runtime";
 import { ChildEvent, IProcessInit, ProcessEvent } from "./messages";
 import { runProcess } from "./run";
@@ -74,6 +75,16 @@ const deliverIpc = (chunk: Uint8Array | null) => {
   else pendingIpc.push(chunk);
 };
 
+// One handler total, like childProcess's onEvent: the fs_event_wrap binding (runtime/bindings/fs.ts)
+// dispatches to individual FSEvent instances itself, by watchId, once it has this.
+let onWatchEvent: ((event: { watchId: number; eventType: "rename" | "change"; filename: string }) => void) | null = null;
+
+const fsWatch: IFsWatchHost = {
+  onEvent: (handler) => {
+    onWatchEvent = handler;
+  },
+};
+
 const start = async (init: IProcessInit) => {
   const fs = createFsClient(
     createSyscallClient({
@@ -102,6 +113,7 @@ const start = async (init: IProcessInit) => {
       stdin,
       spawnSync,
       ipc: init.ipc ? ipc : undefined,
+      fsWatch,
     });
   } catch (error) {
     post({
@@ -145,6 +157,9 @@ self.onmessage = (event: MessageEvent<IProcessInit | ChildEvent>) => {
       break;
     case "child:exit":
       onChildEvent?.({ type: "exit", childPid: data.childPid, exitCode: data.exitCode, signal: data.signal });
+      break;
+    case "watchEvent":
+      onWatchEvent?.({ watchId: data.watchId, eventType: data.eventType, filename: data.filename });
       break;
   }
 };

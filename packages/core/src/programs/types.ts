@@ -1,6 +1,7 @@
 import type { IFsClient } from "../fs/fsClient";
 import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost, IForkIpcHost } from "../runtime/bindings/childProcess";
+import type { IFsWatchHost } from "../runtime/bindings/fs";
 import type { IStdinHost } from "../runtime/runtime";
 
 export interface IProgramContext {
@@ -24,6 +25,8 @@ export interface IProgramContext {
   spawnSync?: ISyscallClient;
   /** This process's own `fork()` IPC channel; only set when it was itself spawned via `fork()`. */
   ipc?: IForkIpcHost;
+  /** Delivers fs.watch change events pushed from the kernel; undefined outside a real process worker. */
+  fsWatch?: IFsWatchHost;
 }
 
 /** Resolves to the process exit status. */

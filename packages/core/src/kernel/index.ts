@@ -6,7 +6,7 @@ import {
   createSyscallClient,
   makeViews,
 } from "../protocols/syscall";
-import type { FsWorkerMessage } from "../workers/fs/handler";
+import type { FsWatchEvent, FsWorkerMessage } from "../workers/fs/handler";
 import {
   createProcessTable,
   IProcessTable,
@@ -65,6 +65,15 @@ const createKernelHost = async ({
     };
   });
 
+  // Reassigned once the fs worker is up: the only unprompted (non-ready, non-syscall-response)
+  // message it ever sends is a watch event, to be routed to whichever process registered that
+  // watch. `processes` isn't assigned until below - fine, this only ever runs later, once some
+  // process's fs.watch/watchFile actually fires (see kernel/processes.ts's notifyWatch).
+  fsWorker.onmessage = (event) => {
+    const data = event.data as FsWatchEvent;
+    if (data?.type === "watchEvent") processes.notifyWatch(data.clientId, data.watchId, data.eventType, data.filename);
+  };
+
   const sab = createSyscallBuffer();
   fsWorker.postMessage({ type: "register", clientId: KERNEL_FS_CLIENT_ID, sab });
 
@@ -86,6 +95,7 @@ const createKernelHost = async ({
       endStdin: (pid) => processes.endStdin(pid),
       writeIpc: (pid, chunk) => processes.writeIpc(pid, chunk),
       endIpc: (pid) => processes.endIpc(pid),
+      notifyWatch: (pid, watchId, eventType, filename) => processes.notifyWatch(pid, watchId, eventType, filename),
       kill: (pid, signal) => processes.kill(pid, signal),
       has: (pid) => processes.has(pid),
       get size() {
