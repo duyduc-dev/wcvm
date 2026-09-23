@@ -424,9 +424,10 @@ Done and verified in real Chromium:
   clean `pnpm exec playwright test` run (87/87) and `vitest run` (562/562) confirm no regressions.
 - Tests: 562 Vitest + 87 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's one remaining piece -
-blocked on the real-internet-access question in PLAN.md's "Real npm: feasibility findings"),
-Vite dev server/HMR, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (investigated and DEFERRED - its fetch
+stack has no path to a real network from inside wcvm's virtual `net`/`http`, confirmed by reading
+the actual installed source; see PLAN.md's "Real npm: feasibility findings" before picking this
+back up), Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
