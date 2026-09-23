@@ -8,6 +8,7 @@ import {
 } from "../protocols/syscall";
 import type { FsWatchEvent, FsWorkerMessage } from "../workers/fs/handler";
 import { createNetServer } from "./netServer";
+import { createPreviewRelay, PREVIEW_PID, type IPreviewRelay } from "./previewRelay";
 import {
   createProcessTable,
   IProcessTable,
@@ -27,6 +28,7 @@ export interface IKernelHost {
   /** Blocking fs access; only call from the kernel worker thread. */
   fs: IFsClient;
   processes: IProcessTable;
+  preview: IPreviewRelay;
   dispose(): void;
 }
 
@@ -109,9 +111,19 @@ const createKernelHost = async ({
 
   // `processes` isn't assigned until below either - same forward-reference trick as
   // spawnSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
-  // elsewhere accepts a connection or some data/close event actually fires.
+  // elsewhere accepts a connection or some data/close event actually fires. PREVIEW_PID is never
+  // a real process (see previewRelay.ts) - its own events go to `previewRelay` directly instead
+  // of a postMessage to a worker that doesn't exist.
   const netServer = createNetServer({
-    notify: (pid, event) => processes.notifyNet(pid, event),
+    notify: (pid, event) => (pid === PREVIEW_PID ? preview.onNetEvent(event) : processes.notifyNet(pid, event)),
+  });
+
+  // Same forward-reference trick again: `preview` is only actually called once the host page
+  // relays a real fetch() (kernel/../workers/kernel/handlers/preview.ts), well after this line.
+  const preview = createPreviewRelay({
+    connect: (ticket, port) => netServer.connect(PREVIEW_PID, ticket, port),
+    writeData: (connId, chunk) => netServer.data(PREVIEW_PID, connId, chunk),
+    close: (connId) => netServer.close(PREVIEW_PID, connId),
   });
 
   const processes = createProcessTable({
@@ -157,6 +169,7 @@ const createKernelHost = async ({
   return {
     fs,
     processes,
+    preview,
     dispose: () => fsWorker.terminate(),
   };
 };
