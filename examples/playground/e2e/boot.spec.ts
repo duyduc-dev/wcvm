@@ -1200,6 +1200,39 @@ test.describe("OPFS persistence", () => {
   });
 });
 
+test.describe("example: Node HTTP server", () => {
+  // The playground's own #example section (src/exampleServer.ts): spawns a real
+  // http.createServer() and leans on the already-wired preview pane (wc.preview.onListen()) to
+  // show it live - end-to-end coverage of process spawn + real http + the preview relay working
+  // together, none of which can be faked outside real Chromium.
+  test("running the example spawns a real server, shown live in the preview pane, with a working form and JSON endpoint", async ({ page }) => {
+    await page.click("#example-run");
+    await expect(page.locator("#example-status")).toHaveText(/Running on virtual port 3000/);
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/3000/");
+
+    const frame = page.frameLocator("#preview-frame");
+    await expect(frame.locator("h2")).toHaveText("Hello from a real Node.js server");
+
+    // A real form submission (GET /add?text=...), handled and 302-redirected by the guest
+    // server itself, followed by the real browser like any other redirect.
+    await frame.locator('input[name="text"]').fill("hello from playwright");
+    await frame.locator("form button").click();
+    await expect(frame.locator("li")).toHaveText("hello from playwright");
+
+    // The same real server's JSON endpoint, fetched from the host page.
+    const time = await page.evaluate(async () => {
+      const res = await fetch("/__wcvm_preview__/3000/api/time");
+      return { status: res.status, contentType: res.headers.get("content-type"), body: await res.json() };
+    });
+    expect(time.status).toBe(200);
+    expect(time.contentType).toBe("application/json");
+    expect(typeof time.body.time).toBe("string");
+
+    await page.click("#example-run"); // now labeled "stop example server"
+    await expect(page.locator("#example-status")).toHaveText("Stopped.");
+  });
+});
+
 test.describe("sh", () => {
   test("sequences, short-circuits, and pipes across real built-in programs", async ({ page }) => {
     const r = await spawn(page, "sh", ["-c", "false && echo skipped; echo one | cat; true && echo two"]);

@@ -1,4 +1,5 @@
 import { boot } from "wcvm";
+import { attachExampleServer } from "./exampleServer";
 import { attachPreview } from "./preview";
 import { attachTerminal } from "./terminal";
 
@@ -40,6 +41,13 @@ try {
   const previewFrame = document.querySelector<HTMLIFrameElement>("#preview-frame");
   if (previewEnable && previewStatus && previewFrame) {
     attachPreview(wc, { enableButton: previewEnable, status: previewStatus, frame: previewFrame });
+  }
+
+  const exampleRun = document.querySelector<HTMLButtonElement>("#example-run");
+  const exampleStatus = document.querySelector<HTMLElement>("#example-status");
+  const exampleSource = document.querySelector<HTMLElement>("#example-source");
+  if (exampleRun && exampleStatus && exampleSource) {
+    attachExampleServer(wc, { runButton: exampleRun, status: exampleStatus, source: exampleSource });
   }
 } catch (error) {
   if (app) app.textContent = `wcvm failed: ${(error as Error).message}`;

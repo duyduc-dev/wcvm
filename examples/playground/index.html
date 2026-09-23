@@ -11,6 +11,10 @@
       #preview { padding: 8px; border-top: 1px solid #444; margin-top: 8px; }
       #preview-status { font-size: 12px; color: #aaa; padding-bottom: 4px; }
       #preview-frame { width: 100%; height: 240px; border: 1px solid #444; background: #fff; }
+      #example { padding: 8px; border-top: 1px solid #444; margin-top: 8px; }
+      #example-label { font-size: 12px; color: #ddd; padding-bottom: 4px; }
+      #example-status { font-size: 12px; color: #aaa; padding: 4px 0; }
+      #example-source { font-size: 11px; max-height: 160px; overflow: auto; background: #111; padding: 8px; margin: 4px 0 0; white-space: pre-wrap; }
     </style>
   </head>
   <body>
@@ -20,6 +24,12 @@
       <button id="restart">restart</button>
     </div>
     <div id="terminal"></div>
+    <div id="example">
+      <div id="example-label">Example: a real Node.js HTTP server, live in the preview pane below</div>
+      <button id="example-run">run example server</button>
+      <div id="example-status">Not running.</div>
+      <pre id="example-source"></pre>
+    </div>
     <div id="preview">
       <button id="preview-enable">enable preview</button>
       <div id="preview-status">Preview disabled. A script's http.createServer().listen() will show here once enabled.</div>
