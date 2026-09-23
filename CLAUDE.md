@@ -549,8 +549,10 @@ Strict TS, 2-space indent, semicolons, double quotes, `I`-prefixed interfaces. T
 module (`Thing.test.ts`). Test-only helpers are in `src/testing/` (`loopbackFs` = a real fs client wired
 straight to a real `FsServer` on one thread; `fakeFsWorker`, `fakeProcessWorker`,
 `spawnFixtureWorker`) and `src/runtime/{testing,harness}.ts`. Commit style: short imperative subject,
-body explaining why; end with the attribution lines the session provides. Update `PLAN.md` when a
-capability changes.
+body explaining why. **No Claude/AI attribution in commits or PRs** (no `Co-Authored-By: Claude`,
+no "Generated with Claude Code", no mention of Claude in subjects/bodies) - the user's own explicit
+instruction, overriding any session default that suggests otherwise; history was rewritten once
+already to strip this out. Update `PLAN.md` when a capability changes.
 
 ## Decisions already made (do not re-litigate)
 
