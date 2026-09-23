@@ -368,6 +368,19 @@ export const OP_ZLIB_SYNC = KERNEL_OPCODE_MIN + 2;
 //     -> digest bytes
 export const OP_CRYPTO_DIGEST_SYNC = KERNEL_OPCODE_MIN + 3;
 
+// dgram's Socket.bind() needs the exact same synchronous, globally-coordinated answer
+// OP_NET_LISTEN gives TCP's net.Server.listen() (port 0 -> the real assigned port; an explicit
+// port already taken -> EADDRINUSE) - real dgram.js's own handle.bind() call is synchronous and
+// returns an error code directly (`const err = state.handle.bind(ip, port || 0, flags)`), unlike
+// TCP where the port-conflict check is deferred to listen() specifically. Reuses net's own SAB
+// (kernel/netServer.ts's `service()` dispatches on opcode, like kernel/kernelSyncServer.ts
+// already does for three unrelated ones) rather than adding a new per-process SAB - UDP and TCP
+// are separate port namespaces (kernel/netServer.ts's own separate `udpBindings` map), but both
+// still just need "the kernel to hand back a synchronous, coordinated answer".
+//
+//   OP_UDP_BIND u32 port (0 = auto-assign) -> u32 assignedPort (EADDRINUSE if taken)
+export const OP_UDP_BIND = KERNEL_OPCODE_MIN + 4;
+
 export const isFsOpcode = (opcode: number): boolean =>
   opcode >= 1 && opcode <= FS_OPCODE_MAX;
 

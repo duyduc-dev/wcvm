@@ -8,6 +8,7 @@ import { createInternalBinding, type IBindingContext } from "./bindings";
 import { createForkIpcPipe, type IChildProcessHost, type IForkIpcHost } from "./bindings/childProcess";
 import type { IFsWatchHost } from "./bindings/fs";
 import type { INetHost } from "./bindings/net";
+import type { IUdpHost } from "./bindings/udp";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
 import { createEsmResolver } from "./esm/resolve";
@@ -39,8 +40,10 @@ export interface IRuntimeHost {
   fsWatch?: IFsWatchHost;
   /** The virtual network's async half (connect/data/close); without it, TCP methods return ENOSYS/ENOTCONN. */
   net?: INetHost;
-  /** The virtual network's blocking half (net.Server.listen() only); without it, listen() returns ENOSYS. */
+  /** The virtual network's blocking half (net.Server.listen() and dgram's Socket.bind()); without it, listen()/bind() return ENOSYS. */
   netSync?: ISyscallClient;
+  /** UDP's async half (incoming datagrams); without it, dgram methods return ENOSYS/ENOTCONN. */
+  udp?: IUdpHost;
 }
 
 export interface IRuntimeOptions {
@@ -97,6 +100,7 @@ const createRuntime = (options: IRuntimeOptions) => {
     fsWatch: host.fsWatch,
     net: host.net,
     netSync: host.netSync,
+    udp: host.udp,
   };
   const internalBinding = createInternalBinding(bindingCtx);
   loader = createBuiltinLoader({ process, internalBinding, primordials });

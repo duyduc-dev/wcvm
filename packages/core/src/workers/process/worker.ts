@@ -3,6 +3,7 @@ import { createSyscallClient, makeViews } from "../../protocols/syscall";
 import type { ChildProcessEvent, IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/childProcess";
 import type { IFsWatchHost } from "../../runtime/bindings/fs";
 import type { INetHost, NetEvent } from "../../runtime/bindings/net";
+import type { IUdpHost, UdpEvent } from "../../runtime/bindings/udp";
 import type { IStdinHost } from "../../runtime/runtime";
 import { ChildEvent, IProcessInit, ProcessEvent } from "./messages";
 import { runProcess } from "./run";
@@ -101,6 +102,18 @@ const net: INetHost = {
   },
 };
 
+// One handler total, like net's own - runtime/bindings/udp.ts dispatches to individual UDP
+// instances itself, by port.
+let onUdpEvent: ((event: UdpEvent) => void) | null = null;
+
+const udp: IUdpHost = {
+  unbind: (port) => post({ type: "udp:unbind", port }),
+  send: (fromPort, toPort, chunk) => post({ type: "udp:send", fromPort, toPort, chunk }),
+  onEvent: (handler) => {
+    onUdpEvent = handler;
+  },
+};
+
 const start = async (init: IProcessInit) => {
   const fs = createFsClient(
     createSyscallClient({
@@ -136,6 +149,7 @@ const start = async (init: IProcessInit) => {
       fsWatch,
       net,
       netSync,
+      udp,
     });
   } catch (error) {
     post({
@@ -201,6 +215,9 @@ self.onmessage = (event: MessageEvent<IProcessInit | ChildEvent>) => {
       break;
     case "net:close":
       onNetEvent?.({ type: "close", connId: data.connId });
+      break;
+    case "udp:message":
+      onUdpEvent?.({ type: "message", port: data.port, fromPort: data.fromPort, chunk: data.chunk });
       break;
   }
 };

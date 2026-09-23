@@ -60,6 +60,7 @@ const setupServer = () => {
     attachNetClient: () => ({ sab: new SharedArrayBuffer(8), port: {} as MessagePort }),
     detachNetClient: () => {},
     netRelay: { unlisten: () => {}, connect: () => {}, data: () => {}, shutdown: () => {}, close: () => {}, releasePid: () => {} },
+    udpRelay: { unbind: () => {}, send: () => {}, releasePid: () => {} },
     emit: () => {},
   });
   const server = createKernelSyncServer({ processes: table, allocatePid: () => nextPid++ });

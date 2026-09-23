@@ -47,8 +47,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   inside a running script via `pipe_wrap`/`process_wrap`/`stream_wrap` bindings
   (`runtime/bindings/childProcess.ts`) instead of real libuv handles. `net`/`dgram` are vendored
   only because `internal/child_process.js` requires them unconditionally (they wrap each stdio
-  pipe in a `net.Socket`); real TCP is done now (see below), UDP/DNS are not (`udp_wrap`/
-  `tty_wrap`/`cares_wrap` are inert stubs). `child.stdin.write()`/`.end()` deliver for
+  pipe in a `net.Socket`); real TCP and UDP are both done now (see below), DNS is not (`tty_wrap`/
+  `cares_wrap` are inert stubs). `child.stdin.write()`/`.end()` deliver for
   real now (routed parent-worker -> kernel -> child-worker as ordinary `writeStdin`/`endStdin`,
   the same path top-level stdin uses). Killing (or the natural exit of) a process kills its whole
   subtree (`kernel/processes.ts`'s `finalize`'s `cascade` recursion over `childrenOf`): a
@@ -395,6 +395,64 @@ no-op). `windowBits`/`memLevel`/`strategy`/`dictionary` are accepted but ignored
   same input, and `randomBytes`/`randomUUID` producing real, distinct values) - the real browser
   `SubtleCrypto`/`crypto.getRandomValues()` can't be exercised outside Chromium. A full, clean
   `pnpm exec playwright test` run (87/87) and `vitest run` (562/562) confirm no regressions.
+- `dgram` (real UDP - the first item of the roadmap's standalone "UDP/DNS" item, worked
+  step-by-step after real npm was deferred): Node's real vendored `lib/dgram.js`/
+  `internal/dgram.js`, unmodified, over a real `internalBinding('udp_wrap')`
+  (`runtime/bindings/udp.ts`), mirroring `tcp_wrap`'s own "no real sockets, relay through the
+  kernel" design (`kernel/netServer.ts`, now handling BOTH protocols) but connectionless: no
+  listen()/accept(), just `bind()` (claim a port) and `send()` (fire-and-forget to whoever, if
+  anyone, is bound to the destination port - a real OS UDP socket drops silently when nobody's
+  listening, so this does too, no error surfaces to the sender). UDP and TCP are separate port
+  namespaces (`kernel/netServer.ts`'s own separate `udpBindings` map and ephemeral-port
+  allocator), the same way two real sockets never collide just because they share a port number.
+  Real `dgram.js`'s own `Socket.prototype.bind()` calls `state.handle.bind()` SYNCHRONOUSLY and
+  returns its error code directly (unlike TCP, where the port-conflict check is deferred
+  specifically to `listen()`) - so `bind()` needs the exact same globally-coordinated,
+  kernel-mediated answer `OP_NET_LISTEN` gives TCP's `listen()`. Rather than a new per-process
+  SAB, this reuses `OP_NET_LISTEN`'s existing one under a new opcode (`OP_UDP_BIND`,
+  `protocols/syscall.ts`) - `kernel/netServer.ts`'s own `service()` now dispatches between the two
+  by opcode, the same "one shared SAB, multiple unrelated opcodes" shape
+  `kernel/kernelSyncServer.ts` already established. Only udp4: `bind6()`/`connect6()`/`send6()`
+  all fail `EAFNOSUPPORT`, matching `tcp_wrap`'s own IPv6 stance - real `internal/dgram.js`'s own
+  `newHandle()` only swaps a handle onto those variants for an explicit
+  `dgram.createSocket('udp6')`, so a plain (default) `udp4` socket never reaches them.
+  Multicast/broadcast (`addMembership`, `setBroadcast`, ...) have no meaning in a single virtual
+  host - accepted, no-op, the same treatment `zlib.ts`'s ignored `windowBits`/`memLevel`/etc.
+  already has. `handle.lookup` needed no work at all: real `internal/dgram.js`'s own
+  `newHandle()` already binds it straight to the existing, already-shimmed `dns.lookup()`, never
+  touching this binding.
+  - **Real bug found and fixed, only surfaced by an actual receiving socket, not a
+    connect-refused-style unit test**: `send()`'s own synchronous "finish" return value
+    (`total + 1`, matching real `dgram.js`'s own `if (err >= 1) {...} ` convention for "done, no
+    `req.oncomplete` needed") delivers a datagram to the DESTINATION side's own `onmessage` -
+    which turned out to be handed a plain `Uint8Array`, not a real (sandbox) `Buffer`, so
+    `msg.toString()` in a guest script's `'message'` handler printed comma-joined byte values
+    (`TypedArray.prototype.toString`'s own inherited behavior) instead of decoding the bytes as
+    text. Real Node's native binding constructs a real Buffer before ever calling into JS -
+    `dgram.js`'s own `onMessage(nread, handle, buf, rinfo)` just re-emits `buf` as-is, with no
+    wrapping step of its own - so this binding has to do the same: `bindings/udp.ts`'s
+    `UdpRouter.dispatch()` now wraps every incoming chunk with the sandbox's own vendored
+    `Buffer.from(...)` (via `requireBuiltin("buffer")`, the same "get the real class from the
+    vendored module, don't reach for a platform one" pattern `childProcess.ts`'s own exec()/
+    execFile() output already uses) before handing it to `onmessage`. Caught immediately by a
+    quick manual smoke test exercising a real receive handler with `msg.toString()`, before any
+    formal Vitest coverage was even written for it.
+  - Verified: `runtime/udp.test.ts` (6 Vitest: `bind(0)` makes a real synchronous
+    `OP_UDP_BIND` call and reports the assigned port; an explicit port already bound surfaces as a
+    real `'error'` event with `EADDRINUSE`; `close()` releases the port via `unbind()`; `send()`
+    implicitly binds an ephemeral port first, then reaches the host as real bytes; an incoming
+    datagram fires `'message'` with a real `Buffer` and the sender's port in `rinfo`; a datagram to
+    a port nobody's bound to is simply never delivered, with no hang), `kernel/netServer.test.ts`'s
+    new UDP cases (6: auto-assigned ephemeral port; TCP and UDP as genuinely separate namespaces on
+    the same port number; a real `EADDRINUSE` for a second bind; `udpSend()` delivering to the
+    right pid and silently dropping when nobody's bound; `udpUnbind()`'s real-owner-only
+    semantics; `udpReleasePid()` dropping every port a pid held). 4 new Playwright tests in real
+    Chromium (a real client process sending a datagram to a real server process which echoes it
+    back; `bind(0)` auto-assigning different real ports to two different real processes; a second
+    real process binding an already-bound port getting a real `EADDRINUSE`; a datagram to a port
+    nobody's bound to being silently dropped, not a hang) - none of the actual cross-Process-Worker
+    postMessage relay can be exercised in the single-threaded Vitest suite. A full, clean
+    `pnpm exec playwright test` run (91/91) and `vitest run` (574/574) confirm no regressions.
 
 Real npm (vendoring the actual CLI) was investigated and DEFERRED: `zlib`/`crypto`, its two
 missing-builtin blockers, are both done (above), but its fetch stack (`make-fetch-happen` →
@@ -404,10 +462,12 @@ continuing past that (patching a real dependency's transport, or a from-scratch 
 was explicitly declined in favor of parking the feature. See "Real npm: feasibility findings"
 before picking this back up.
 
-Verified by Vitest (562) and Playwright in real Chromium (87), including a script reading a
+Verified by Vitest (574) and Playwright in real Chromium (91), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
-Not done: real npm (deferred - see above), UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
+Not done: real npm (deferred - see above), DNS (`dns.lookup()` is a fixed-address shim, not a
+real resolver - UDP itself is now done, see `dgram` above), `worker_threads`, `process.binding`,
+`node -p`.
 
 ### How the Node runtime is put together (src/runtime/)
 - `node/lib/**`: Node's own files, VERBATIM, generated by `scripts/vendor-node-lib.mjs` from
@@ -506,6 +566,12 @@ Not done: real npm (deferred - see above), UDP/DNS, `worker_threads`, `process.b
   and no Unix-domain sockets (`net.connect({path})`). `dns.lookup()` doesn't do a real lookup -
   every hostname resolves to the same virtual loopback address (`runtime/shims.ts`), since
   there's no real network to resolve one against.
+- `dgram`: the same fixed virtual loopback address/family as `net` above, for the same reason
+  (`runtime/bindings/udp.ts`). No IPv6 (`bind6`/`connect6`/`send6` always fail) and no multicast/
+  broadcast (`addMembership`/`setBroadcast`/etc. are accepted but no-ops) - nothing for either to
+  mean in a single virtual host with one address. A datagram to a port nobody's bound to is
+  silently dropped, matching a real OS UDP socket's own unreliable-delivery contract - no ICMP
+  port-unreachable is modeled.
 - `http`: the hand-written parser (`runtime/bindings/httpParser.ts`, see "Current state") doesn't
   implement llhttp's callback-return-value pause-at-headers protocol, used by real Node for
   `CONNECT`/raw-`Upgrade` proxying (returning a sentinel from `kOnHeadersComplete` to say "stop,
@@ -601,7 +667,7 @@ module: `Thing.test.ts`).
   "Current state").
 - Not done: `$` expansion, globbing, subshells, control-flow keywords, `&` background jobs.
 
-### Phase 6 - Network + preview  (DONE - see "Current state"; only DNS/UDP remain, tracked separately below)
+### Phase 6 - Network + preview  (DONE - see "Current state"; only DNS remains, low-value, see below)
 - Kernel port registry: `listen`/`accept`/`respond` (chunk large bodies) - done, see "Current
   state"'s `net` entry: a real virtual TCP network (`kernel/netServer.ts`), reached from guest
   code via a real `tcp_wrap` (`runtime/bindings/net.ts`). No separate `respond`/large-body
@@ -615,8 +681,12 @@ module: `Thing.test.ts`).
   all done, see "Current state": `wc.preview.enable()`/`wc.preview.url()`/`wc.preview.onListen()`
   (`apis/Preview.ts`), `kernel/previewRelay.ts`, `workers/preview/PreviewServiceWorker.ts`,
   `kernel/netServer.ts`'s `onListenChange` hook, `examples/playground/src/preview.ts`.
-- Remaining (not blocking this phase, tracked in the roadmap's own DNS/UDP item below): DNS
-  (`dns.lookup()` is a fixed-address shim for now, not a real resolver).
+- UDP (`dgram`) - done, see "Current state"'s `dgram` entry: `runtime/bindings/udp.ts`, a new
+  `OP_UDP_BIND` opcode sharing `net`'s own SAB, `kernel/netServer.ts`'s separate `udpBindings`
+  namespace.
+- Remaining (not blocking this phase): DNS (`dns.lookup()` is a fixed-address shim for now, not a
+  real resolver - there's no real network to resolve a name against in a single virtual host
+  anyway, so this is low-value; revisit only if a real need for it surfaces).
 
 ### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence + zlib + crypto DONE - see "Current state"; real npm DEFERRED, see "Real npm: feasibility findings")
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
