@@ -1067,6 +1067,42 @@ test.describe("node", () => {
   });
 });
 
+test.describe("preview UI", () => {
+  // The playground's own #preview pane (src/preview.ts): wires wc.preview.onListen() to an
+  // iframe with no polling or manual refresh - real coverage needs the actual iframe navigation
+  // and Service Worker relay this describe's tests exercise, not just the onListen() event
+  // plumbing itself (unit-tested in packages/core/src/preview.test.ts and kernel/netServer.test.ts).
+  test("enabling preview, then a real server listening, points the iframe at it and loads its content", async ({ page }) => {
+    await page.click("#preview-enable");
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const server = await wc.spawn("node", [
+        "-e",
+        "const http = require('http');" +
+          "http.createServer((req, res) => res.end('preview ui works')).listen(6100, () => console.log('ready'));",
+      ]);
+      (window as unknown as { __server: typeof server }).__server = server;
+      const reader = server.stdout.getReader();
+      const first = await reader.read();
+      if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+    });
+
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/6100/");
+    await expect(page.locator("#preview-status")).toHaveText("Previewing virtual port 6100.");
+    await expect(page.frameLocator("#preview-frame").locator("body")).toHaveText("preview ui works");
+
+    await page.evaluate(async () => {
+      const server = (window as unknown as { __server: { kill: () => void; exit: Promise<unknown> } }).__server;
+      server.kill();
+      await server.exit;
+    });
+
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+  });
+});
+
 test.describe("sh", () => {
   test("sequences, short-circuits, and pipes across real built-in programs", async ({ page }) => {
     const r = await spawn(page, "sh", ["-c", "false && echo skipped; echo one | cat; true && echo two"]);

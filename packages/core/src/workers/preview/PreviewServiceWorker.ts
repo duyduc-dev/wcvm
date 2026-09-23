@@ -3,7 +3,7 @@
 // virtual port. This worker never talks to the Kernel Worker directly - a Service Worker can only
 // postMessage a Client (a window) or another same-registration Service Worker, never an arbitrary
 // dedicated Worker - so it relays through whichever window client it's controlling; that window's
-// own preview glue (src/preview.ts) forwards the request to the kernel over the SAME
+// own preview glue (src/apis/Preview.ts) forwards the request to the kernel over the SAME
 // request/response channel every other host<->kernel call already uses (kernelBridge.request()).
 // Everything else (a non-preview fetch, a navigate with no client yet) is left alone: not calling
 // event.respondWith() means the browser just handles it as if this worker didn't exist.
@@ -17,13 +17,12 @@
 import { parsePreviewPath, type IPreviewFetchMessage, type IPreviewFetchReply } from "../../protocols/preview";
 
 interface IClient {
+  frameType?: "top-level" | "nested" | "auxiliary" | "none";
   postMessage(message: unknown): void;
 }
 
 interface IFetchEvent {
   request: Request;
-  clientId: string;
-  resultingClientId?: string;
   respondWith(response: Promise<Response> | Response): void;
   waitUntil(promise: Promise<unknown>): void;
 }
@@ -45,6 +44,7 @@ interface IServiceWorkerGlobal {
   clients: {
     claim(): Promise<void>;
     get(id: string): Promise<IClient | undefined>;
+    matchAll(options?: { type?: "window" }): Promise<IClient[]>;
   };
 }
 
@@ -55,7 +55,7 @@ sw.addEventListener("install", () => {
 });
 sw.addEventListener("activate", (event) => {
   // Lets an already-open page start being controlled (and so intercepted) without a reload -
-  // src/preview.ts's enable() waits for exactly this before resolving.
+  // src/apis/Preview.ts's enable() waits for exactly this before resolving.
   event.waitUntil(sw.clients.claim());
 });
 
@@ -80,22 +80,50 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
   });
 };
 
+// Always relay through the top-level wcvm page that called enable() - never event.clientId/
+// resultingClientId. Those identify whoever is MAKING the request, which for a preview iframe
+// NAVIGATING to this URL is the iframe's own (nested) browsing context, not the host page: it has
+// no message listener of its own (its document is the guest server's raw response, not wcvm's own
+// JS), and worse, resultingClientId names a client that doesn't exist yet at fetch time for a
+// genuine cross-document navigation - clients.get() on it never resolves (a real, observed
+// Chromium hang, not a hypothetical). A top-level client, by contrast, always already exists
+// (it's the page that's running right now) and is exactly the one enable()'s own message listener
+// is attached to - true whether the request came from that page's own fetch() (already covered by
+// the existing preview:fetch tests) or, now, from an iframe's navigation or its own subresource
+// fetches once loaded (also a nested client, so still correctly skipped).
+const findHostClient = async (): Promise<IClient | undefined> => {
+  const clients = await sw.clients.matchAll({ type: "window" });
+  return clients.find((client) => client.frameType === "top-level");
+};
+
+// A page with COEP: require-corp (needed here for SharedArrayBuffer/crossOriginIsolated, see
+// examples/playground/vite.config.ts) can only embed an <iframe> whose own response ALSO
+// declares a matching Cross-Origin-Embedder-Policy header - real Chromium enforcement
+// (net::ERR_BLOCKED_BY_RESPONSE otherwise), independent of same-origin-ness. The guest server has
+// no idea its response is being iframed into a COEP page, so every response this SW hands back -
+// success or error - adds it; without it, a preview iframe navigation is silently blocked while a
+// plain fetch() of the same URL (no nested browsing context involved) works fine either way.
+const previewResponse = (body: BodyInit | null, init: ResponseInit): Response => {
+  const headers = new Headers(init.headers);
+  headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+  return new Response(body, { ...init, headers });
+};
+
 const respondFromGuest = async (event: IFetchEvent, port: number, path: string): Promise<Response> => {
-  const clientId = event.clientId || event.resultingClientId;
-  const client = clientId ? await sw.clients.get(clientId) : undefined;
-  if (!client) return new Response("wcvm preview: no host page available to relay the request to", { status: 502 });
+  const client = await findHostClient();
+  if (!client) return previewResponse("wcvm preview: no host page available to relay the request to", { status: 502 });
 
   const method = event.request.method;
   const headers: [string, string][] = [...event.request.headers.entries()];
   const body = method === "GET" || method === "HEAD" ? null : new Uint8Array(await event.request.arrayBuffer());
 
   const reply = await relay(client, { port, path, method, headers, body });
-  if (!reply.ok) return new Response(`wcvm preview relay error: ${reply.error}`, { status: 502 });
+  if (!reply.ok) return previewResponse(`wcvm preview relay error: ${reply.error}`, { status: 502 });
   const { result } = reply;
   // result.body's static type (Uint8Array<ArrayBufferLike>, from structured-clone deserialization)
   // is stricter than what BodyInit's TS definition accepts - same generic-TypedArray friction as
   // httpParser.ts's own `buffer` field; a real Uint8Array is always a valid BodyInit at runtime.
-  return new Response(result.body as BufferSource, { status: result.status, statusText: result.statusMessage, headers: result.headers });
+  return previewResponse(result.body as BufferSource, { status: result.status, statusText: result.statusMessage, headers: result.headers });
 };
 
 sw.addEventListener("fetch", (event) => {

@@ -7,7 +7,8 @@ git history: `git show 5e7e388:PROGRESS.md`.
 ## What this is
 
 `wcvm` (`packages/core`) is a WebContainer-style sandbox: Node.js projects run 100% in the browser
-tab, in Web Workers, with no backend. Public API: `boot()` -> `{ spawn, fs, diagnostics, ready }`.
+tab, in Web Workers, with no backend. Public API: `boot()` -> `{ spawn, fs, diagnostics, ready,
+preview }`.
 The design follows `vivari` (an MIT open-source WebContainer, a sibling checkout at
 `~/workspace/duck/vivari` on the original machine - reference only, not a dependency). We rewrote in
 strict TypeScript; we did NOT copy vivari's JS.
@@ -133,27 +134,34 @@ Done and verified in real Chromium:
   "stop at headers" path). Verified in real Chromium for a real client process GETting from a
   real server process (status/headers/body round-tripping) and a real client process POSTing a
   body a real server process streams and echoes back.
-- Preview Service Worker relay (backend only, no UI - see PLAN.md's Phase 6 for the explicit
-  scope decision): `wc.preview.enable()` registers a real Service
-  Worker (`workers/preview/PreviewServiceWorker.ts`, built to
-  `dist/workers/preview/PreviewServiceWorker.js` - `package.json`'s `"./preview-sw"` export already
-  pointed here, a leftover from the old `duckwc` implementation that happened to name the right
-  path) that intercepts a same-origin `fetch()` to `wc.preview.url(port, path)` (`/__wcvm_preview__/
-  <port>/<path>`) and relays it into whatever real `http.createServer()` a script has listening on
-  that virtual port - `kernel/previewRelay.ts` opens one real virtual TCP connection per fetch (via
-  the SAME `kernel/netServer.ts` a real process's own `net.connect()` uses, under a reserved
-  `PREVIEW_PID = 0` sentinel - never a real pid), writes a hand-encoded HTTP/1.1 request, and parses
-  the response with the ALREADY-BUILT `HttpMessageParser` (`runtime/bindings/httpParser.ts` - no new
-  parsing logic needed). The Service Worker itself never talks to the Kernel Worker directly (a SW
-  can only `postMessage` a window `Client`, never an arbitrary dedicated Worker) - it relays through
-  whichever window it's controlling, which forwards to the kernel over the EXISTING
-  `kernelBridge.request()` RPC every other host<->kernel call already uses (a new `"preview:fetch"`
-  route), so no new MessageChannel/port-transfer plumbing was needed at all.
-  - **Real bug found and fixed**: `netServer.connect()` notifies the connecting side
-    (`net:connectResult`) BEFORE the listening side (`net:incoming`) - harmless for every other
-    caller, where `notify` is always an async `postMessage` to a real process worker, so the
-    listener's own notification is already in flight by the time that process could react. `
-    PREVIEW_PID`'s own `notify` is a direct, SYNCHRONOUS call (kernel/index.ts) - `previewRelay`
+- Preview Service Worker relay, plus a real iframe pane wired into the playground UI:
+  `wc.preview.enable()` registers a real Service Worker (`workers/preview/PreviewServiceWorker.ts`,
+  built to `dist/workers/preview/PreviewServiceWorker.js` - `package.json`'s `"./preview-sw"` export
+  already pointed here, a leftover from the old `duckwc` implementation that happened to name the
+  right path) that intercepts a same-origin `fetch()` to `wc.preview.url(port, path)`
+  (`/__wcvm_preview__/<port>/<path>`) and relays it into whatever real `http.createServer()` a
+  script has listening on that virtual port - `kernel/previewRelay.ts` opens one real virtual TCP
+  connection per fetch (via the SAME `kernel/netServer.ts` a real process's own `net.connect()`
+  uses, under a reserved `PREVIEW_PID = 0` sentinel - never a real pid), writes a hand-encoded
+  HTTP/1.1 request, and parses the response with the ALREADY-BUILT `HttpMessageParser`
+  (`runtime/bindings/httpParser.ts` - no new parsing logic needed). `wc.preview.onListen(handler)`
+  (`src/apis/Preview.ts`, moved here from a top-level `src/preview.ts` to match the existing
+  `apis/Fs.ts`/`apis/Process.ts` convention - `IPreviewApi` is now exported from `index.ts` too,
+  like `IFs`) fires whenever any guest `net`/`http` server starts or stops listening on a virtual
+  port, with no polling: `kernel/netServer.ts`'s `service()`/`unlisten()`/`releasePid()` gained an
+  `onListenChange` hook, wired in `kernel/index.ts` to `emit({ type: "net:listen" | "net:unlisten",
+  pid, port })` - a new unprompted kernel-worker-to-host push, the same "the kernel worker already
+  has a postMessage channel to the host" shape `"ready"`/`"kernel:error"` already use
+  (`bridges/bridgeHandler.ts`'s `emit` routes any non-`"kernel-response"` message to
+  `kernelBridge.on(type, handler)` listeners). `examples/playground/src/preview.ts` wires this to a
+  real `<iframe>` pane (`index.html`'s `#preview-frame`): clicking "enable preview" calls
+  `enable()` then `onListen()`, pointing the iframe at `url(port)` the instant a script's `.listen()`
+  succeeds, and resetting it to `about:blank` if that same port stops listening.
+  - **Real bug found and fixed (Service Worker relay)**: `netServer.connect()` notifies the
+    connecting side (`net:connectResult`) BEFORE the listening side (`net:incoming`) - harmless for
+    every other caller, where `notify` is always an async `postMessage` to a real process worker,
+    so the listener's own notification is already in flight by the time that process could react.
+    `PREVIEW_PID`'s own `notify` is a direct, SYNCHRONOUS call (kernel/index.ts) - `previewRelay`
     writing the request immediately raced ahead of `netServer.connect()`'s own still-pending
     `net:incoming` call, so the real server saw `net:data` for a connection it hadn't registered
     yet and silently dropped it. Only surfaced against a REAL listening server, not the
@@ -161,6 +169,55 @@ Done and verified in real Chromium:
     comment. A real Chromium e2e test caught this; nothing at the Vitest/fake-net level could
     (the fake net in `previewRelay.test.ts` doesn't reproduce the synchronous-vs-async timing
     difference unless deliberately modeled, which the tests now do explicitly).
+  - **Real bug found and fixed (Service Worker relay for a NAVIGATING iframe, as opposed to a
+    top-level page's own `fetch()`)**: `respondFromGuest` used to relay through
+    `sw.clients.get(event.clientId || event.resultingClientId)` - correct for the top page's own
+    `fetch()` (`clientId` IS that page already), but wrong for an `<iframe>` NAVIGATING straight to
+    a preview URL: `clientId` is empty for a navigation and `resultingClientId` names a client that
+    doesn't exist yet at fetch time for a genuine cross-document load - `clients.get()` on it never
+    resolves in real Chromium (a hang, not a hypothetical - confirmed by instrumenting the SW with
+    `console.log`, which routes to the SW's own DevTools target, not `page.on("console")`, since a
+    dedicated Worker's console output doesn't bubble to a grandchild-of-page target either - only a
+    Node-side vendored `console.log` reaching the guest's own stdout, or Playwright's
+    `context.on("serviceworker")`, actually surfaces it). Fixed by always relaying through
+    whichever client has `frameType === "top-level"` (`sw.clients.matchAll({ type: "window" })`) -
+    that's always the wcvm host page itself (an iframe's own browsing context is `"nested"`),
+    regardless of whether the request came from that page's own `fetch()` or a preview iframe's
+    navigation or its own later subresource fetches.
+  - **Real bug found and fixed (COEP blocks the iframe, independently of the above)**: the
+    playground's own page needs `Cross-Origin-Embedder-Policy: require-corp` for
+    `crossOriginIsolated`/`SharedArrayBuffer` - real Chromium then refuses to embed an `<iframe>`
+    whose OWN response doesn't also declare a COEP header, regardless of same-origin-ness
+    (`net::ERR_BLOCKED_BY_RESPONSE`). The guest server has no idea it's being iframed into a COEP
+    page, so `PreviewServiceWorker.ts`'s `previewResponse()` helper adds
+    `Cross-Origin-Embedder-Policy: require-corp` to every response it hands back (success or
+    error) - invisible to a plain top-level `fetch()` of the same URL, since that check only
+    applies to a nested browsing context's own navigation, which is exactly why the earlier
+    fetch()-only preview tests never caught it.
+  - **Real bug found and fixed (the actual root cause of a THIRD, harder symptom - a still-mysterious
+    `net::ERR_ABORTED` that survived both fixes above)**: `runtime/bindings/net.ts`'s `TCP.close()`
+    used `this.port !== null` to decide whether a handle being closed is a *listening server* that
+    should be unregistered/unlistened. But an ACCEPTED connection's own handle ALSO gets `.port` set
+    to the same virtual port its server listens on, purely for `getsockname()`/`getpeername()`
+    reporting (`NetRouter.dispatch`'s `"incoming"` case: `accepted.port = event.port`) - so
+    destroying any ONE accepted connection (an ordinary `Connection: close`-style socket end, e.g.
+    the preview relay's own one-shot HTTP fetch finishing) silently unregistered and unlistened the
+    WHOLE STILL-RUNNING SERVER, `pid`+`port` matching exactly. `preview.ts`'s own `onListen()`-driven
+    UI reacted correctly to this: a real `net:listen` event was immediately followed by a real, if
+    spurious, `net:unlisten` for the same port - which is what made the iframe's own in-flight
+    navigation abort (the UI's own `onListen` handler reset `frame.src` to `about:blank` on the
+    bogus "unlisten"). No previous test caught this because every prior `net`/`http`/`preview` test
+    either used a single request-response with no reason to notice the listener disappearing
+    afterward, or explicitly called `server.close()` itself (where `isListening` was already true
+    for the RIGHT reason). Found by exhaustively tracing (stack traces printed via the SANDBOXED
+    script's own vendored `console.log`, which reaches real stdout - `page.on("console")` and even
+    `worker.on("console")` on the Kernel Worker do NOT surface a nested Process Worker's own
+    console output, since it's a worker-of-a-worker, a grandchild target CDP doesn't auto-attach
+    to). Fixed with a new `isListening` flag, set true only inside a real, successful `listen()`
+    call and checked alongside `port !== null` in `close()`. Regression test:
+    `runtime/net.test.ts`'s "destroying an accepted connection does not unlisten the still-running
+    server" (verified it actually fails without the fix by temporarily reverting `net.ts` and
+    re-running).
   - Also found: Vite's default `assetsInlineLimit` (4 KiB) inlined the built SW file (2.39 KB) as
     a `data:` URL when referenced via `new URL(..., import.meta.url)` from a small enough consumer
     bundle - `navigator.serviceWorker.register()` rejects a `data:` URL (opaque origin). Fixed in
@@ -170,19 +227,19 @@ Done and verified in real Chromium:
     stale `duckwc`-era `/dwc-preview-sw.js` middleware; the leftover `examples/playground/public/
     dwc-preview-sw.js` / `dist/dwc-preview-sw.js` build artifacts (both gitignored, unrelated old
     protocol) were deleted.
-  - Verified: `kernel/previewRelay.test.ts` (5 Vitest, fake net) and
-    `workers/kernel/handlers/preview.test.ts` (3 Vitest) both passing; 3 Playwright tests under
-    `test.describe("preview", ...)` in `examples/playground/e2e/boot.spec.ts` (GET round-trip
-    through a real listening server, a POST body reaching the real handler, and a
-    port-nobody's-listening-on 502) all passing. A full, clean `pnpm exec playwright test` run
-    (the mandatory full-suite gate, 77/77) confirmed no regressions - the two earlier flaky
-    failures (a different unrelated test each time, on a `page.goto("/")` timeout) were host
-    machine resource contention, not a real issue.
-- Tests: 495 Vitest + 77 Playwright (Chromium). See "Verifying".
+  - Verified: `kernel/previewRelay.test.ts` (5 Vitest, fake net), `workers/kernel/handlers/
+    preview.test.ts` (3 Vitest), `kernel/netServer.test.ts` (6 Vitest, the new `onListenChange`
+    hook), `apis/Preview.test.ts` (5 Vitest, `url()`/`onListen()` against a fake kernel bridge), and
+    the new regression test above all pass; 4 Playwright tests under `examples/playground/e2e/
+    boot.spec.ts` (the original GET round-trip/POST body/502-for-nobody-listening 3, plus a new
+    `test.describe("preview UI", ...)` exercising the real iframe end-to-end: click "enable
+    preview", spawn a real `http.createServer()`, assert the iframe's `src` and rendered content,
+    kill the server, assert the pane resets) all pass. A full, clean `pnpm exec playwright test`
+    run (78/78) and `vitest run` (507/507) confirm no regressions.
+- Tests: 507 Vitest + 78 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): the rest of preview (an iframe pane actually wired into
-a UI - deliberately out of scope for this slice), UDP/DNS,
-fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): UDP/DNS, fetcher worker + real `npm`, OPFS persistence,
+Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -369,6 +426,29 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   actual `http.createServer()` handler was integration-tested end-to-end. Fixed by narrowing the
   catch to only `HttpParseError` (the parser's own genuine error type) and rethrowing everything
   else untouched.
+- A `net.TCP` handle's `.port` field is NOT a reliable "is this the listening server" check: an
+  ACCEPTED connection's own handle also gets `.port` set to the server's virtual port, purely for
+  `getsockname()` (`runtime/bindings/net.ts`'s `NetRouter.dispatch`'s `"incoming"` case). Checking
+  only `port !== null` in `close()` meant destroying any ONE accepted connection (e.g. an ordinary
+  HTTP response ending its socket) silently unregistered and unlistened the WHOLE server for every
+  future request - a real bug only visible once something kept reacting to `net:listen`/
+  `net:unlisten` events over time (the preview iframe UI's `onListen()`; a single request/response
+  test never notices the listener vanish afterward). Fixed with a separate `isListening` flag, set
+  only by a real successful `listen()`. Debugging this needed the SANDBOXED SCRIPT's own vendored
+  `console.log` (routes to real stdout) - neither `page.on("console")` nor even a Kernel Worker's
+  `worker.on("console")` surfaces a Process Worker's own output, since it's a worker spawned BY the
+  Kernel Worker, a grandchild-of-page target CDP doesn't auto-attach to.
+- A Service Worker's `respondWith()`-relay-through-a-window-client trick (preview relay) breaks for
+  an `<iframe>` NAVIGATING straight to the intercepted URL, as opposed to the top page calling
+  `fetch()` itself: `event.clientId` is empty for a navigation, and `event.resultingClientId` names
+  a client that doesn't exist yet at fetch time for a genuine cross-document load -
+  `sw.clients.get(resultingClientId)` never resolves in real Chromium (a hang). Fix: relay through
+  whichever client has `frameType === "top-level"` (`sw.clients.matchAll({ type: "window" })`)
+  instead - always the actual host page, regardless of who's making the request. Separately, a page
+  with `Cross-Origin-Embedder-Policy: require-corp` (needed for `SharedArrayBuffer`) refuses to
+  embed an iframe whose OWN response doesn't also declare a COEP header (`net::ERR_BLOCKED_BY_RESPONSE`,
+  independent of same-origin-ness) - invisible to a plain `fetch()` of the same URL, since that
+  check is specific to a nested browsing context's own navigation.
 
 ## Conventions
 

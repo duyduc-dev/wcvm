@@ -1,4 +1,5 @@
 import { boot } from "wcvm";
+import { attachPreview } from "./preview";
 import { attachTerminal } from "./terminal";
 
 const wc = boot();
@@ -29,6 +30,13 @@ try {
     select.addEventListener("change", start);
     restart.addEventListener("click", start);
     await start();
+  }
+
+  const previewEnable = document.querySelector<HTMLButtonElement>("#preview-enable");
+  const previewStatus = document.querySelector<HTMLElement>("#preview-status");
+  const previewFrame = document.querySelector<HTMLIFrameElement>("#preview-frame");
+  if (previewEnable && previewStatus && previewFrame) {
+    attachPreview(wc, { enableButton: previewEnable, status: previewStatus, frame: previewFrame });
   }
 } catch (error) {
   if (app) app.textContent = `wcvm failed: ${(error as Error).message}`;

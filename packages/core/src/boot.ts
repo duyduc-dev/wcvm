@@ -1,11 +1,11 @@
 import { createFsApi } from "./apis/Fs";
+import { createPreviewApi } from "./apis/Preview";
 import { createProcessApi } from "./apis/Process";
 import { createKernelBridge } from "./bridges/kernel";
 import { WcvmError } from "./errors/WcvmError";
 import { ISpawnOptions, IState } from "./models";
 import { createDiagnostics } from "./protocols/diagnostics";
 import { createState } from "./protocols/state";
-import { createPreviewApi } from "./preview";
 import { isCrossOriginIsolated } from "./utilities";
 
 interface IBootOptions {

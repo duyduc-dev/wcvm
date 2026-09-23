@@ -1,6 +1,6 @@
 // The wire format for previewing a guest script's own listening http.Server, and the URL scheme
 // a fetch() is recognized by. Shared by three very different contexts - the Service Worker
-// (workers/preview/PreviewServiceWorker.ts), the main thread's relay glue (src/preview.ts), and
+// (workers/preview/PreviewServiceWorker.ts), the main thread's relay glue (src/apis/Preview.ts), and
 // the kernel worker's own request handler (workers/kernel/handlers/preview.ts) - so it stays
 // dependency-free (no DOM lib, no worker-only globals) and framework-free.
 
