@@ -117,9 +117,25 @@ Done and verified in real Chromium:
   Chromium for a real client and server process (different Process Workers) exchanging data,
   `listen(0)` assigning different real ports across processes, a real `EADDRINUSE`, and a real
   `ECONNREFUSED`.
-- Tests: 468 Vitest + 72 Playwright (Chromium). See "Verifying".
+- `http.createServer`/`http.request`/`http.get` (real vendored `http.js`/`_http_server.js`/
+  `_http_client.js`/`_http_outgoing.js`/`_http_common.js`/`_http_agent.js`/`_http_incoming.js`):
+  runs entirely on top of `net` (above) - `http` opens no socket of its own, it drives a real
+  `net.Socket`/`net.Server`. Real Node's own HTTP parsing is `llhttp`, a native C++/Wasm binding,
+  so unlike everything else in this sandbox `internalBinding('http_parser')` isn't vendorable -
+  `runtime/bindings/httpParser.ts`'s `HttpMessageParser` is a genuinely new, hand-written
+  incremental HTTP/1.1 wire-format parser (start-line, flat header pairs, `Content-Length`/
+  chunked/close-delimited body framing, keep-alive, pipelining, Upgrade/CONNECT detection),
+  wrapped by `runtime/bindings/http.ts`'s `HTTPParser` class to match the numeric callback-slot/
+  `ConnectionsList`/`methods` shape real vendored `_http_common.js` expects. HEAD responses and
+  1xx/204/304 status codes are given no body regardless of `Content-Length`, implemented directly
+  rather than via llhttp's callback-return-value pause protocol (not implemented - unneeded for
+  ordinary GET/POST/response handling; an Upgrade/CONNECT is still detected via the parser's own
+  "stop at headers" path). Verified in real Chromium for a real client process GETting from a
+  real server process (status/headers/body round-tripping) and a real client process POSTing a
+  body a real server process streams and echoes back.
+- Tests: 487 Vitest + 74 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): real `http` + preview Service Worker, UDP/DNS,
+Not done (roadmap order, see PLAN.md): preview Service Worker, UDP/DNS,
 fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
@@ -289,6 +305,24 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   requires `stream_wrap`/`pipe_wrap` unconditionally at module load, and both are built by
   `childProcess.ts`'s own `ChildRouter`, which throws if no host is wired - regardless of
   whether the script (or test) ever touches `child_process` itself.
+- `HTTPParser.execute()` (`runtime/bindings/http.ts`) originally wrapped its call into the real
+  parser (`HttpMessageParser.execute()`, `httpParser.ts`) in a blanket `try { ... } catch (error)
+  { return error instanceof Error ? error : new Error(...); }` - meant to turn a genuine malformed-
+  message error into the "parse failed" value real vendored `_http_server.js`/`_http_client.js`
+  expect `execute()` to be able to return. But `HttpMessageParser.execute()`'s own call stack runs
+  straight through to `onHeadersComplete`, which is how the real request/response handler chain
+  gets invoked (`server.emit('request', req, res)`, eventually the user's own handler) - so
+  *anything* that handler does synchronously, including calling `process.exit()`, throws up
+  through that same stack and got silently caught and downgraded to a returned `Error` instead of
+  propagating. Real llhttp has no such JS-level catch in the middle of its native call stack, so
+  this was purely an artifact of this sandbox's own wrapper. Symptom: a server's request handler
+  ran (its own `console.log`s appeared), `process.exit(0)` was reached, and the process just hung
+  forever instead of exiting - no uncaught-exception handler ever fired either, since the throw
+  never got that far. Not caught by the parser's own unit tests (`httpParser.test.ts` - pure
+  parsing logic, no user callbacks in the loop) nor by typecheck/lint; only surfaced once an
+  actual `http.createServer()` handler was integration-tested end-to-end. Fixed by narrowing the
+  catch to only `HttpParseError` (the parser's own genuine error type) and rethrowing everything
+  else untouched.
 
 ## Conventions
 

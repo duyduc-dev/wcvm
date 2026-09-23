@@ -101,6 +101,15 @@
     "internal/socket_list": "f28aa47cd9e0cbe1bc3ae03b669f2a05a97557492f4448b5907ddefa8f0b4fe3",
     "internal/deps/acorn/acorn/dist/acorn": "2261c5f0e4abe860e889dfc67081683a4ba4d27deb7f4cbc8ad06a1b7fdd510c",
     "internal/streams/fast-utf8-stream": "616dd036d28e5ba37efab0e51401f09d6d1bb55424805557a9f02eb837edf2a1",
-    "internal/child_process/serialization": "59f0124b35fa9127200c10c5aa206b60ceaf0951d11947ce3e9a4afb1844f4f2"
+    "internal/child_process/serialization": "59f0124b35fa9127200c10c5aa206b60ceaf0951d11947ce3e9a4afb1844f4f2",
+    "http": "4e8f6347631eb73481e6bd11b26a53c4bd89b3cff42a4fed2eac7e8d48e6293e",
+    "_http_agent": "45bfd382a959c7107817a4f9d10dfb8c4853d382ad8bf51541c950f48e9c91b5",
+    "internal/http": "d8ab1e14124c261de26ae7bb23a5e8a1785f8eeee280673edd93aeec31f748d6",
+    "_http_client": "1ee78a7b5d751d98e6bb26a83a0e0d2f4058d8d96934f89354e142b15b6b14aa",
+    "_http_common": "8d30323f5a0b01cb521de0ddde56ed374c063171f8346d0992ba653f36741879",
+    "_http_server": "08a248b4a3e3ff74f3a43242ffa48c58a3f360183608dcdeb6528a40fec8d130",
+    "_http_outgoing": "0b48810dfa356de9cf82604443317e0f3bcf07e7d724ff80132cdca57d94c0c4",
+    "internal/freelist": "86011a0ec68a26f52a139cde807c3de703c240d5f721558b92d647562ee92af2",
+    "_http_incoming": "24c177fb6151c5b0131cb1658d1c9f0107b8137630b15be20401fb0f76a605c3"
   }
 }

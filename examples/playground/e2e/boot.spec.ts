@@ -899,6 +899,102 @@ test.describe("node", () => {
       expect(r).toEqual({ code: 0, out: "error ECONNREFUSED\n", err: "" });
     });
   });
+
+  test.describe("http", () => {
+    // http.createServer()/http.request() run entirely on top of net (net.test.ts already covers
+    // net's own cross-process plumbing) - these prove the real vendored _http_server.js/
+    // _http_client.js/_http_outgoing.js stack round-trips correctly over that real relay between
+    // two separate real Process Workers, which packages/core's single-threaded http.test.ts
+    // (fake net host, one side at a time) can't exercise.
+
+    test("a real client process GETs from a real server process: status, headers, and body round-trip", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const server = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const server = http.createServer((req, res) => {" +
+            "  res.setHeader('Content-Type', 'text/plain');" +
+            "  res.end('hello from server');" +
+            "});" +
+            "server.listen(5000, () => console.log('ready'));",
+        ]);
+        const serverReader = server.stdout.getReader();
+        const first = await serverReader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const client = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "http.get('http://h:5000/x', (res) => {" +
+            "  let body = '';" +
+            "  res.on('data', (c) => { body += c; });" +
+            "  res.on('end', () => { console.log(res.statusCode, res.headers['content-type'], body); process.exit(0); });" +
+            "});",
+        ]);
+        const [clientOut, clientErr, clientExit] = await Promise.all([
+          new Response(client.stdout).text(),
+          new Response(client.stderr).text(),
+          client.exit,
+        ]);
+
+        server.kill();
+        const serverExit = await server.exit;
+        return { clientOut, clientErr, clientCode: clientExit.exitCode, serverSignal: serverExit.signal };
+      });
+      expect(r).toEqual({
+        clientOut: "200 text/plain hello from server\n",
+        clientErr: "",
+        clientCode: 0,
+        serverSignal: "SIGTERM",
+      });
+    });
+
+    test("a real client process POSTs a body to a real server process, which streams and echoes it back", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const server = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const server = http.createServer((req, res) => {" +
+            "  let body = '';" +
+            "  req.on('data', (c) => { body += c; });" +
+            "  req.on('end', () => { res.end('echo:' + body); });" +
+            "});" +
+            "server.listen(5001, () => console.log('ready'));",
+        ]);
+        const serverReader = server.stdout.getReader();
+        const first = await serverReader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const client = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const req = http.request({ hostname: 'h', port: 5001, path: '/', method: 'POST' }, (res) => {" +
+            "  let body = '';" +
+            "  res.on('data', (c) => { body += c; });" +
+            "  res.on('end', () => { console.log(body); process.exit(0); });" +
+            "});" +
+            "req.end('payload data');",
+        ]);
+        const [clientOut, clientErr, clientExit] = await Promise.all([
+          new Response(client.stdout).text(),
+          new Response(client.stderr).text(),
+          client.exit,
+        ]);
+
+        server.kill();
+        const serverExit = await server.exit;
+        return { clientOut, clientErr, clientCode: clientExit.exitCode, serverSignal: serverExit.signal };
+      });
+      expect(r).toEqual({
+        clientOut: "echo:payload data\n",
+        clientErr: "",
+        clientCode: 0,
+        serverSignal: "SIGTERM",
+      });
+    });
+  });
 });
 
 test.describe("sh", () => {

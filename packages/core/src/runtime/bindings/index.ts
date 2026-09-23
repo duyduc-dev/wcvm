@@ -6,6 +6,7 @@ import { createBufferBinding } from "./buffer";
 import { createPipeWrapBinding, createProcessWrapBinding, createSpawnSyncBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
 import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsWatchHost } from "./fs";
+import { createHttpParserBinding } from "./http";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
 import {
   createAsyncContextFrameBinding,
@@ -67,6 +68,7 @@ const factories: Record<string, BindingFactory> = {
   fs: (ctx) => createFsBindingFor(ctx),
   fs_dir: (ctx) => createFsDirBinding(createFsBindingFor(ctx)),
   fs_event_wrap: (ctx) => createFsEventWrapBinding(ctx),
+  http_parser: () => createHttpParserBinding(),
   messaging: () => createMessagingBinding(),
   mksnapshot: () => createMksnapshotBinding(),
   options: () => createOptionsBinding(),
