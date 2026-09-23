@@ -995,6 +995,76 @@ test.describe("node", () => {
       });
     });
   });
+
+  test.describe("preview", () => {
+    // wc.preview relays a same-origin fetch() from the HOST PAGE itself through a real Service
+    // Worker, the kernel, and the same virtual net/http a script's own http.createServer() is
+    // listening on - none of that (Service Worker registration/activation/claiming, or a real
+    // browser `fetch()`) can be exercised outside real Chromium at all.
+
+    test("fetch() to the preview URL relays through the Service Worker into a real listening http.createServer()", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.preview.enable();
+        const server = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const server = http.createServer((req, res) => {" +
+            "  res.setHeader('Content-Type', 'text/plain');" +
+            "  res.end('hello from preview: ' + req.url);" +
+            "});" +
+            "server.listen(6000, () => console.log('ready'));",
+        ]);
+        const reader = server.stdout.getReader();
+        const first = await reader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const response = await fetch(wc.preview.url(6000, "/hello?x=1"));
+        const text = await response.text();
+        server.kill();
+        await server.exit;
+        return { status: response.status, contentType: response.headers.get("content-type"), text };
+      });
+      expect(r).toEqual({ status: 200, contentType: "text/plain", text: "hello from preview: /hello?x=1" });
+    });
+
+    test("a POST body reaches the guest server's request handler for real", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.preview.enable();
+        const server = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const server = http.createServer((req, res) => {" +
+            "  let body = '';" +
+            "  req.on('data', (c) => { body += c; });" +
+            "  req.on('end', () => res.end('echo:' + body));" +
+            "});" +
+            "server.listen(6001, () => console.log('ready'));",
+        ]);
+        const reader = server.stdout.getReader();
+        const first = await reader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const response = await fetch(wc.preview.url(6001), { method: "POST", body: "payload" });
+        const text = await response.text();
+        server.kill();
+        await server.exit;
+        return text;
+      });
+      expect(r).toBe("echo:payload");
+    });
+
+    test("a port nobody is listening on comes back as a 502, not a hang", async ({ page }) => {
+      const status = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.preview.enable();
+        const response = await fetch(wc.preview.url(6002));
+        return response.status;
+      });
+      expect(status).toBe(502);
+    });
+  });
 });
 
 test.describe("sh", () => {

@@ -1,0 +1,52 @@
+// The wire format for previewing a guest script's own listening http.Server, and the URL scheme
+// a fetch() is recognized by. Shared by three very different contexts - the Service Worker
+// (workers/preview/PreviewServiceWorker.ts), the main thread's relay glue (src/preview.ts), and
+// the kernel worker's own request handler (workers/kernel/handlers/preview.ts) - so it stays
+// dependency-free (no DOM lib, no worker-only globals) and framework-free.
+
+/** Every previewable URL starts with this; the next path segment is the virtual port. */
+export const PREVIEW_PATH_PREFIX = "/__wcvm_preview__/";
+
+/** Splits `/__wcvm_preview__/<port>/<rest>` into the port and the guest-relative path
+ *  (including any query string) - `undefined` if `pathname` isn't a preview URL at all. */
+export const parsePreviewPath = (pathname: string): { port: number; path: string } | undefined => {
+  if (!pathname.startsWith(PREVIEW_PATH_PREFIX)) return undefined;
+  const rest = pathname.slice(PREVIEW_PATH_PREFIX.length);
+  const slash = rest.indexOf("/");
+  const portText = slash === -1 ? rest : rest.slice(0, slash);
+  const port = Number(portText);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  return { port, path: slash === -1 ? "/" : rest.slice(slash) };
+};
+
+/** SW -> window client (`Client.postMessage`): "please relay this fetch". */
+export interface IPreviewFetchMessage {
+  type: "wcvm:previewFetch";
+  requestId: string;
+  port: number;
+  path: string;
+  method: string;
+  headers: [string, string][];
+  body: Uint8Array | null;
+}
+
+/** window -> kernel worker (`kernelBridge.request("preview:fetch", ...)`) and its result. */
+export interface IPreviewFetchRequest {
+  port: number;
+  path: string;
+  method: string;
+  headers: [string, string][];
+  body: Uint8Array | null;
+}
+
+export interface IPreviewFetchResult {
+  status: number;
+  statusMessage: string;
+  headers: [string, string][];
+  body: Uint8Array;
+}
+
+/** window -> SW (a direct reply to the ServiceWorker that sent IPreviewFetchMessage). */
+export type IPreviewFetchReply =
+  | { type: "wcvm:previewFetchResult"; requestId: string; ok: true; result: IPreviewFetchResult }
+  | { type: "wcvm:previewFetchResult"; requestId: string; ok: false; error: string };

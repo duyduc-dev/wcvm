@@ -2,6 +2,7 @@ import { KernelMessage } from "../../bridges/models";
 import { createState } from "../../protocols/state";
 import { bootHandler } from "./handlers/boot";
 import { registerFsHandlers } from "./handlers/fs";
+import { registerPreviewHandlers } from "./handlers/preview";
 import { registerProcessHandlers } from "./handlers/process";
 import { toErrorReply } from "./errors";
 import { IWorkerState } from "./models";
@@ -19,6 +20,7 @@ const postMessage = (message: KernelMessage) => {
 router.handle("boot", bootHandler);
 registerProcessHandlers(router);
 registerFsHandlers(router);
+registerPreviewHandlers(router);
 
 self.onmessage = (e: MessageEvent<KernelMessage>) => {
   const { type, reqId } = e.data;

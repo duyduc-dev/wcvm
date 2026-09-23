@@ -135,7 +135,58 @@ Done and verified in real Chromium:
   body a real server process streams and echoes back.
 - Tests: 487 Vitest + 74 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): preview Service Worker, UDP/DNS,
+**IN PROGRESS, not yet committed** - preview Service Worker relay (backend only, no UI - see
+PLAN.md's Phase 6 for the explicit scope decision): `wc.preview.enable()` registers a real Service
+Worker (`workers/preview/PreviewServiceWorker.ts`, built to
+`dist/workers/preview/PreviewServiceWorker.js` - `package.json`'s `"./preview-sw"` export already
+pointed here, a leftover from the old `duckwc` implementation that happened to name the right
+path) that intercepts a same-origin `fetch()` to `wc.preview.url(port, path)` (`/__wcvm_preview__/
+<port>/<path>`) and relays it into whatever real `http.createServer()` a script has listening on
+that virtual port - `kernel/previewRelay.ts` opens one real virtual TCP connection per fetch (via
+the SAME `kernel/netServer.ts` a real process's own `net.connect()` uses, under a reserved
+`PREVIEW_PID = 0` sentinel - never a real pid), writes a hand-encoded HTTP/1.1 request, and parses
+the response with the ALREADY-BUILT `HttpMessageParser` (`runtime/bindings/httpParser.ts` - no new
+parsing logic needed). The Service Worker itself never talks to the Kernel Worker directly (a SW
+can only `postMessage` a window `Client`, never an arbitrary dedicated Worker) - it relays through
+whichever window it's controlling, which forwards to the kernel over the EXISTING
+`kernelBridge.request()` RPC every other host<->kernel call already uses (a new `"preview:fetch"`
+route), so no new MessageChannel/port-transfer plumbing was needed at all.
+  - **Real bug found and fixed**: `netServer.connect()` notifies the connecting side
+    (`net:connectResult`) BEFORE the listening side (`net:incoming`) - harmless for every other
+    caller, where `notify` is always an async `postMessage` to a real process worker, so the
+    listener's own notification is already in flight by the time that process could react. `
+    PREVIEW_PID`'s own `notify` is a direct, SYNCHRONOUS call (kernel/index.ts) - `previewRelay`
+    writing the request immediately raced ahead of `netServer.connect()`'s own still-pending
+    `net:incoming` call, so the real server saw `net:data` for a connection it hadn't registered
+    yet and silently dropped it. Only surfaced against a REAL listening server, not the
+    connection-refused case - fixed with a `queueMicrotask` deferral in `previewRelay.ts`, see its
+    comment. A real Chromium e2e test caught this; nothing at the Vitest/fake-net level could
+    (the fake net in `previewRelay.test.ts` doesn't reproduce the synchronous-vs-async timing
+    difference unless deliberately modeled, which the tests now do explicitly).
+  - Also found: Vite's default `assetsInlineLimit` (4 KiB) inlined the built SW file (2.39 KB) as
+    a `data:` URL when referenced via `new URL(..., import.meta.url)` from a small enough consumer
+    bundle - `navigator.serviceWorker.register()` rejects a `data:` URL (opaque origin). Fixed in
+    `examples/playground/vite.config.ts` with `build.assetsInlineLimit: 0`.
+  - Playground `vite.config.ts` also updated: `Service-Worker-Allowed: /` now matches any path
+    containing `PreviewServiceWorker` (the exact hashed/nested path isn't fixed), replacing the
+    stale `duckwc`-era `/dwc-preview-sw.js` middleware; the leftover `examples/playground/public/
+    dwc-preview-sw.js` / `dist/dwc-preview-sw.js` build artifacts (both gitignored, unrelated old
+    protocol) were deleted.
+  - Verified: `kernel/previewRelay.test.ts` (5 Vitest, fake net) and
+    `workers/kernel/handlers/preview.test.ts` (3 Vitest) both passing; 3 new Playwright tests
+    under `test.describe("preview", ...)` in `examples/playground/e2e/boot.spec.ts` (GET
+    round-trip through a real listening server, a POST body reaching the real handler, and a
+    port-nobody's-listening-on 502) all passing, confirmed on two separate full runs.
+  - **NOT yet done**: a full, clean `pnpm exec playwright test` run (the mandatory full-suite
+    gate) - the last two attempts each had 1-2 UNRELATED tests (`fork()/IPC child.disconnect()`,
+    subtree kill, sh REPL stdin handoff - a different one each time) fail with a `page.goto("/")`
+    timeout, which looks like host machine resource contention during this session rather than a
+    real regression (the preview tests themselves passed cleanly both times) - re-run once more,
+    on a quiet machine, before treating this as verified. `PLAN.md`'s "Current state"/test counts
+    and this file's own "Not done" line below still need updating once that's clean. Not committed.
+
+Not done (roadmap order, see PLAN.md): the rest of preview (an iframe pane actually wired into
+a UI - deliberately out of scope for this slice), UDP/DNS,
 fetcher worker + real `npm`, OPFS persistence, Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page

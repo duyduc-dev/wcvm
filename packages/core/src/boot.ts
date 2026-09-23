@@ -5,6 +5,7 @@ import { WcvmError } from "./errors/WcvmError";
 import { ISpawnOptions, IState } from "./models";
 import { createDiagnostics } from "./protocols/diagnostics";
 import { createState } from "./protocols/state";
+import { createPreviewApi } from "./preview";
 import { isCrossOriginIsolated } from "./utilities";
 
 interface IBootOptions {
@@ -89,8 +90,9 @@ const boot = (options: IBootOptions = {}) => {
   };
 
   const fs = createFsApi(kernelBridge, ready);
+  const preview = createPreviewApi(kernelBridge);
 
-  return { spawn, fs, diagnostics, ready };
+  return { spawn, fs, diagnostics, ready, preview };
 };
 
 type IWcvm = ReturnType<typeof boot>;
