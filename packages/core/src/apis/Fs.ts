@@ -18,6 +18,14 @@ interface IFs {
   chmod(path: string, mode: number): Promise<void>;
   /** Seeds `tree` under `basePath` (default `/`) in one call. */
   mount(tree: FileSystemTree, basePath?: string): Promise<void>;
+  /**
+   * Downloads `url` straight into `path` - a real fetch() on a dedicated Fetcher Worker, streamed
+   * to disk rather than buffered whole in memory first, with up to 10 other fetch()es in flight
+   * at once (a big npm install's own many concurrent package downloads will use this). Rejects
+   * (does not write `path`) on a non-2xx response or a network error; like writeFile, does not
+   * create `path`'s parent directories.
+   */
+  fetch(url: string, path: string): Promise<{ status: number; headers: [string, string][] }>;
 }
 
 const createFsApi = (
@@ -49,6 +57,7 @@ const createFsApi = (
     realpath: (path) => call("fs:realpath", { path }),
     chmod: (path, mode) => call("fs:chmod", { path, mode }),
     mount: (tree, basePath = "/") => call("fs:mount", { tree, basePath }),
+    fetch: (url, path) => call("fetcher:fetch", { url, path }),
   };
 };
 

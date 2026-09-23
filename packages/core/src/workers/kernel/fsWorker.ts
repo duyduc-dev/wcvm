@@ -1,4 +1,4 @@
-import type { IFsWorkerLike } from "../../kernel";
+import type { IFetcherWorkerLike, IFsWorkerLike } from "../../kernel";
 import type { IProcessWorkerLike } from "../../kernel/processes";
 
 // Resolved against the bundled kernel worker (dist/workers/kernel/worker.js),
@@ -18,4 +18,12 @@ const createProcessWorker = (pid: number): IProcessWorkerLike =>
     name: `Process Worker PID ${pid}`,
   });
 
-export { createFsWorker, createProcessWorker };
+// One persistent worker for the kernel's whole lifetime, like the fs worker above - not one per
+// request (see kernel/index.ts's own boot handshake for why).
+const createFetcherWorker = (): IFetcherWorkerLike =>
+  new Worker(new URL("../fetcher/worker.js", import.meta.url), {
+    type: "module",
+    name: "FetcherWorker",
+  });
+
+export { createFetcherWorker, createFsWorker, createProcessWorker };

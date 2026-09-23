@@ -1,6 +1,7 @@
 import { KernelMessage } from "../../bridges/models";
 import { createState } from "../../protocols/state";
 import { bootHandler } from "./handlers/boot";
+import { registerFetcherHandlers } from "./handlers/fetcher";
 import { registerFsHandlers } from "./handlers/fs";
 import { registerPreviewHandlers } from "./handlers/preview";
 import { registerProcessHandlers } from "./handlers/process";
@@ -21,6 +22,7 @@ router.handle("boot", bootHandler);
 registerProcessHandlers(router);
 registerFsHandlers(router);
 registerPreviewHandlers(router);
+registerFetcherHandlers(router);
 
 self.onmessage = (e: MessageEvent<KernelMessage>) => {
   const { type, reqId } = e.data;

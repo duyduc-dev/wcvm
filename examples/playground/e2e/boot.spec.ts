@@ -1103,6 +1103,45 @@ test.describe("preview UI", () => {
   });
 });
 
+test.describe("fetcher", () => {
+  // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
+  // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over
+  // its own fs client - a real SharedArrayBuffer/MessageChannel pair registered with the FS
+  // Worker, exactly like a process worker's own (see kernel/index.ts's attachFsClient). None of
+  // that (a real fetch() from inside a dedicated Worker, a real cross-worker SAB write) can be
+  // exercised outside real Chromium - only unit-tested with a fake fetchImpl
+  // (packages/core/src/workers/fetcher/fetcherRuntime.test.ts).
+  test("downloads a real same-origin asset straight into the VFS, matching a plain fetch() of it", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const outcome = await wc.fs.fetch("/index.html", "/downloaded.html");
+      const written = new TextDecoder().decode(await wc.fs.readFile("/downloaded.html"));
+      const real = await fetch("/index.html").then((r) => r.text());
+      return {
+        status: outcome.status,
+        matches: written === real,
+        hasContentType: outcome.headers.some(([name]) => name.toLowerCase() === "content-type"),
+      };
+    });
+    expect(result).toEqual({ status: 200, matches: true, hasContentType: true });
+  });
+
+  test("a real connection failure rejects and never writes the destination file", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      try {
+        // Port 1 is privileged/reserved - nothing listens there, so this is a real, fast
+        // connection refusal, not a hypothetical.
+        await wc.fs.fetch("http://localhost:1/", "/never.txt");
+        return { threw: false };
+      } catch {
+        return { threw: true, exists: await wc.fs.exists("/never.txt") };
+      }
+    });
+    expect(result).toEqual({ threw: true, exists: false });
+  });
+});
+
 test.describe("sh", () => {
   test("sequences, short-circuits, and pipes across real built-in programs", async ({ page }) => {
     const r = await spawn(page, "sh", ["-c", "false && echo skipped; echo one | cat; true && echo two"]);

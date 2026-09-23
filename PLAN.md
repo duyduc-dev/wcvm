@@ -251,7 +251,21 @@ netServer.test.ts`, `apis/Preview.test.ts`, and a `runtime/net.test.ts` regressi
 original 3 plus a new `"preview UI"` describe exercising the real iframe end-to-end) all pass; a
 full, clean `pnpm exec playwright test` run (78/78) confirmed no regressions.
 
-Verified by Vitest (507) and Playwright in real Chromium (78), including a script reading a
+Also done - the Fetcher Worker, Phase 7's first piece: `wc.fs.fetch(url, path)`. A dedicated,
+persistent worker (`workers/fetcher/`, architecturally a sibling of the FS Worker - one for the
+kernel's whole lifetime, its own real fs client via the now-shared `attachFsClient`) does real
+`fetch()` calls, capped at 10 concurrent in-flight requests on its own thread (overlap comes from
+several concurrent `fetch()` promises, not OS parallelism, so one worker running many at once is
+enough), each streamed straight into the VFS via the fd-based open/write/close path
+`fs.writeFileSync` itself uses (chunked at `FD_CHUNK` if a response chunk is bigger than the
+syscall window). `kernel/fetcher.ts` is the kernel-side promise-map half (mirrors
+`previewRelay.ts`'s own one-shot-async-op shape); `workers/fetcher/fetcherRuntime.ts` is kept free
+of `self` so its queueing/streaming logic is fully Vitest-testable (mirrors `workers/process/
+run.ts`'s split between testable core and thin wiring). See CLAUDE.md's Status section for the
+full writeup and test list. Real npm (vendoring the actual CLI) and OPFS persistence, the other two
+Phase 7 pieces, are not done yet - real npm needs this worker; OPFS is independent.
+
+Verified by Vitest (523) and Playwright in real Chromium (80), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
@@ -455,8 +469,9 @@ module: `Thing.test.ts`).
 - Remaining (not blocking this phase, tracked in the roadmap's own DNS/UDP item below): DNS
   (`dns.lookup()` is a fixed-address shim for now, not a real resolver).
 
-### Phase 7 - Fetcher worker, real npm, persistence
-- Fetcher worker streaming into the VFS; parallel async fetches capped ~10.
+### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker DONE - see "Current state"; real npm and OPFS remaining)
+- Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
+  state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
 - Real npm CLI, vendored as one packed asset unpacked in a single batched write.
 - OPFS mirror (write-behind), restored before serving syscalls.
 

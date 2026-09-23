@@ -7,6 +7,8 @@ import {
   makeViews,
 } from "../protocols/syscall";
 import type { FsWatchEvent, FsWorkerMessage } from "../workers/fs/handler";
+import type { FetcherEvent, FetcherRequest } from "../workers/fetcher/messages";
+import { createFetcher, type IFetcher } from "./fetcher";
 import { createNetServer } from "./netServer";
 import { createPreviewRelay, PREVIEW_PID, type IPreviewRelay } from "./previewRelay";
 import {
@@ -24,22 +26,37 @@ export interface IFsWorkerLike {
   onerror: ((event: ErrorEvent) => void) | null;
 }
 
+/** The subset of `Worker` the kernel needs for the Fetcher Worker, so tests can substitute one. */
+export interface IFetcherWorkerLike {
+  postMessage(message: FetcherRequest, transfer?: Transferable[]): void;
+  terminate(): void;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: ((event: ErrorEvent) => void) | null;
+}
+
 export interface IKernelHost {
   /** Blocking fs access; only call from the kernel worker thread. */
   fs: IFsClient;
   processes: IProcessTable;
   preview: IPreviewRelay;
+  fetcher: IFetcher;
   dispose(): void;
 }
 
 interface IKernelHostParams {
   createFsWorker: () => IFsWorkerLike;
   createProcessWorker: (pid: number) => IProcessWorkerLike;
+  createFetcherWorker: () => IFetcherWorkerLike;
   /** Sends events (`process:stdout`, `process:exit`, ...) to the host. */
   emit: (message: KernelMessage) => void;
 }
 
 const KERNEL_FS_CLIENT_ID = 0;
+
+// Never a real pid or the kernel's own client id (see PREVIEW_PID's own comment for the same
+// idea) - the Fetcher Worker isn't a process either, just another persistent worker with its own
+// fs client, like the kernel's own KERNEL_FS_CLIENT_ID above.
+const FETCHER_FS_CLIENT_ID = -1;
 
 // Pids for execSync/spawnSync's synchronously-spawned children: a plain counter, chosen well
 // out of range of both host-assigned top-level pids (small) and async child_process pids
@@ -50,6 +67,7 @@ const SYNC_PID_START = 3_000_000_000;
 const createKernelHost = async ({
   createFsWorker,
   createProcessWorker,
+  createFetcherWorker,
   emit,
 }: IKernelHostParams): Promise<IKernelHost> => {
   const fsWorker = createFsWorker();
@@ -87,6 +105,34 @@ const createKernelHost = async ({
         fsWorker.postMessage({ type: "doorbell", clientId: KERNEL_FS_CLIENT_ID }),
     }),
   );
+
+  // Shared by every fs client the kernel hands out - a real process's own (below, via
+  // createProcessTable's own param) and the Fetcher Worker's (right after this).
+  const attachFsClient = (clientId: number): { sab: SharedArrayBuffer; port: MessagePort } => {
+    const buffer = createSyscallBuffer();
+    const { port1, port2 } = new MessageChannel();
+    fsWorker.postMessage({ type: "register", clientId, sab: buffer, port: port1 }, [port1]);
+    return { sab: buffer, port: port2 };
+  };
+
+  // Same "await ready before this thread ever parks on its SAB" rule as the fs worker above -
+  // boot must not race the Fetcher Worker's own startup either. Listeners are attached BEFORE
+  // posting "init" (which is what actually makes the worker reply "ready"), same ordering the fs
+  // worker's own boot above already gets right.
+  const fetcherWorker = createFetcherWorker();
+  const fetcherClient = attachFsClient(FETCHER_FS_CLIENT_ID);
+  const fetcher = createFetcher({ postMessage: (message) => fetcherWorker.postMessage(message) });
+  await new Promise<void>((resolve, reject) => {
+    fetcherWorker.onmessage = (event) => {
+      const data = event.data as FetcherEvent;
+      if (data?.type === "ready") resolve();
+    };
+    fetcherWorker.onerror = (event) => {
+      reject(new WcvmError("ERR_WORKER", `Fetcher worker error: ${event.message || "unknown error"}`));
+    };
+    fetcherWorker.postMessage({ type: "init", sab: fetcherClient.sab, port: fetcherClient.port }, [fetcherClient.port]);
+  });
+  fetcherWorker.onmessage = (event) => fetcher.dispatch(event.data as FetcherEvent);
 
   let nextSyncPid = SYNC_PID_START;
   const spawnSyncServer = createSpawnSyncServer({
@@ -133,15 +179,7 @@ const createKernelHost = async ({
   const processes = createProcessTable({
     createProcessWorker,
     emit,
-    attachFsClient: (clientId) => {
-      const buffer = createSyscallBuffer();
-      const { port1, port2 } = new MessageChannel();
-      fsWorker.postMessage(
-        { type: "register", clientId, sab: buffer, port: port1 },
-        [port1],
-      );
-      return { sab: buffer, port: port2 };
-    },
+    attachFsClient,
     detachFsClient: (clientId) =>
       fsWorker.postMessage({ type: "unregister", clientId }),
     attachSyncClient: (clientId) => {
@@ -174,7 +212,11 @@ const createKernelHost = async ({
     fs,
     processes,
     preview,
-    dispose: () => fsWorker.terminate(),
+    fetcher,
+    dispose: () => {
+      fsWorker.terminate();
+      fetcherWorker.terminate();
+    },
   };
 };
 
