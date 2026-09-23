@@ -101,6 +101,15 @@
     "internal/dgram": "builtin",
     "internal/socket_list": "builtin",
     "internal/deps/acorn/acorn/dist/acorn": "builtin",
-    "internal/streams/fast-utf8-stream": "builtin"
+    "internal/streams/fast-utf8-stream": "builtin",
+    "http": "builtin",
+    "_http_agent": "builtin",
+    "internal/http": "builtin",
+    "_http_client": "builtin",
+    "_http_common": "builtin",
+    "_http_server": "builtin",
+    "_http_outgoing": "builtin",
+    "internal/freelist": "builtin",
+    "_http_incoming": "builtin"
   }
 }

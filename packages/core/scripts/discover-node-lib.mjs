@@ -39,7 +39,10 @@ for (let round = 0; round < MAX_ROUNDS; round++) {
     let loader;
     import { EventLoop } from "./src/runtime/eventLoop.ts";
     import { createLoopbackFs } from "./src/testing/loopbackFs.ts";
-    const internalBinding = createInternalBinding({ requireBuiltin: (id) => loader.requireBuiltin(id), loop: new EventLoop(), fs: createLoopbackFs().fs, process });
+    // A truthy childProcess satisfies pipe_wrap/process_wrap/stream_wrap's constructor-time
+    // check (ChildRouter throws ENOSYS without one) - net.js and http.js both require those
+    // unconditionally at module load now, even for a probe that never actually spawns anything.
+    const internalBinding = createInternalBinding({ requireBuiltin: (id) => loader.requireBuiltin(id), loop: new EventLoop(), fs: createLoopbackFs().fs, process, childProcess: { onEvent: () => {} } });
     loader = createBuiltinLoader({ process, internalBinding, primordials: createPrimordials() });
     try { for (const t of ${JSON.stringify(targets)}) loader.requireBuiltin(t); console.log("OK"); }
     catch (e) { console.log(e.code === "ERR_UNKNOWN_BUILTIN_MODULE" ? "MISSING " + /'([^']+)'/.exec(e.message)[1] : "ERROR " + (e.stack || e).toString().split("\\n").slice(0, 6).join(" | ")); }
