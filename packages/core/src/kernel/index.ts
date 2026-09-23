@@ -6,7 +6,7 @@ import {
   createSyscallClient,
   makeViews,
 } from "../protocols/syscall";
-import type { FsWatchEvent, FsWorkerMessage } from "../workers/fs/handler";
+import type { FsWatchEvent, FsWorkerMessage, IFsWorkerBoot } from "../workers/fs/handler";
 import type { FetcherEvent, FetcherRequest } from "../workers/fetcher/messages";
 import { createFetcher, type IFetcher } from "./fetcher";
 import { createNetServer } from "./netServer";
@@ -20,7 +20,7 @@ import { createSpawnSyncServer } from "./spawnSyncServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IFsWorkerLike {
-  postMessage(message: FsWorkerMessage, transfer?: Transferable[]): void;
+  postMessage(message: FsWorkerMessage | IFsWorkerBoot, transfer?: Transferable[]): void;
   terminate(): void;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
@@ -49,9 +49,15 @@ interface IKernelHostParams {
   createFetcherWorker: () => IFetcherWorkerLike;
   /** Sends events (`process:stdout`, `process:exit`, ...) to the host. */
   emit: (message: KernelMessage) => void;
+  /** OPFS persistence (fs/opfsPersistence.ts): omitted/false for a purely in-memory Vfs (the
+   *  default), true for the default root name, or an explicit one - see DEFAULT_PERSIST_ROOT.
+   *  Must be decided at boot: restoring happens before the fs worker ever serves a syscall. */
+  persist?: boolean | { root: string };
 }
 
 const KERNEL_FS_CLIENT_ID = 0;
+
+const DEFAULT_PERSIST_ROOT = "wcvm";
 
 // Never a real pid or the kernel's own client id (see PREVIEW_PID's own comment for the same
 // idea) - the Fetcher Worker isn't a process either, just another persistent worker with its own
@@ -69,9 +75,13 @@ const createKernelHost = async ({
   createProcessWorker,
   createFetcherWorker,
   emit,
+  persist,
 }: IKernelHostParams): Promise<IKernelHost> => {
   const fsWorker = createFsWorker();
 
+  // Listeners attached BEFORE posting "boot" (which is what makes the fs worker actually restore
+  // from OPFS, if asked, and then reply "ready") - same ordering the fetcher worker's own boot
+  // handshake already gets right.
   await new Promise<void>((resolve, reject) => {
     fsWorker.onmessage = (event) => {
       if (event.data?.type === "ready") resolve();
@@ -84,6 +94,10 @@ const createKernelHost = async ({
         ),
       );
     };
+    fsWorker.postMessage({
+      type: "boot",
+      persist: persist ? { root: typeof persist === "object" ? persist.root : DEFAULT_PERSIST_ROOT } : false,
+    });
   });
 
   // Reassigned once the fs worker is up: the only unprompted (non-ready, non-syscall-response)

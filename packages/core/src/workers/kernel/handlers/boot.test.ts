@@ -6,11 +6,11 @@ import { createFakeProcessWorker } from "../../../testing/fakeProcessWorker";
 import { IWorkerState } from "../models";
 import { createBootHandler } from "./boot";
 
-const run = (handler: ReturnType<typeof createBootHandler>) => {
+const run = (handler: ReturnType<typeof createBootHandler>, data: Record<string, unknown> = {}) => {
   const stateManager = createState<IWorkerState>({ kernel: null });
   const posted: unknown[] = [];
   const done = handler({
-    event: { data: { type: "boot" } } as MessageEvent,
+    event: { data: { type: "boot", ...data } } as MessageEvent,
     stateManager,
     onPostMessage: (m) => posted.push(m),
   });
@@ -57,5 +57,19 @@ describe("boot handler", () => {
     );
     await expect(done).rejects.toThrow("boom");
     expect(posted).toEqual([]);
+  });
+
+  it("forwards the boot message's own persist option to the fs worker", async () => {
+    const { worker } = createFakeFsWorker();
+    const { done } = run(
+      createBootHandler({
+        createFsWorker: () => worker,
+        createProcessWorker: () => createFakeProcessWorker(),
+        createFetcherWorker: () => createFakeFetcherWorker(),
+      }),
+      { persist: { root: "my-app" } },
+    );
+    await done;
+    expect(worker.boots).toEqual([{ root: "my-app" }]);
   });
 });

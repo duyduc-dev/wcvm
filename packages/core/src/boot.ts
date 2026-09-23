@@ -11,12 +11,21 @@ import { isCrossOriginIsolated } from "./utilities";
 interface IBootOptions {
   /** How long to wait for the kernel's `ready` message. Defaults to 10s. */
   bootTimeoutMs?: number;
+  /**
+   * Mirrors `wc.fs.*` to the Origin Private File System (OPFS), write-behind, and restores from
+   * it before this boot's first syscall is ever served - so it must be decided here, not turned
+   * on later. `true` uses a default storage root; an explicit `root` name keeps two wcvm
+   * instances on the same origin (different demos, or just two tabs) from sharing storage unless
+   * they deliberately choose the same one. OPFS has no symlinks, so a script's own symlinks are
+   * not persisted (see fs/opfsPersistence.ts).
+   */
+  persist?: boolean | { root: string };
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 10_000;
 
 const boot = (options: IBootOptions = {}) => {
-  const { bootTimeoutMs = DEFAULT_BOOT_TIMEOUT_MS } = options;
+  const { bootTimeoutMs = DEFAULT_BOOT_TIMEOUT_MS, persist } = options;
 
   if (!isCrossOriginIsolated()) {
     throw new WcvmError(
@@ -68,7 +77,7 @@ const boot = (options: IBootOptions = {}) => {
   ready.catch(() => {});
 
   // Boot kernel
-  kernelBridge.boot();
+  kernelBridge.boot({ persist });
 
   const spawn = async (
     command: string,

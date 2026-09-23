@@ -13,7 +13,7 @@ interface IKernelBridgeParams {
 }
 
 interface IKernelBridge {
-  boot: () => void;
+  boot: (data?: Record<string, unknown>) => void;
   request: <T = unknown>(
     type: string,
     data?: Record<string, unknown> | undefined,
@@ -97,7 +97,7 @@ const createKernelBridge = (params: IKernelBridgeParams): IKernelBridge => {
   };
 
   return {
-    boot: () => postMessage("boot"),
+    boot: (data) => postMessage("boot", data),
     request,
     postMessage,
     on: addEventListener,

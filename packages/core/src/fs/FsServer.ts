@@ -105,14 +105,18 @@ class FsServer {
 
   /** `onWatchEvent` is how a real transport (the File System Worker) delivers a change to
    *  whichever client is watching - see workers/fs/worker.ts. Defaults to a no-op so FsServer
-   *  stays directly testable (service() driven) without one. */
-  constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}) {
+   *  stays directly testable (service() driven) without one. `onPersist`, if given, is called
+   *  with every changed path too (write-behind OPFS mirroring - see workers/fs/worker.ts and
+   *  fs/opfsPersistence.ts's createOpfsMirror); FsServer itself knows nothing about OPFS, it just
+   *  forwards the same raw change events watch dispatch already receives. */
+  constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}, onPersist?: (path: string) => void) {
     this.vfs = vfs;
     this.onWatchEvent = onWatchEvent;
     vfs.onChange = (path, kind) => {
       for (const [watchId, watch] of this.watches) {
         if (watchMatches(watch, path)) this.onWatchEvent(watch.clientId, watchId, kind, watchRelativeName(watch, path));
       }
+      onPersist?.(path);
     };
     const path = (fields: Uint8Array[], i = 0) => decodeBytes(at(fields, i));
 

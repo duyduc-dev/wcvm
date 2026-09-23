@@ -267,10 +267,49 @@ Done and verified in real Chromium:
   inside a dedicated Worker nor a real cross-worker SAB write can be exercised outside Chromium.
   A full, clean `pnpm exec playwright test` run (80/80) and `vitest run` (523/523) confirm no
   regressions from adding a worker every boot now depends on.
-- Tests: 523 Vitest + 80 Playwright (Chromium). See "Verifying".
+- OPFS persistence (Phase 7's second piece): `boot({ persist: true | { root: string } })` mirrors
+  `wc.fs.*` to the real Origin Private File System, write-behind, and restores from it before the
+  FS Worker ever serves its first syscall - must be decided at boot, so it's a `boot()` option, not
+  a post-boot `enable()` (unlike preview/fetch, which don't need that guarantee). `true` uses a
+  default root name (`"wcvm"`); an explicit `root` keeps two wcvm instances on the same origin
+  (different demos, or just two tabs) from sharing storage unless they deliberately choose the same
+  one. `fs/opfsPersistence.ts` has both directions, kept free of `self`/any real OPFS global (a
+  hand-picked subset of the real `FileSystemDirectoryHandle`/`FileSystemFileHandle` API is typed
+  locally, so a fake in-memory implementation can stand in for Vitest - OPFS doesn't exist under
+  Node): `restoreFromOpfs(vfs, root)` walks OPFS once, before `FsServer` is even constructed (so
+  the write-behind mirror, wired up only afterward, never turns around and writes straight back
+  what it just read). `createOpfsMirror(vfs, root)` becomes `FsServer`'s new third constructor
+  param (`onPersist`, called from the SAME `vfs.onChange` closure watch dispatch already uses -
+  `FsServer` itself still knows nothing about OPFS, it just forwards the raw change events) -
+  write-behind means answer the syscall first, mirror after; each change re-syncs its own path
+  (mirrors a file, or - to correctly handle a non-empty directory rename in one step - recursively
+  re-mirrors a whole directory's subtree) against a SERIALIZED queue (`chain.finally(...)`, one
+  change at a time, in the order they actually happened - otherwise two quick writes to the same
+  path could race and leave OPFS with an OLDER result than the vfs's own current one). OPFS has no
+  symlinks, so a script's own symlinks are simply not persisted (a documented simplification - real
+  npm installs, the main reason for this feature, mostly don't need them for what actually has to
+  survive a reload). `workers/fs/worker.ts` gained the same "init" -> (async work) -> "ready"
+  handshake the Fetcher Worker already has (previously it posted "ready" unconditionally, at
+  import time, with no handshake at all - fine for a purely in-memory Vfs, not once restoring from
+  OPFS needs to happen first) - `kernel/index.ts` now posts `{type:"boot", persist}` before
+  awaiting it, same ordering as everywhere else this pattern is used.
+  Verified: `fs/opfsPersistence.test.ts` (11 Vitest against a fake OPFS directory handle -
+  restore, mirror-on-write/mkdir/delete/directory-rename, write-ordering, symlinks skipped, a
+  failed persist not blocking later ones), plus new/updated `kernel/index.test.ts`,
+  `workers/kernel/handlers/boot.test.ts` and `boot.test.ts` cases covering the `persist` option's
+  path from `boot()` down to the exact message the fs worker receives. 2 Playwright tests (a file
+  written with `persist` enabled survives a REAL `page.reload()`; a file removed before reload
+  does not come back) - neither a real `navigator.storage.getDirectory()` nor a real page reload
+  reading back a PREVIOUS load's writes can be exercised outside Chromium. The playground's
+  `main.ts` now also exposes `window.wcvmBoot` (the `boot` function itself, not just its own
+  default no-persist instance) so a test can boot an independently-configured second instance
+  without disturbing the page's own. A full, clean `pnpm exec playwright test` run (82/82) and
+  `vitest run` (539/539) confirm no regressions from a boot handshake every existing test also now
+  depends on (even with `persist` never set).
+- Tests: 539 Vitest + 82 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's remaining two pieces:
-vendoring the actual npm CLI, and OPFS persistence), Vite dev server/HMR, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's one remaining piece:
+vendoring the actual CLI), Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -281,6 +320,8 @@ Kernel Worker (src/workers/kernel/): router + handlers; hosts the kernel (src/ke
    - processes.ts: PID table; spawns a Process Worker per PID; forwards stdout/stderr/exit
      (to the host, or to a parent worker for a `child_process`-spawned child - see `parentPid`)
 FS Worker (src/workers/fs/): FsServer (src/fs/) services syscalls against one in-memory Vfs
+   - optional OPFS persistence (boot({persist}) only): restored before "ready", then
+     fs/opfsPersistence.ts mirrors every change back to OPFS write-behind
 Process Worker (src/workers/process/): runProcess -> a built-in program (src/programs/)
    `node` program -> createRuntime (src/runtime/) = the Node runtime
 Fetcher Worker (src/workers/fetcher/): one persistent worker, own fs client like a process's -
@@ -482,6 +523,25 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   embed an iframe whose OWN response doesn't also declare a COEP header (`net::ERR_BLOCKED_BY_RESPONSE`,
   independent of same-origin-ness) - invisible to a plain `fetch()` of the same URL, since that
   check is specific to a nested browsing context's own navigation.
+- OPFS persistence's write-behind mirror must apply changes to OPFS strictly in the order they
+  happened in the vfs, not in whatever order their own async work happens to resolve - two quick
+  writes to the SAME path, mirrored as two independent, unordered promises, can have the FIRST
+  write's slower OPFS round trip finish AFTER the second's faster one, leaving OPFS with a stale
+  result. Fixed with a single serialized queue (`chain = chain.finally(() => task().catch(...))`)
+  instead of firing each mirror op independently. Restoring from OPFS must also happen BEFORE
+  `vfs.onChange` is wired to the mirror (i.e. before `FsServer` is even constructed) - recreating
+  OPFS's own tree in a fresh Vfs is itself a sequence of mutations, and if the mirror were already
+  listening, it would immediately write everything it just read straight back to OPFS, a pointless
+  (though not incorrect) round trip on every single boot.
+- The real global `FileSystemDirectoryHandle`/`FileSystemFileHandle` (OPFS) don't structurally
+  satisfy a hand-picked subset interface typed against them: `entries()`'s real declared return
+  type isn't narrowed to file/dir handles specifically, and `write()`'s real param type doesn't
+  accept a bare `Uint8Array` whose generic type param defaults to `ArrayBufferLike` (which includes
+  `SharedArrayBuffer`, which real DOM `ArrayBufferView` types don't accept) - the same
+  generic-TypedArray friction `httpParser.ts`'s own `buffer` field and
+  `PreviewServiceWorker.ts`'s `result.body as BufferSource` already hit. Cast once, at the single
+  real boundary (`fs/opfsPersistence.ts`'s `getOpfsRoot`), with a comment explaining why, rather
+  than trying to make the interface itself structurally match everywhere it's used.
 
 ## Conventions
 

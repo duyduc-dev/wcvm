@@ -11,7 +11,7 @@ interface IBootParams {
 
 const createBootHandler =
   ({ createFsWorker, createProcessWorker, createFetcherWorker }: IBootParams): RouteHandler =>
-  async ({ stateManager, onPostMessage }) => {
+  async ({ event, stateManager, onPostMessage }) => {
     // Boot completes only once the fs worker is running: the kernel's first
     // blocking syscall must not race the worker's startup.
     const kernel: IKernelHost = await createKernelHost({
@@ -19,6 +19,7 @@ const createBootHandler =
       createProcessWorker,
       createFetcherWorker,
       emit: onPostMessage,
+      persist: event.data.persist as boolean | { root: string } | undefined,
     });
     stateManager.setState({ kernel });
     onPostMessage({ type: "ready" });
