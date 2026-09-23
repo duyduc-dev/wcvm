@@ -236,10 +236,41 @@ Done and verified in real Chromium:
     preview", spawn a real `http.createServer()`, assert the iframe's `src` and rendered content,
     kill the server, assert the pane resets) all pass. A full, clean `pnpm exec playwright test`
     run (78/78) and `vitest run` (507/507) confirm no regressions.
-- Tests: 507 Vitest + 78 Playwright (Chromium). See "Verifying".
+- Fetcher worker (`wc.fs.fetch(url, path)`, Phase 7's first piece): a dedicated, persistent worker
+  (`workers/fetcher/worker.ts`, one for the kernel's whole lifetime - not one per request, like the
+  FS Worker) doing real `fetch()` calls, capped at 10 in flight at once (`MAX_CONCURRENT` in
+  `workers/fetcher/fetcherRuntime.ts`, a plain bounded-concurrency queue - real overlap comes from
+  several concurrent `fetch()` promises on ONE thread, not OS parallelism, so no pool of worker
+  threads was needed), each response streamed straight into the VFS via the SAME fd-based
+  open/write/FD_CHUNK-split/close path `fs.writeFileSync` itself uses, rather than buffered whole
+  in memory first. Architecturally mirrors the FS Worker exactly: the Fetcher Worker gets its own
+  real fs client (a SharedArrayBuffer + MessageChannel pair registered with the FS Worker via
+  `kernel/index.ts`'s `attachFsClient` - now factored out as a small shared function, reused by
+  both a real process's own client and this one - under a reserved `FETCHER_FS_CLIENT_ID = -1`,
+  never a real pid, the same idea as `PREVIEW_PID`), and boot awaits its own "ready" before
+  completing, the same "must not park on a SAB before its nested worker is up" rule the FS Worker's
+  boot already follows. `kernel/fetcher.ts` is the kernel-side half: turns one `wc.fs.fetch()` call
+  into one `{type:"fetch", id, url, path}` postMessage and a promise resolved/rejected by the
+  matching `fetch:done`/`fetch:error` reply (an id-keyed pending-map, the same one-shot-async-op
+  shape `previewRelay.ts` already uses). Rejects (without writing `path`) on a non-2xx response
+  (`code: "EHTTP<status>"`) or a real network error; like `writeFile`, does not create `path`'s
+  parent directories. `workers/fetcher/fetcherRuntime.ts` is kept free of `self` (fetch/fs client
+  are injected) so its queueing/streaming/chunking logic is fully Vitest-testable, mirroring
+  `workers/process/run.ts`'s own split between testable core and thin `self.onmessage` wiring.
+  Verified: `fetcherRuntime.test.ts` (6 Vitest: success/non-2xx/network-error/no-body/chunk-split/
+  concurrency-cap, the last using a manually-resolved fetch mock to prove the cap holds even when
+  more requests are queued than it allows), `kernel/fetcher.test.ts` (4 Vitest), `workers/kernel/
+  handlers/fetcher.test.ts` (3 Vitest), and 5 new `kernel/index.test.ts` cases (boot/dispose/
+  fetch-routing, mirroring the existing per-process fs client tests) all pass; 2 Playwright tests
+  (a real same-origin fetch into the VFS matching a plain `fetch()` of the same URL, and a real
+  connection refusal that rejects without writing the destination) - neither a real fetch() from
+  inside a dedicated Worker nor a real cross-worker SAB write can be exercised outside Chromium.
+  A full, clean `pnpm exec playwright test` run (80/80) and `vitest run` (523/523) confirm no
+  regressions from adding a worker every boot now depends on.
+- Tests: 523 Vitest + 80 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): UDP/DNS, fetcher worker + real `npm`, OPFS persistence,
-Vite dev server/HMR, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's remaining two pieces:
+vendoring the actual npm CLI, and OPFS persistence), Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -252,6 +283,8 @@ Kernel Worker (src/workers/kernel/): router + handlers; hosts the kernel (src/ke
 FS Worker (src/workers/fs/): FsServer (src/fs/) services syscalls against one in-memory Vfs
 Process Worker (src/workers/process/): runProcess -> a built-in program (src/programs/)
    `node` program -> createRuntime (src/runtime/) = the Node runtime
+Fetcher Worker (src/workers/fetcher/): one persistent worker, own fs client like a process's -
+   fetcherRuntime.ts does real fetch()es (capped ~10 concurrent), streamed into the VFS
 ```
 
 - **Sync bridge (the core trick).** Guest code needs synchronous calls (`readFileSync`). Each process has

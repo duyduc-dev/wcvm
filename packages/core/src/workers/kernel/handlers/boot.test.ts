@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createState } from "../../../protocols/state";
+import { createFakeFetcherWorker } from "../../../testing/fakeFetcherWorker";
 import { createFakeFsWorker } from "../../../testing/fakeFsWorker";
 import { createFakeProcessWorker } from "../../../testing/fakeProcessWorker";
 import { IWorkerState } from "../models";
@@ -23,6 +24,7 @@ describe("boot handler", () => {
       createBootHandler({
         createFsWorker: () => worker,
         createProcessWorker: () => createFakeProcessWorker(),
+        createFetcherWorker: () => createFakeFetcherWorker(),
       }),
     );
     expect(posted).toEqual([]);
@@ -37,6 +39,20 @@ describe("boot handler", () => {
       createBootHandler({
         createFsWorker: () => worker,
         createProcessWorker: () => createFakeProcessWorker(),
+        createFetcherWorker: () => createFakeFetcherWorker(),
+      }),
+    );
+    await expect(done).rejects.toThrow("boom");
+    expect(posted).toEqual([]);
+  });
+
+  it("does not announce ready when the fetcher worker fails", async () => {
+    const { worker } = createFakeFsWorker();
+    const { posted, done } = run(
+      createBootHandler({
+        createFsWorker: () => worker,
+        createProcessWorker: () => createFakeProcessWorker(),
+        createFetcherWorker: () => createFakeFetcherWorker({ fail: "boom" }),
       }),
     );
     await expect(done).rejects.toThrow("boom");

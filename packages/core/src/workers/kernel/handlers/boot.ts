@@ -1,21 +1,23 @@
-import { createKernelHost, IFsWorkerLike, IKernelHost } from "../../../kernel";
+import { createKernelHost, IFetcherWorkerLike, IFsWorkerLike, IKernelHost } from "../../../kernel";
 import type { IProcessWorkerLike } from "../../../kernel/processes";
-import { createFsWorker, createProcessWorker } from "../fsWorker";
+import { createFetcherWorker, createFsWorker, createProcessWorker } from "../fsWorker";
 import { RouteHandler } from "../router";
 
 interface IBootParams {
   createFsWorker: () => IFsWorkerLike;
   createProcessWorker: (pid: number) => IProcessWorkerLike;
+  createFetcherWorker: () => IFetcherWorkerLike;
 }
 
 const createBootHandler =
-  ({ createFsWorker, createProcessWorker }: IBootParams): RouteHandler =>
+  ({ createFsWorker, createProcessWorker, createFetcherWorker }: IBootParams): RouteHandler =>
   async ({ stateManager, onPostMessage }) => {
     // Boot completes only once the fs worker is running: the kernel's first
     // blocking syscall must not race the worker's startup.
     const kernel: IKernelHost = await createKernelHost({
       createFsWorker,
       createProcessWorker,
+      createFetcherWorker,
       emit: onPostMessage,
     });
     stateManager.setState({ kernel });
@@ -25,6 +27,7 @@ const createBootHandler =
 const bootHandler = createBootHandler({
   createFsWorker,
   createProcessWorker,
+  createFetcherWorker,
 });
 
 export { bootHandler, createBootHandler };

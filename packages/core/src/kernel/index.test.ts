@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createFakeFetcherWorker } from "../testing/fakeFetcherWorker";
 import { createFakeFsWorker } from "../testing/fakeFsWorker";
 import { createFakeProcessWorker } from "../testing/fakeProcessWorker";
 import { createKernelHost } from ".";
@@ -6,6 +7,7 @@ import { createKernelHost } from ".";
 const deps = (worker: ReturnType<typeof createFakeFsWorker>["worker"]) => ({
   createFsWorker: () => worker,
   createProcessWorker: () => createFakeProcessWorker(),
+  createFetcherWorker: () => createFakeFetcherWorker(),
   emit: () => {},
 });
 
@@ -38,11 +40,53 @@ describe("kernel host", () => {
     });
   });
 
-  it("terminates the fs worker on dispose", async () => {
+  it("terminates the fs worker and the fetcher worker on dispose", async () => {
     const { worker } = createFakeFsWorker();
-    const kernel = await createKernelHost(deps(worker));
+    const fetcherWorker = createFakeFetcherWorker();
+    const kernel = await createKernelHost({
+      createFsWorker: () => worker,
+      createProcessWorker: () => createFakeProcessWorker(),
+      createFetcherWorker: () => fetcherWorker,
+      emit: () => {},
+    });
     kernel.dispose();
     expect(worker.terminated).toBe(true);
+    expect(fetcherWorker.terminated).toBe(true);
+  });
+
+  it("rejects boot when the fetcher worker fails to start", async () => {
+    const { worker } = createFakeFsWorker();
+    await expect(
+      createKernelHost({
+        createFsWorker: () => worker,
+        createProcessWorker: () => createFakeProcessWorker(),
+        createFetcherWorker: () => createFakeFetcherWorker({ fail: "no such script" }),
+        emit: () => {},
+      }),
+    ).rejects.toMatchObject({
+      type: "ERR_WORKER",
+      message: expect.stringContaining("no such script"),
+    });
+  });
+
+  it("registers the Fetcher Worker's own fs client, and routes wc.fs.fetch() through it", async () => {
+    const { worker } = createFakeFsWorker();
+    const fetcherWorker = createFakeFetcherWorker();
+    const kernel = await createKernelHost({
+      createFsWorker: () => worker,
+      createProcessWorker: () => createFakeProcessWorker(),
+      createFetcherWorker: () => fetcherWorker,
+      emit: () => {},
+    });
+
+    expect(fetcherWorker.inits[0].sab).toBeInstanceOf(SharedArrayBuffer);
+    expect(fetcherWorker.inits[0].port).toBeDefined();
+
+    const pending = kernel.fetcher.fetch("https://example.test/a", "/a.txt");
+    expect(fetcherWorker.requests).toEqual([{ type: "fetch", id: 1, url: "https://example.test/a", path: "/a.txt" }]);
+
+    fetcherWorker.emit({ type: "fetch:done", id: 1, status: 200, headers: [] });
+    await expect(pending).resolves.toEqual({ status: 200, headers: [] });
   });
 
   it("attaches a per-process fs client that the fs worker will service, and detaches it", async () => {
@@ -52,6 +96,7 @@ describe("kernel host", () => {
     const kernel = await createKernelHost({
       createFsWorker: () => worker,
       createProcessWorker: () => processWorker,
+      createFetcherWorker: () => createFakeFetcherWorker(),
       emit: (m) => events.push(m),
     });
 

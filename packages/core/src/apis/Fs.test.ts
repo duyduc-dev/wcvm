@@ -34,6 +34,7 @@ describe("fs api", () => {
     await fs.symlink("/b", "/l");
     await fs.mount({ f: { file: { contents: "" } } }, "/m");
     await fs.mount({});
+    await fs.fetch("https://example.test/a", "/a.txt");
 
     expect(request.mock.calls.map(([type]) => type)).toEqual([
       "fs:writeFile",
@@ -44,10 +45,12 @@ describe("fs api", () => {
       "fs:symlink",
       "fs:mount",
       "fs:mount",
+      "fetcher:fetch",
     ]);
     expect(request.mock.calls[1][1]).toEqual({ path: "/d", recursive: true });
     expect(request.mock.calls[2][1]).toEqual({ path: "/e", recursive: false });
     expect(request.mock.calls[7][1]).toEqual({ tree: {}, basePath: "/" });
+    expect(request.mock.calls[8][1]).toEqual({ url: "https://example.test/a", path: "/a.txt" });
   });
 
   it("does not call the kernel if boot failed", async () => {
