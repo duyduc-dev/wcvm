@@ -44,8 +44,16 @@ describe("boot", () => {
     const { boot } = await import("./boot");
     const { ready } = boot();
     expect(bridge.boot).toHaveBeenCalledOnce();
+    expect(bridge.boot).toHaveBeenCalledWith({ persist: undefined });
     listeners.get("ready")!({ type: "ready" });
     await expect(ready).resolves.toBeUndefined();
+  });
+
+  it("passes the persist option through to the kernel boot message", async () => {
+    isolate(true);
+    const { boot } = await import("./boot");
+    boot({ persist: { root: "my-app" } });
+    expect(bridge.boot).toHaveBeenCalledWith({ persist: { root: "my-app" } });
   });
 
   it("rejects ready with ERR_BOOT_TIMEOUT when the kernel never answers", async () => {

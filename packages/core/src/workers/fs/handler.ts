@@ -11,6 +11,20 @@ type FsWorkerMessage =
   | { type: "unregister"; clientId: number }
   | { type: "doorbell"; clientId: number };
 
+/**
+ * Kernel -> FS Worker, sent once, before any `FsWorkerMessage` - handled directly by
+ * workers/fs/worker.ts's own temporary boot listener, not createFsWorkerHandler() below (there is
+ * no FsServer, and so nothing to register a client with, until this completes). Separate from
+ * FsWorkerMessage because it's a one-time boot step, not an ongoing servicing op.
+ */
+export interface IFsWorkerBoot {
+  type: "boot";
+  /** OPFS persistence: false (the default) for a purely in-memory Vfs; a root name to restore
+   *  from and write-behind mirror to (fs/opfsPersistence.ts) - namespaced so unrelated wcvm
+   *  instances on the same origin don't share storage by accident. */
+  persist: false | { root: string };
+}
+
 /** File System Worker -> kernel: unprompted (not a syscall response), so it's its own
  *  postMessage, not part of the request/response SAB protocol - see FsServer's WatchEventReporter. */
 export interface FsWatchEvent {

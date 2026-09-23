@@ -89,6 +89,24 @@ describe("kernel host", () => {
     await expect(pending).resolves.toEqual({ status: 200, headers: [] });
   });
 
+  it("boots the fs worker with persist: false when no persist option is given", async () => {
+    const { worker } = createFakeFsWorker();
+    await createKernelHost(deps(worker));
+    expect(worker.boots).toEqual([false]);
+  });
+
+  it("boots the fs worker with the default persist root when persist: true", async () => {
+    const { worker } = createFakeFsWorker();
+    await createKernelHost({ ...deps(worker), persist: true });
+    expect(worker.boots).toEqual([{ root: "wcvm" }]);
+  });
+
+  it("boots the fs worker with an explicit persist root", async () => {
+    const { worker } = createFakeFsWorker();
+    await createKernelHost({ ...deps(worker), persist: { root: "my-app" } });
+    expect(worker.boots).toEqual([{ root: "my-app" }]);
+  });
+
   it("attaches a per-process fs client that the fs worker will service, and detaches it", async () => {
     const { worker } = createFakeFsWorker();
     const processWorker = createFakeProcessWorker();

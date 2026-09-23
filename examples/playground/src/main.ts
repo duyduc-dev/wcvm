@@ -8,8 +8,11 @@ wc.diagnostics.onEvent((event) => {
   console.log(`[${event.timestamp}] ${event.type}`, event.payload);
 });
 
-// Exposed for the Playwright e2e and for poking around in DevTools.
-(window as unknown as { wc: typeof wc }).wc = wc;
+// Exposed for the Playwright e2e and for poking around in DevTools. `boot` itself, not just this
+// page's own default (no-persist) instance, so a test can create an independently-configured one
+// (e.g. `wcvmBoot({ persist: { root: "..." } })`) without disturbing this one.
+(window as unknown as { wc: typeof wc; wcvmBoot: typeof boot }).wc = wc;
+(window as unknown as { wc: typeof wc; wcvmBoot: typeof boot }).wcvmBoot = boot;
 
 const app = document.querySelector("#app");
 if (app) app.textContent = "wcvm playground";

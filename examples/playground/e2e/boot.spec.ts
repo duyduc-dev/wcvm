@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-type WcWindow = Window & { wc: import("wcvm").IWcvm };
+type WcWindow = Window & { wc: import("wcvm").IWcvm; wcvmBoot: typeof import("wcvm").boot };
 
 let pageErrors: string[] = [];
 
@@ -1139,6 +1139,64 @@ test.describe("fetcher", () => {
       }
     });
     expect(result).toEqual({ threw: true, exists: false });
+  });
+});
+
+test.describe("OPFS persistence", () => {
+  // wc.fs.* mirrored to the real Origin Private File System, write-behind, and restored before a
+  // fresh boot's first syscall - none of that (a real navigator.storage.getDirectory(), a real
+  // page reload reading back what a PREVIOUS page load wrote) can be exercised outside real
+  // Chromium; unit-tested against a fake OPFS handle in
+  // packages/core/src/fs/opfsPersistence.test.ts. Each test picks its own unique root name so
+  // leftover OPFS state from a previous full suite run on this machine can never collide with it.
+  test("a file written with persist enabled survives a real page reload", async ({ page }) => {
+    const root = `e2e-persist-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      await wc.fs.mkdir("/proj", { recursive: true });
+      await wc.fs.writeFile("/proj/a.txt", "hello from before the reload");
+      // Write-behind: the syscall above already answered before its OPFS mirror finished -
+      // give it a moment to actually land before reloading.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }, root);
+
+    await page.reload();
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15000 });
+
+    const result = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      return new TextDecoder().decode(await wc.fs.readFile("/proj/a.txt"));
+    }, root);
+
+    expect(result).toBe("hello from before the reload");
+  });
+
+  test("a file removed before reload does not come back", async ({ page }) => {
+    const root = `e2e-persist-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      await wc.fs.writeFile("/keep.txt", "still here");
+      await wc.fs.writeFile("/gone.txt", "not for long");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await wc.fs.rm("/gone.txt");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }, root);
+
+    await page.reload();
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15000 });
+
+    const result = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      return { keep: await wc.fs.exists("/keep.txt"), gone: await wc.fs.exists("/gone.txt") };
+    }, root);
+
+    expect(result).toEqual({ keep: true, gone: false });
   });
 });
 

@@ -262,10 +262,26 @@ syscall window). `kernel/fetcher.ts` is the kernel-side promise-map half (mirror
 `previewRelay.ts`'s own one-shot-async-op shape); `workers/fetcher/fetcherRuntime.ts` is kept free
 of `self` so its queueing/streaming logic is fully Vitest-testable (mirrors `workers/process/
 run.ts`'s split between testable core and thin wiring). See CLAUDE.md's Status section for the
-full writeup and test list. Real npm (vendoring the actual CLI) and OPFS persistence, the other two
-Phase 7 pieces, are not done yet - real npm needs this worker; OPFS is independent.
+full writeup and test list.
 
-Verified by Vitest (523) and Playwright in real Chromium (80), including a script reading a
+Also done - OPFS persistence, Phase 7's second piece: `boot({ persist: true | { root: string } })`
+mirrors `wc.fs.*` to the real Origin Private File System, write-behind, and restores from it
+before the FS Worker's first syscall - decided at boot, not a post-boot `enable()`, since that
+ordering guarantee is the whole point. `fs/opfsPersistence.ts` has both directions
+(`restoreFromOpfs`/`createOpfsMirror`), kept free of any real OPFS global so a fake in-memory
+implementation can stand in for Vitest; `FsServer` gained a third constructor param
+(`onPersist`, called from the same `vfs.onChange` closure watch dispatch already uses) rather than
+knowing anything about OPFS itself. `workers/fs/worker.ts` gained the same "init" -> (async
+restore) -> "ready" boot handshake the Fetcher Worker already has (it used to post "ready"
+unconditionally at import time - fine with no persistence to restore first, not once there is).
+OPFS has no symlinks, so a script's own symlinks are not persisted (a documented simplification).
+See CLAUDE.md's Status section for the full writeup, including two real gotchas (write-behind
+needing a serialized queue to avoid a stale result racing a fresher one; restore needing to
+finish before the mirror is even wired up, or it would write straight back what it just read).
+Real npm (vendoring the actual CLI), Phase 7's one remaining piece, needs the Fetcher Worker and
+is not done yet.
+
+Verified by Vitest (539) and Playwright in real Chromium (82), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
@@ -469,11 +485,12 @@ module: `Thing.test.ts`).
 - Remaining (not blocking this phase, tracked in the roadmap's own DNS/UDP item below): DNS
   (`dns.lookup()` is a fixed-address shim for now, not a real resolver).
 
-### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker DONE - see "Current state"; real npm and OPFS remaining)
+### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence DONE - see "Current state"; real npm remaining)
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
   state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
+- OPFS mirror (write-behind), restored before serving syscalls - done, see "Current state":
+  `boot({ persist })`, `fs/opfsPersistence.ts`.
 - Real npm CLI, vendored as one packed asset unpacked in a single batched write.
-- OPFS mirror (write-behind), restored before serving syscalls.
 
 ### Phase 8 - Dev servers
 - Vite dev + HMR over a WebSocket tunnel, templates. `fs.watch`/`watchFile` are already done (see
