@@ -5,6 +5,7 @@ import type { EventLoop } from "../eventLoop";
 import { createBufferBinding } from "./buffer";
 import { createPipeWrapBinding, createProcessWrapBinding, createSpawnSyncBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
+import { createCryptoBinding } from "./crypto";
 import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsWatchHost } from "./fs";
 import { createHttpParserBinding } from "./http";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
@@ -64,6 +65,7 @@ const factories: Record<string, BindingFactory> = {
   cares_wrap: () => createCaresWrapBinding(),
   config: () => createConfigBinding(),
   constants: () => createConstantsBinding(),
+  crypto: (ctx) => createCryptoBinding(ctx),
   diagnostics_channel: () => createDiagnosticsChannelBinding(),
   errors: () => createErrorsBinding(),
   fs: (ctx) => createFsBindingFor(ctx),

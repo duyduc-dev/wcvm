@@ -1,14 +1,16 @@
-// Services the second, per-process SAB used by two unrelated blocking capabilities that both
+// Services the second, per-process SAB used by three unrelated blocking capabilities that all
 // genuinely need a second real thread to run on while the caller parks on Atomics.wait: execSync/
-// spawnSync (OP_SPAWN_SYNC) and the zlib `*Sync` functions (OP_ZLIB_SYNC) - both run straight in
-// the Kernel Worker's own realm, no cross-worker hop needed, unlike the fs SAB (whose servicer
-// lives in the separate File System Worker). Unlike net.listen() (kernel/netServer.ts), neither
-// needs cross-process/global state coordination, so they share this one channel instead of each
-// getting their own. `service()` only ever STARTS the async work and returns; the caller stays
-// parked on Atomics.wait until it actually finishes (`onExit` for spawn_sync, a resolved/rejected
-// promise for zlib_sync) and calls `respondOk`/`respondErr`.
+// spawnSync (OP_SPAWN_SYNC), the zlib `*Sync` functions (OP_ZLIB_SYNC), and crypto's Hash.digest()
+// (OP_CRYPTO_DIGEST_SYNC) - all run straight in the Kernel Worker's own realm, no cross-worker hop
+// needed, unlike the fs SAB (whose servicer lives in the separate File System Worker). Unlike
+// net.listen() (kernel/netServer.ts), none needs cross-process/global state coordination, so they
+// share this one channel instead of each getting their own. `service()` only ever STARTS the async
+// work and returns; the caller stays parked on Atomics.wait until it actually finishes (`onExit`
+// for spawn_sync, a resolved/rejected promise for zlib_sync/crypto_digest_sync) and calls
+// `respondOk`/`respondErr`.
 
 import {
+  OP_CRYPTO_DIGEST_SYNC,
   OP_SPAWN_SYNC,
   OP_ZLIB_SYNC,
   SPAWN_SYNC_NO_STATUS,
@@ -98,6 +100,19 @@ const createKernelSyncServer = ({ processes, allocatePid }: IKernelSyncServerPar
       });
   };
 
+  const serviceCryptoDigestSync = (views: ISyscallViews, fields: Uint8Array[]) => {
+    const [algorithmBytes, inputBytes] = fields;
+    const algorithm = decodeBytes(algorithmBytes);
+    // Same reason zlib's own sync path copies out of the SAB's shared data region first: some
+    // browsers reject Web platform APIs (here, SubtleCrypto.digest()) operating on a view over a
+    // SharedArrayBuffer, and the region is about to be overwritten by this call's own respondOk.
+    const input = inputBytes.slice();
+    crypto.subtle.digest(algorithm, input).then(
+      (digest) => respondOk(views, new Uint8Array(digest)),
+      () => respondErr(views, "ERR_CRYPTO_INVALID_DIGEST"),
+    );
+  };
+
   const service = (clientId: number) => {
     const views = clients.get(clientId);
     if (!views || !hasPendingRequest(views)) return;
@@ -106,6 +121,7 @@ const createKernelSyncServer = ({ processes, allocatePid }: IKernelSyncServerPar
       const { opcode, fields } = readRequest(views);
       if (opcode === OP_SPAWN_SYNC) serviceSpawnSync(views, fields);
       else if (opcode === OP_ZLIB_SYNC) serviceZlibSync(views, fields);
+      else if (opcode === OP_CRYPTO_DIGEST_SYNC) serviceCryptoDigestSync(views, fields);
       else respondErr(views, "ENOSYS");
     } catch (error) {
       const code = (error as { code?: unknown }).code;
