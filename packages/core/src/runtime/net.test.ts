@@ -157,4 +157,33 @@ describe("accepted connections (server side)", () => {
     expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "listening\ngot hi\n", stderr: "" }));
     expect(fake.writes).toEqual([{ connId: 9, chunk: "echo:hi" }]);
   });
+
+  it("destroying an accepted connection does not unlisten the still-running server", async () => {
+    // Regression test: an accepted socket's own TCP handle reports the SAME `port` its server
+    // listens on (for getsockname()) - close()'ing that socket (e.g. a one-shot HTTP client
+    // ending its connection) must not be mistaken for the SERVER itself closing, or every
+    // connection's end would silently kill the server for all future requests.
+    const fake = createFakeNet();
+    const netSync = createFakeNetSync((port) => (port === 0 ? 3000 : port));
+    queueMicrotask(() => fake.emit({ type: "incoming", connId: 9, port: 3000 }));
+    const r = await runScript(
+      {
+        "/main.js": `
+          const net = require('net');
+          const server = net.createServer((socket) => {
+            socket.destroy();
+          });
+          server.listen(3000, () => console.log('listening'));
+          setTimeout(() => {
+            console.log('still listening:', server.listening);
+            process.exit(0);
+          }, 10);
+        `,
+      },
+      "/main.js",
+      { childProcess: noopChildProcessHost, net: fake.host, netSync },
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "listening\nstill listening: true\n", stderr: "" }));
+    expect(fake.unlistens).toEqual([]);
+  });
 });

@@ -1,5 +1,5 @@
-import type { IKernelBridge } from "./bridges/kernel";
-import { PREVIEW_PATH_PREFIX, type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "./protocols/preview";
+import type { IKernelBridge } from "../bridges/kernel";
+import { PREVIEW_PATH_PREFIX, type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../protocols/preview";
 
 export interface IPreviewApi {
   /**
@@ -12,6 +12,12 @@ export interface IPreviewApi {
   enable(): Promise<void>;
   /** Builds the fetch()-able address for a guest server's virtual `port` (and, optionally, path). */
   url(port: number, path?: string): string;
+  /**
+   * Fires whenever any guest `net`/`http` server starts or stops listening on a virtual port -
+   * e.g. to point a preview iframe at `url(port)` as soon as a dev server comes up, without
+   * polling. Returns an unsubscribe function. Does not require `enable()` to have been called.
+   */
+  onListen(handler: (info: { port: number; listening: boolean }) => void): () => void;
 }
 
 const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
@@ -63,7 +69,16 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
 
   const url = (port: number, path = "/"): string => `${PREVIEW_PATH_PREFIX}${port}${path.startsWith("/") ? path : `/${path}`}`;
 
-  return { enable, url };
+  const onListen = (handler: (info: { port: number; listening: boolean }) => void): (() => void) => {
+    const offListen = kernelBridge.on("net:listen", (m) => handler({ port: m.port as number, listening: true }));
+    const offUnlisten = kernelBridge.on("net:unlisten", (m) => handler({ port: m.port as number, listening: false }));
+    return () => {
+      offListen();
+      offUnlisten();
+    };
+  };
+
+  return { enable, url, onListen };
 };
 
 export { createPreviewApi };

@@ -116,6 +116,10 @@ const createKernelHost = async ({
   // of a postMessage to a worker that doesn't exist.
   const netServer = createNetServer({
     notify: (pid, event) => (pid === PREVIEW_PID ? preview.onNetEvent(event) : processes.notifyNet(pid, event)),
+    // PREVIEW_PID's own outgoing relay connections never call listen(), so this is always a real
+    // guest server - the host's only way to learn a virtual port came up or went away without
+    // polling (e.g. to point a preview iframe at it).
+    onListenChange: ({ pid, port, listening }) => emit({ type: listening ? "net:listen" : "net:unlisten", pid, port }),
   });
 
   // Same forward-reference trick again: `preview` is only actually called once the host page

@@ -7,4 +7,5 @@ export type {
   ISpawnOptions,
 } from "./models";
 export type { IFs } from "./apis/Fs";
+export type { IPreviewApi } from "./apis/Preview";
 export type { FileSystemTree, IStatResult } from "./models";

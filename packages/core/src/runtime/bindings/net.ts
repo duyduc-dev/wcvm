@@ -86,8 +86,13 @@ class TCP {
   reading = false;
   bytesRead = 0;
   bytesWritten = 0;
-  /** Set once .listen() succeeds (server) or a connection is established (client/accepted). */
+  /** Set once .listen() succeeds (server) or a connection is established (client/accepted) - an
+   *  accepted/connected socket's own `port` reports the SAME virtual port its server listens on
+   *  (see NetRouter.dispatch's "incoming" case), so this alone can't tell a listening handle
+   *  apart from a connection that merely knows the port for getsockname()/getpeername(). Use
+   *  `isListening` for that instead (see close()). */
   port: number | null = null;
+  isListening = false;
   connId: number | null = null;
   closed = false;
   queue: QueuedRead[] = [];
@@ -118,6 +123,7 @@ class TCP {
     } catch (error) {
       return hasErrno(error) ? uvCode(error.code) : uvCode("EIO");
     }
+    this.isListening = true;
     this.router.registerServer(this.port, this);
     this.ref();
     return 0;
@@ -221,7 +227,14 @@ class TCP {
 
   close(callback?: () => void): void {
     if (!this.closed) {
-      if (this.port !== null) {
+      // Only a handle that actually became the listener via listen() may unregister/unlisten the
+      // SERVER - an accepted or connected socket's own `port` field holds the same virtual port
+      // number (see NetRouter.dispatch's "incoming" case setting `accepted.port = event.port`),
+      // so checking `port !== null` here instead would tear down the real, still-listening server
+      // the moment any ONE of its connections closes (a real, observed bug: an ordinary
+      // Connection: close response - e.g. the preview relay's one-shot HTTP fetch - closing its
+      // own accepted socket silently killed the whole server for every future request).
+      if (this.isListening && this.port !== null) {
         this.router.unregisterServer(this.port);
         this.router.host?.unlisten(this.port);
       }

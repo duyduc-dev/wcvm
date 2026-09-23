@@ -35,6 +35,10 @@ export type NetKernelEvent = Extract<ChildEvent, { type: `net:${string}` }>;
 export interface INetServerParams {
   /** Pushes one event to a specific process's own worker; see kernel/processes.ts's notifyNet. */
   notify: (pid: number, event: NetKernelEvent) => void;
+  /** A listener came up or went away (listen() succeeded, unlisten()/close(), or its owning pid
+   *  exited) - the host's own handle on this, so a preview UI can know when to point an iframe
+   *  at a virtual port without polling. Optional: most callers (e.g. tests) don't need it. */
+  onListenChange?: (info: { pid: number; port: number; listening: boolean }) => void;
 }
 
 export interface INetServer {
@@ -71,7 +75,7 @@ interface IConnection {
   pidB: number;
 }
 
-const createNetServer = ({ notify }: INetServerParams): INetServer => {
+const createNetServer = ({ notify, onListenChange }: INetServerParams): INetServer => {
   const clients = new Map<number, ISyscallViews>();
   const listeners = new Map<number, IListener>();
   const connections = new Map<number, IConnection>();
@@ -118,6 +122,7 @@ const createNetServer = ({ notify }: INetServerParams): INetServer => {
       }
       listeners.set(assigned, { pid: clientId, backlog });
       respondOk(views, u32ToBytes(assigned));
+      onListenChange?.({ pid: clientId, port: assigned, listening: true });
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       respondErr(views, typeof code === "string" ? code : "EIO");
@@ -125,7 +130,9 @@ const createNetServer = ({ notify }: INetServerParams): INetServer => {
   };
 
   const unlisten = (pid: number, port: number) => {
-    if (listeners.get(port)?.pid === pid) listeners.delete(port);
+    if (listeners.get(port)?.pid !== pid) return;
+    listeners.delete(port);
+    onListenChange?.({ pid, port, listening: false });
   };
 
   const connect = (fromPid: number, ticket: number, port: number) => {
@@ -163,7 +170,9 @@ const createNetServer = ({ notify }: INetServerParams): INetServer => {
 
   const releasePid = (pid: number) => {
     for (const [port, listener] of listeners) {
-      if (listener.pid === pid) listeners.delete(port);
+      if (listener.pid !== pid) continue;
+      listeners.delete(port);
+      onListenChange?.({ pid, port, listening: false });
     }
     for (const [connId, conn] of connections) {
       if (conn.pidA !== pid && conn.pidB !== pid) continue;
