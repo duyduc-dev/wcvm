@@ -324,7 +324,7 @@ export const KERNEL_OPCODE_MIN = 64;
 
 // Opcodes >= KERNEL_OPCODE_MIN are serviced by the Kernel Worker directly (a
 // second SAB per process, doorbell straight to the kernel - see
-// kernel/spawnSyncServer.ts), not the File System Worker.
+// kernel/kernelSyncServer.ts), not the File System Worker.
 //
 //   OP_SPAWN_SYNC command, argsJson, cwd, envJson, input, u32 timeoutMs
 //     -> u32 pid, status (u32, 0xFFFFFFFF = null/killed-by-signal), signal
@@ -347,6 +347,17 @@ export const SPAWN_SYNC_NO_STATUS = 0xffffffff;
 //
 //   OP_NET_LISTEN u32 port (0 = auto-assign), u32 backlog -> u32 assignedPort (EADDRINUSE if taken)
 export const OP_NET_LISTEN = KERNEL_OPCODE_MIN + 1;
+
+// zlib's `*Sync` functions (gzipSync/gunzipSync/deflateSync/inflateSync/...) genuinely block,
+// like execSync/spawnSync - but unlike net.listen(), there's no cross-process/global state to
+// coordinate, so this reuses spawnSync's own per-process SAB (kernel/kernelSyncServer.ts's
+// `service()` dispatches on opcode) rather than adding a fourth one.
+//
+//   OP_ZLIB_SYNC format (UTF-8: "gzip"|"deflate"|"deflate-raw"),
+//     direction (UTF-8: "compress"|"decompress"), input bytes
+//     -> output bytes (EMSGSIZE if the whole result doesn't fit one DATA_BYTES window - same
+//        documented limit OP_SPAWN_SYNC already has for its own combined stdout+stderr)
+export const OP_ZLIB_SYNC = KERNEL_OPCODE_MIN + 2;
 
 export const isFsOpcode = (opcode: number): boolean =>
   opcode >= 1 && opcode <= FS_OPCODE_MAX;

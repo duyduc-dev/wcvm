@@ -6,7 +6,9 @@ import {
   I_RES_LEN,
   I_STATE,
   OP_SPAWN_SYNC,
+  OP_ZLIB_SYNC,
   SPAWN_SYNC_NO_STATUS,
+  STATE_IDLE,
   STATE_REQUEST,
   STATE_RESPONSE_ERR,
   STATE_RESPONSE_OK,
@@ -20,7 +22,7 @@ import {
   u32ToBytes,
 } from "../protocols/syscall";
 import { createProcessTable } from "./processes";
-import { createSpawnSyncServer } from "./spawnSyncServer";
+import { createKernelSyncServer } from "./kernelSyncServer";
 
 /** Publishes a request exactly like createSyscallClient.call() does, minus the Atomics.wait -
  *  this test drives the servicer synchronously and inspects the response directly. */
@@ -59,7 +61,7 @@ const setupServer = () => {
     netRelay: { unlisten: () => {}, connect: () => {}, data: () => {}, shutdown: () => {}, close: () => {}, releasePid: () => {} },
     emit: () => {},
   });
-  const server = createSpawnSyncServer({ processes: table, allocatePid: () => nextPid++ });
+  const server = createKernelSyncServer({ processes: table, allocatePid: () => nextPid++ });
   const sab = createSyscallBuffer();
   const views = makeViews(sab);
   server.registerClient(1, sab);
@@ -71,7 +73,7 @@ beforeEach(() => {
   t = setupServer();
 });
 
-describe("spawnSyncServer", () => {
+describe("kernelSyncServer", () => {
   it("spawns the command and responds once it exits, with buffered output", () => {
     publish(t.views, OP_SPAWN_SYNC, spawnSyncRequest("echo", ["hi"]));
     t.server.service(1);
@@ -155,5 +157,30 @@ describe("spawnSyncServer", () => {
     publish(t.views, OP_SPAWN_SYNC, spawnSyncRequest("echo", []));
     t.server.service(1);
     expect(t.workers).toHaveLength(0);
+  });
+
+  describe("OP_ZLIB_SYNC", () => {
+    it("compresses and decompresses a gzip round trip", async () => {
+      const input = new TextEncoder().encode("hello zlib sync");
+      publish(t.views, OP_ZLIB_SYNC, encodeRequest([encodeString("gzip"), encodeString("compress"), input]));
+      t.server.service(1);
+      await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_OK));
+      const gzipped = t.views.data.slice(0, Atomics.load(t.views.ctrl, I_RES_LEN));
+      // A real ISyscallClient.call() resets to idle after reading the response; do the same so
+      // the same SAB can be reused for the second call below.
+      Atomics.store(t.views.ctrl, I_STATE, STATE_IDLE);
+
+      publish(t.views, OP_ZLIB_SYNC, encodeRequest([encodeString("gzip"), encodeString("decompress"), gzipped]));
+      t.server.service(1);
+      await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_OK));
+      const roundTripped = t.views.data.slice(0, Atomics.load(t.views.ctrl, I_RES_LEN));
+      expect(decodeBytes(roundTripped)).toBe("hello zlib sync");
+    });
+
+    it("responds with an error for malformed gzip input", async () => {
+      publish(t.views, OP_ZLIB_SYNC, encodeRequest([encodeString("gzip"), encodeString("decompress"), new TextEncoder().encode("not gzip")]));
+      t.server.service(1);
+      await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_ERR));
+    });
   });
 });

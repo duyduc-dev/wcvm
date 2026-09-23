@@ -16,7 +16,7 @@ import {
   IProcessTable,
   IProcessWorkerLike,
 } from "./processes";
-import { createSpawnSyncServer } from "./spawnSyncServer";
+import { createKernelSyncServer } from "./kernelSyncServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IFsWorkerLike {
@@ -149,7 +149,7 @@ const createKernelHost = async ({
   fetcherWorker.onmessage = (event) => fetcher.dispatch(event.data as FetcherEvent);
 
   let nextSyncPid = SYNC_PID_START;
-  const spawnSyncServer = createSpawnSyncServer({
+  const kernelSyncServer = createKernelSyncServer({
     // `processes` is defined just below, in the same closure - only ever called later,
     // once a real spawn request comes in, by which point it's fully initialized.
     processes: {
@@ -170,7 +170,7 @@ const createKernelHost = async ({
   });
 
   // `processes` isn't assigned until below either - same forward-reference trick as
-  // spawnSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
+  // kernelSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
   // elsewhere accepts a connection or some data/close event actually fires. PREVIEW_PID is never
   // a real process (see previewRelay.ts) - its own events go to `previewRelay` directly instead
   // of a postMessage to a worker that doesn't exist.
@@ -199,11 +199,11 @@ const createKernelHost = async ({
     attachSyncClient: (clientId) => {
       const buffer = createSyscallBuffer();
       const { port1, port2 } = new MessageChannel();
-      spawnSyncServer.registerClient(clientId, buffer);
-      port1.onmessage = () => spawnSyncServer.service(clientId);
+      kernelSyncServer.registerClient(clientId, buffer);
+      port1.onmessage = () => kernelSyncServer.service(clientId);
       return { sab: buffer, port: port2 };
     },
-    detachSyncClient: (clientId) => spawnSyncServer.unregisterClient(clientId),
+    detachSyncClient: (clientId) => kernelSyncServer.unregisterClient(clientId),
     attachNetClient: (clientId) => {
       const buffer = createSyscallBuffer();
       const { port1, port2 } = new MessageChannel();

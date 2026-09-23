@@ -1233,6 +1233,31 @@ test.describe("example: Node HTTP server", () => {
   });
 });
 
+test.describe("zlib", () => {
+  test("a streaming gzip/gunzip round trip via createGzip/createGunzip", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const zlib = require("zlib");
+      const chunks = [];
+      const gz = zlib.createGzip();
+      const gunz = zlib.createGunzip();
+      gz.pipe(gunz);
+      gunz.on("data", (c) => chunks.push(c));
+      gunz.on("end", () => console.log(Buffer.concat(chunks).toString()));
+      gz.end("hello from a real browser CompressionStream");
+    `]);
+    expect(r).toEqual({ code: 0, out: "hello from a real browser CompressionStream\n", err: "" });
+  });
+
+  test("gzipSync/gunzipSync round trip through the real kernel-mediated blocking path", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const zlib = require("zlib");
+      const compressed = zlib.gzipSync(Buffer.from("sync via the kernel"));
+      console.log(zlib.gunzipSync(compressed).toString());
+    `]);
+    expect(r).toEqual({ code: 0, out: "sync via the kernel\n", err: "" });
+  });
+});
+
 test.describe("sh", () => {
   test("sequences, short-circuits, and pipes across real built-in programs", async ({ page }) => {
     const r = await spawn(page, "sh", ["-c", "false && echo skipped; echo one | cat; true && echo two"]);
