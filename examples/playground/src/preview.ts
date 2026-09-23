@@ -17,22 +17,27 @@ export const attachPreview = (
         : `Previewing virtual port ${activePort}.`;
   };
 
+  // Registered unconditionally, not just after this button's own click: onListen() doesn't need
+  // enable() to have been called first (it's pure kernel-side bookkeeping - see apis/Preview.ts),
+  // and another caller (e.g. src/exampleServer.ts) may be the one that actually calls enable() -
+  // the iframe (and this status text) should reflect a real server coming up either way.
+  wc.preview.onListen(({ port, listening }) => {
+    if (listening) {
+      activePort = port;
+      frame.src = wc.preview.url(port);
+    } else if (activePort === port) {
+      activePort = undefined;
+      frame.src = "about:blank";
+    }
+    render();
+  });
+
   enableButton.addEventListener("click", async () => {
     enableButton.disabled = true;
     enableButton.textContent = "enabling...";
     try {
       await wc.preview.enable();
       enableButton.textContent = "preview enabled";
-      wc.preview.onListen(({ port, listening }) => {
-        if (listening) {
-          activePort = port;
-          frame.src = wc.preview.url(port);
-        } else if (activePort === port) {
-          activePort = undefined;
-          frame.src = "about:blank";
-        }
-        render();
-      });
       render();
     } catch (error) {
       enableButton.textContent = "enable preview";
