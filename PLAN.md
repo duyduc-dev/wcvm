@@ -229,20 +229,18 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   real Chromium for a real client process GETting from a real server process (status, headers,
   and body all round-tripping) and a real client process POSTing a body that a real server process
   streams and echoes back.
-Verified by Vitest (487) and Playwright in real Chromium (74), including a script reading a
-file the host wrote and the host reading what the script wrote.
-
-**IN PROGRESS, not committed** - preview Service Worker relay (the "Service Worker relay only"
-scope from Phase 6's own `AskUserQuestion`, no UI): `wc.preview.enable()` + `wc.preview.url(port,
-path)`. See CLAUDE.md's Status section for the full design writeup and the real ordering bug found
+Also done - preview Service Worker relay (the "Service Worker relay only" scope from Phase 6's own
+`AskUserQuestion`, no UI): `wc.preview.enable()` + `wc.preview.url(port, path)`. See CLAUDE.md's
+Status section for the full design writeup and the real ordering bug found
 (`netServer.connect()`'s connectResult-before-incoming notify order, harmless for a real process
 but not for the kernel-synchronous `PREVIEW_PID` sentinel `previewRelay.ts` uses - fixed with a
 `queueMicrotask`). Own unit tests (`kernel/previewRelay.test.ts`, `workers/kernel/handlers/
-preview.test.ts`) and 3 new Playwright tests all pass; what's left before this can be marked done
-and committed is one more full, clean `pnpm exec playwright test` run - the last two runs each had
-a different, unrelated test fail on a `page.goto` timeout that looks like host machine contention,
-not a regression (nothing net/http/preview-related failed either time). Re-run once more on a
-quiet machine, update the test counts and "Not done" line below, then commit.
+preview.test.ts`) and 3 Playwright tests all pass; a full, clean `pnpm exec playwright test` run
+(77/77) confirmed no regressions - the two earlier flaky failures (a different unrelated test each
+time, on a `page.goto` timeout) were host machine resource contention, not a real issue.
+
+Verified by Vitest (495) and Playwright in real Chromium (77), including a script reading a
+file the host wrote and the host reading what the script wrote.
 
 Not done: the rest of preview (an iframe pane wired into a real UI - out of scope for this slice),
 UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
@@ -429,7 +427,7 @@ module: `Thing.test.ts`).
   "Current state").
 - Not done: `$` expansion, globbing, subshells, control-flow keywords, `&` background jobs.
 
-### Phase 6 - Network + preview  (net + http DONE; Service Worker relay IN PROGRESS, not committed - see "Current state"; iframe UI remaining)
+### Phase 6 - Network + preview  (net + http + Service Worker relay DONE - see "Current state"; iframe UI remaining)
 - Kernel port registry: `listen`/`accept`/`respond` (chunk large bodies) - done, see "Current
   state"'s `net` entry: a real virtual TCP network (`kernel/netServer.ts`), reached from guest
   code via a real `tcp_wrap` (`runtime/bindings/net.ts`). No separate `respond`/large-body
@@ -439,10 +437,8 @@ module: `Thing.test.ts`).
 - `http.createServer`/`http.request`/`http.get` - done, see "Current state"'s `http` entry: real
   vendored `http.js` and friends over a hand-written `internalBinding('http_parser')`
   (`runtime/bindings/httpParser.ts`, `http.ts`), since llhttp is a native binding.
-- Service Worker relay - IN PROGRESS, not committed, see "Current state": `wc.preview.enable()`/
-  `wc.preview.url()`, `kernel/previewRelay.ts`, `workers/preview/PreviewServiceWorker.ts`. Own
-  tests pass; blocked only on one more clean full Playwright run (last two each had an unrelated,
-  different test fail on what looks like host machine contention, not a regression).
+- Service Worker relay - done, see "Current state": `wc.preview.enable()`/
+  `wc.preview.url()`, `kernel/previewRelay.ts`, `workers/preview/PreviewServiceWorker.ts`.
 - Remaining: DNS (`dns.lookup()` is a fixed-address shim for now, not a real resolver). An actual
   iframe pane wired into a UI (deliberately out of scope for the relay slice above); `listen`
   events on the host handle.
