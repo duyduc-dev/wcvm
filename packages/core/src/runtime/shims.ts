@@ -16,9 +16,12 @@ const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
  *  - Node modules that are part of Node's C++ bootstrap rather than its `lib/`, so they cannot
  *    be vendored verbatim at all (`internal/url`, `internal/encoding`, `internal/blob`,
  *    `internal/perf/observe`, `v8`).
- *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified
- *    result instead of fully implementing, because there's nothing real behind them to report
- *    (`dns`, `cluster` - see their own comments below for why).
+ *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified,
+ *    or narrower result instead of fully implementing: `dns`/`cluster` because there's nothing
+ *    real behind them to report; `crypto` because real Node's own `crypto.js` needs a much bigger
+ *    native-crypto binding surface (KeyObject/PEM, X.509, DiffieHellman, scrypt, argon2 - none of
+ *    it mappable onto the Web Crypto API) than this sandbox's actual need (hashing) justifies -
+ *    see their own comments below for why.
  *
  * `internal/bootstrap/realm` is Node's own builtin loader. Vendored modules
  * reach it for `BuiltinModule` (does this id exist? may users require it?), so
@@ -215,6 +218,96 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     module.exports = { isPrimary: true, isMaster: true, isWorker: false };
   };
 
+  /**
+   * crypto.js (real Node's) unconditionally requires ~15 internal modules just to be
+   * require()-able at all (cipher, sig, hash, x509, certificate, kem, webcrypto, random, argon2,
+   * pbkdf2, scrypt, hkdf, keygen, keys, diffiehellman) - most needing native-crypto features
+   * (KeyObject/PEM export, X.509 certificates, DiffieHellman groups, scrypt, argon2) the Web
+   * Crypto API this sandbox would have to back them with simply has no equivalent for. This
+   * sandbox's actual need (real npm/pacote's sha512/sha1 package integrity checks) is narrow, so
+   * `crypto` is a small hand-written module instead, not vendored source: `createHash`/`Hash`
+   * (backed by SubtleCrypto.digest() - real, native, already available - via the same
+   * kernel-mediated sync bridge zlib's own `*Sync` family uses, since `Hash.digest()` is
+   * synchronous but `SubtleCrypto.digest()` isn't) plus `randomBytes`/`randomUUID` (already
+   * synchronous - `crypto.getRandomValues()`/`crypto.randomUUID()` are real globals here too, no
+   * bridging needed at all). Everything else (ciphers, DiffieHellman, X.509 certificates,
+   * KeyObject, ...) is simply absent - requiring it throws a plain "is not a
+   * function"/"is not a constructor", the same honest failure shape `zlib.ts`'s own missing
+   * Brotli/Zstd support has.
+   */
+  const cryptoShim: BuiltinFactory = (_exports, require, module, process, internalBinding) => {
+    // SubtleCrypto.digest() supports exactly these four - no md5, sha224, sha3-*, blake2*, etc.;
+    // unsupported by the platform API itself, not a choice made here.
+    const WEB_CRYPTO_ALGORITHM: Record<string, string> = {
+      sha1: "SHA-1",
+      sha256: "SHA-256",
+      sha384: "SHA-384",
+      sha512: "SHA-512",
+    };
+
+    const concatBytes = (parts: Uint8Array[]): Uint8Array => {
+      const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let offset = 0;
+      for (const part of parts) {
+        out.set(part, offset);
+        offset += part.length;
+      }
+      return out;
+    };
+
+    // The sandbox's OWN Buffer (bindings/buffer.ts), not a real Node/platform one - same
+    // "require the vendored module to get its class" pattern childProcess.ts's own exec()/
+    // execFile() output already uses.
+    const toBytes = (data: unknown, inputEncoding?: string): Uint8Array => {
+      if (typeof data === "string") return new Uint8Array(require("buffer").Buffer.from(data, inputEncoding ?? "utf8"));
+      if (data instanceof Uint8Array) return data;
+      throw new TypeError("crypto: Hash.update() expects a string, Buffer, or TypedArray");
+    };
+
+    class Hash {
+      algorithm: string;
+      chunks: Uint8Array[] = [];
+
+      constructor(algorithm: string) {
+        const normalized = algorithm.toLowerCase();
+        if (!WEB_CRYPTO_ALGORITHM[normalized]) {
+          throw new Error(`crypto.createHash: unsupported digest algorithm '${algorithm}' (supported: ${Object.keys(WEB_CRYPTO_ALGORITHM).join(", ")})`);
+        }
+        this.algorithm = normalized;
+      }
+
+      update(data: unknown, inputEncoding?: string) {
+        this.chunks.push(toBytes(data, inputEncoding));
+        return this;
+      }
+
+      digest(encoding?: string) {
+        const input = concatBytes(this.chunks);
+        const bytes = internalBinding("crypto").digestSync(WEB_CRYPTO_ALGORITHM[this.algorithm], input);
+        const result = require("buffer").Buffer.from(bytes);
+        return encoding ? result.toString(encoding) : result;
+      }
+    }
+
+    const createHash = (algorithm: string) => new Hash(algorithm);
+
+    // crypto.getRandomValues() caps out at 65536 bytes per call (the Web Crypto spec's own
+    // limit, QuotaExceededError beyond it) - real npm/pacote only ever need small nonces/tokens,
+    // so this isn't chunked; revisit if a real caller ever needs more.
+    const randomBytes = (size: number, callback?: (error: Error | null, buffer?: unknown) => void) => {
+      const bytes = new Uint8Array(size);
+      crypto.getRandomValues(bytes);
+      const result = require("buffer").Buffer.from(bytes);
+      if (!callback) return result;
+      process.nextTick(() => callback(null, result));
+      return undefined;
+    };
+
+    const randomUUID = (): string => crypto.randomUUID();
+
+    module.exports = { createHash, Hash, randomBytes, randomUUID };
+  };
+
   return {
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
@@ -222,6 +315,7 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     "internal/perf/observe": internalPerfObserve,
     dns: dnsShim,
     cluster: clusterShim,
+    crypto: cryptoShim,
     v8: v8Shim,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {

@@ -364,12 +364,43 @@ no-op). `windowBits`/`memLevel`/`strategy`/`dictionary` are accepted but ignored
   the real kernel-mediated blocking path) - neither the real native browser `CompressionStream` nor
   the genuine cross-thread `Atomics.wait` blocking path can be exercised outside Chromium. A full,
   clean `pnpm exec playwright test` run (85/85) and `vitest run` (553/553) confirm no regressions.
+- Also done - `crypto` (hashing only; real npm's second missing-builtin finding, scoped down with
+  the user first - see "Real npm: feasibility findings" below): NOT vendored source, unlike almost
+  everything else in this sandbox - real Node's own `crypto.js` unconditionally requires ~15
+  internal modules just to be `require()`-able at all (cipher, sig, hash, x509, certificate, kem,
+  webcrypto, random, argon2, pbkdf2, scrypt, hkdf, keygen, keys, diffiehellman), most needing
+  native-crypto features (KeyObject/PEM export, X.509 certificates, DiffieHellman groups, scrypt,
+  argon2) the Web Crypto API has no equivalent for at all - far more than real npm's own actual
+  need (sha512/sha1 package integrity checks) justifies. `runtime/shims.ts`'s `cryptoShim` is
+  instead a small hand-written module, in the same "deliberately simplified real module" category
+  `dns`/`cluster` already are there: `createHash`/`Hash` (`.update()`/`.digest()`, chainable,
+  matching real Node) backed by the real, native `SubtleCrypto.digest()` (`internalBinding
+  ('crypto')`, `bindings/crypto.ts`) - only SHA-1/256/384/512 (exactly what `SubtleCrypto.digest()`
+  itself supports; no md5/sha224/sha3-*/blake2*) - plus `randomBytes`/`randomUUID`, backed by the
+  real `crypto.getRandomValues()`/`crypto.randomUUID()` globals directly (already synchronous, no
+  bridging needed at all, unlike digest). `Hash.digest()` is synchronous but `SubtleCrypto.digest()`
+  isn't, so digest needs the exact same kernel-mediated sync bridge `zlib`'s own `*Sync` family
+  does - a new `OP_CRYPTO_DIGEST_SYNC` opcode (`protocols/syscall.ts`), serviced by
+  `kernel/kernelSyncServer.ts` right alongside `OP_SPAWN_SYNC`/`OP_ZLIB_SYNC` (same one shared SAB;
+  no cross-process state to coordinate here either). Everything else real npm doesn't need
+  (ciphers, DiffieHellman, X.509 certificates, KeyObject, ...) is simply absent - the same honest
+  "not a function"/"not a constructor" failure shape `zlib.ts`'s own missing Brotli/Zstd support
+  already has. Verified: `bindings/crypto.test.ts` (7 Vitest, against a fake `OP_CRYPTO_DIGEST_SYNC`
+  servicer backed by Node's own `crypto.createHash` - proves the wire protocol, the same spirit
+  `zlib.test.ts`'s own fake already established - including a known SHA-256 test vector, chunked
+  `update()` calls matching one big call, and a clear error for an unsupported algorithm),
+  `kernel/kernelSyncServer.test.ts`'s new `OP_CRYPTO_DIGEST_SYNC` cases (a real digest via
+  `SubtleCrypto.digest()`, since Node has it globally too). 2 new Playwright tests in real Chromium
+  (a `createHash('sha512')` digest cross-checked against Node's own `crypto.createHash` for the
+  same input, and `randomBytes`/`randomUUID` producing real, distinct values) - the real browser
+  `SubtleCrypto`/`crypto.getRandomValues()` can't be exercised outside Chromium. A full, clean
+  `pnpm exec playwright test` run (87/87) and `vitest run` (562/562) confirm no regressions.
 
 Real npm (vendoring the actual CLI), Phase 7's one remaining piece, needs the Fetcher Worker and
-`zlib`/`crypto` - `zlib` is now done (above); `crypto` and the real-internet-access question are
-not.
+`zlib`/`crypto` - both now done (above); the real-internet-access question (below) is not
+resolved, and is the harder, still-open blocker.
 
-Verified by Vitest (553) and Playwright in real Chromium (85), including a script reading a
+Verified by Vitest (562) and Playwright in real Chromium (87), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
@@ -583,18 +614,21 @@ module: `Thing.test.ts`).
 - Remaining (not blocking this phase, tracked in the roadmap's own DNS/UDP item below): DNS
   (`dns.lookup()` is a fixed-address shim for now, not a real resolver).
 
-### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence + zlib DONE - see "Current state"; real npm remaining)
+### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence + zlib + crypto DONE - see "Current state"; real npm remaining)
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
   state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
 - OPFS mirror (write-behind), restored before serving syscalls - done, see "Current state":
   `boot({ persist })`, `fs/opfsPersistence.ts`.
 - `zlib` (the first of the two missing builtins the feasibility investigation below flagged) -
   done, see "Current state": `bindings/zlib.ts`, `OP_ZLIB_SYNC`, `kernel/kernelSyncServer.ts`.
+- `crypto` (the second missing builtin, scoped down to hashing only with the user first - see
+  "Current state") - done: `runtime/shims.ts`'s `cryptoShim`, `bindings/crypto.ts`,
+  `OP_CRYPTO_DIGEST_SYNC`.
 - Real npm CLI, vendored as one packed asset unpacked in a single batched write. **Feasibility
   investigated 2026-09-23, not started - see "Real npm: feasibility findings" below before writing
   any code.**
 
-#### Real npm: feasibility findings (2026-09-23, no code written yet; `zlib` finding resolved 2026-09-23 - see "Current state")
+#### Real npm: feasibility findings (2026-09-23, no code written yet; `zlib`/`crypto` findings resolved - see "Current state")
 
 Checked the locally installed npm CLI (v11.9.0) as a stand-in for what vendoring would mean: ~16MB,
 984 JS files, a huge dependency tree (`node-gyp`, `@sigstore/*`, `tar`, `pacote`, `cacache`,
@@ -606,8 +640,10 @@ the literal "vendor real npm" approach once they've seen the blocker below.
 manifest.json` had neither `zlib` nor `crypto`; no `bindings/zlib.ts`/`bindings/crypto.ts` existed):
 - `zlib` - needed to gunzip registry tarballs (`.tar.gz`) and gzip-encoded HTTP responses. **Done**
   (see "Current state"): backed by the real, native `CompressionStream`/`DecompressionStream`.
-- `crypto` - needed for the sha512 integrity checks `pacote`/`cacache` rely on throughout.
-  `require('crypto')` still throws `Cannot find module 'crypto'` today - not started.
+- `crypto` - needed for the sha512 integrity checks `pacote`/`cacache` rely on throughout. **Done**
+  (see "Current state"): `createHash`/`Hash` backed by the real, native `SubtleCrypto.digest()`,
+  scoped to hashing only (not the rest of real Node's `crypto.js` - see the design note there for
+  why) after confirming that scope with the user first.
 
 **The deeper, architectural blocker: npm needs the real internet; wcvm's `net`/`http` are 100%
 virtual.** `net.connect()` only ever resolves to another wcvm process listening on a virtual port
@@ -638,17 +674,21 @@ Recommended next steps, in order:
    kernel-mediated `OP_ZLIB_SYNC` opcode for the blocking `*Sync` family (the same sync-bridge
    pattern `execSync`/`spawnSync`/`net.listen()` already use, reusing their existing per-process
    SAB rather than adding a new one, since zlib has no cross-process state to coordinate).
-2. `crypto.subtle` (Web Crypto API, already available) could back a `crypto` module for hashing
+2. ~~`crypto.subtle` (Web Crypto API, already available) could back a `crypto` module for hashing
    (`createHash('sha256'/'sha512')`) - but it's async (`SubtleCrypto.digest()` returns a Promise)
    while Node's real `crypto.createHash().update().digest()` is synchronous. Same category of
-   sync/async bridging the sync-syscall-over-SAB architecture already solves elsewhere (see
-   CLAUDE.md's "Sync bridge" section, and now `zlib`'s own `OP_ZLIB_SYNC` precedent above) - likely
-   solvable the same way, but real new work.
+   sync/async bridging the sync-syscall-over-SAB architecture already solves elsewhere~~ - **done**,
+   see "Current state"'s `crypto` entry: a hand-written `crypto` module (not vendored - real
+   `crypto.js` needs ~15 internal modules and native-crypto features Web Crypto can't back, far
+   more than hashing needs), `bindings/crypto.ts`, a kernel-mediated `OP_CRYPTO_DIGEST_SYNC`
+   opcode for the blocking `Hash.digest()` (same pattern as `OP_ZLIB_SYNC`, reusing the same
+   shared SAB).
 3. Resolve the "real internet access" open question above before going further - it decides
-   whether the rest of this is worth attempting as literally "vendor real npm" at all.
+   whether the rest of this is worth attempting as literally "vendor real npm" at all. **This is
+   now the one remaining blocker** - both missing builtins (step 1, step 2) are done.
 
-No code was written or committed for the real-npm investigation itself; `zlib` (step 1) was
-implemented and verified separately, tracked in "Current state" above.
+No code was written or committed for the real-npm investigation itself; `zlib` and `crypto`
+(steps 1 and 2) were each implemented and verified separately, tracked in "Current state" above.
 
 ### Phase 8 - Dev servers
 - Vite dev + HMR over a WebSocket tunnel, templates. `fs.watch`/`watchFile` are already done (see

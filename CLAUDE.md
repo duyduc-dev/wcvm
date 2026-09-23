@@ -382,10 +382,51 @@ Done and verified in real Chromium:
     `CompressionStream` nor the genuine cross-thread `Atomics.wait` blocking path can be exercised
     outside Chromium. A full, clean `pnpm exec playwright test` run (85/85) and `vitest run`
     (553/553) confirm no regressions.
-- Tests: 553 Vitest + 85 Playwright (Chromium). See "Verifying".
+- `crypto` (hashing only, Phase 7's fourth piece, and the second of real npm's two missing-builtin
+  blockers resolved - see PLAN.md's "Real npm: feasibility findings"): unlike almost everything
+  else in this sandbox, **not vendored source** - real Node's own `crypto.js` unconditionally
+  requires ~15 internal modules just to be `require()`-able at all (cipher, sig, hash, x509,
+  certificate, kem, webcrypto, random, argon2, pbkdf2, scrypt, hkdf, keygen, keys,
+  diffiehellman), most needing native-crypto features (KeyObject/PEM export, X.509 certificates,
+  DiffieHellman groups, scrypt, argon2) the Web Crypto API has no equivalent for at all - a
+  vendoring job far bigger than real npm's own actual need (sha512/sha1 package integrity checks)
+  justifies. Scoped down to hashing only with the user first (offered as one of three options - a
+  narrow hand-written shim, full vendoring plus binding stubs for the whole surface, or resolving
+  the harder real-internet-access question before touching crypto at all - the narrow shim won).
+  `runtime/shims.ts`'s `cryptoShim` is a small hand-written module, in the same "deliberately
+  simplified real module" category `dns`/`cluster` already are there: `createHash`/`Hash`
+  (`.update()`/`.digest()`, chainable, matching real Node) backed by the real, native
+  `SubtleCrypto.digest()` via a new `internalBinding('crypto')` (`bindings/crypto.ts`) - only
+  SHA-1/256/384/512, exactly what `SubtleCrypto.digest()` itself supports (no md5/sha224/sha3-*/
+  blake2*) - plus `randomBytes`/`randomUUID`, backed directly by the real
+  `crypto.getRandomValues()`/`crypto.randomUUID()` globals (already synchronous, no bridging
+  needed at all, unlike digest). `Hash.digest()` is synchronous but `SubtleCrypto.digest()` isn't,
+  so digest needs the exact same kernel-mediated sync bridge `zlib`'s own `*Sync` family already
+  uses - a new `OP_CRYPTO_DIGEST_SYNC` opcode (`protocols/syscall.ts`), serviced by `kernel/
+  kernelSyncServer.ts` right alongside `OP_SPAWN_SYNC`/`OP_ZLIB_SYNC` on the same shared SAB (no
+  cross-process state to coordinate here either, same reasoning as zlib's own sync path). The
+  stray `crypto.js`/`manifest.json`/`registry.ts`/`vendor.lock.json` edits an earlier exploratory
+  `discover-node-lib.mjs crypto` run left behind (it fetches the file and updates those three
+  before probing whether the module can actually load, which is where it failed here with `Node.js
+  is not compiled with OpenSSL crypto support`) were reverted - this module is deliberately NOT
+  going down the real-vendoring path. Everything else real npm doesn't need (ciphers,
+  DiffieHellman, X.509 certificates, KeyObject, ...) is simply absent - the same honest "not a
+  function"/"not a constructor" failure shape `zlib.ts`'s own missing Brotli/Zstd support already
+  has. Verified: `bindings/crypto.test.ts` (7 Vitest, against a fake `OP_CRYPTO_DIGEST_SYNC`
+  servicer backed by Node's own `crypto.createHash` - proves the wire protocol, the same spirit
+  `zlib.test.ts`'s own fake already established - including a known SHA-256 vector, chunked
+  `update()` calls matching one big call, and a clear error for an unsupported algorithm),
+  `kernel/kernelSyncServer.test.ts`'s new `OP_CRYPTO_DIGEST_SYNC` cases (a real digest via
+  `SubtleCrypto.digest()`, since Node has it globally too). 2 new Playwright tests in real
+  Chromium (a `createHash('sha512')` digest cross-checked against Node's own `crypto.createHash`
+  for the same input; `randomBytes`/`randomUUID` producing real, distinct values) - the real
+  browser `SubtleCrypto`/`crypto.getRandomValues()` can't be exercised outside Chromium. A full,
+  clean `pnpm exec playwright test` run (87/87) and `vitest run` (562/562) confirm no regressions.
+- Tests: 562 Vitest + 87 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's one remaining piece:
-vendoring the actual CLI), Vite dev server/HMR, Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (Phase 7's one remaining piece -
+blocked on the real-internet-access question in PLAN.md's "Real npm: feasibility findings"),
+Vite dev server/HMR, Python/Bun, Studio UI.
 
 ## Architecture in one page
 

@@ -1,3 +1,4 @@
+import nodeCrypto from "node:crypto";
 import { expect, test } from "@playwright/test";
 
 type WcWindow = Window & { wc: import("wcvm").IWcvm; wcvmBoot: typeof import("wcvm").boot };
@@ -1255,6 +1256,32 @@ test.describe("zlib", () => {
       console.log(zlib.gunzipSync(compressed).toString());
     `]);
     expect(r).toEqual({ code: 0, out: "sync via the kernel\n", err: "" });
+  });
+});
+
+test.describe("crypto", () => {
+  test("createHash().update().digest() blocks through the real kernel-mediated SubtleCrypto.digest() path", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const crypto = require("crypto");
+      console.log(crypto.createHash("sha512").update("hello from a real browser SubtleCrypto").digest("hex"));
+    `]);
+    expect(r.code).toBe(0);
+    expect(r.err).toBe("");
+    // Cross-checked against Node's own crypto.createHash('sha512') for the same input - proves
+    // the real browser SubtleCrypto.digest() round trip, not just that some bytes came back.
+    expect(r.out).toBe(
+      nodeCrypto.createHash("sha512").update("hello from a real browser SubtleCrypto").digest("hex") + "\n",
+    );
+  });
+
+  test("randomBytes/randomUUID are real, distinct values from the real browser Web Crypto API", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const crypto = require("crypto");
+      const a = crypto.randomBytes(16);
+      const b = crypto.randomBytes(16);
+      console.log(a.length, b.length, a.equals(b), crypto.randomUUID() !== crypto.randomUUID());
+    `]);
+    expect(r).toEqual({ code: 0, out: "16 16 false true\n", err: "" });
   });
 });
 

@@ -359,6 +359,15 @@ export const OP_NET_LISTEN = KERNEL_OPCODE_MIN + 1;
 //        documented limit OP_SPAWN_SYNC already has for its own combined stdout+stderr)
 export const OP_ZLIB_SYNC = KERNEL_OPCODE_MIN + 2;
 
+// crypto.Hash.digest() genuinely blocks too (Node's own crypto.createHash().update().digest() is
+// synchronous), backed by the real, native SubtleCrypto.digest() - which is itself async, so this
+// needs the same second-thread bridge as OP_ZLIB_SYNC (and for the same reason: no cross-process/
+// global state to coordinate, so it reuses this one shared SAB rather than adding a fourth).
+//
+//   OP_CRYPTO_DIGEST_SYNC algorithm (UTF-8: "SHA-1"|"SHA-256"|"SHA-384"|"SHA-512"), input bytes
+//     -> digest bytes
+export const OP_CRYPTO_DIGEST_SYNC = KERNEL_OPCODE_MIN + 3;
+
 export const isFsOpcode = (opcode: number): boolean =>
   opcode >= 1 && opcode <= FS_OPCODE_MAX;
 
