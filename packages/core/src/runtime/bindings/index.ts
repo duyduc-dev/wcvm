@@ -31,6 +31,7 @@ import { createTcpWrapBinding, type INetHost } from "./net";
 import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
 import { createSymbolsBinding, createUtilBinding } from "./util";
+import { createZlibBinding } from "./zlib";
 
 interface IBindingContext {
   /** For bindings that call back into Node's own modules (defineLazyProperties). */
@@ -92,6 +93,7 @@ const factories: Record<string, BindingFactory> = {
   udp_wrap: () => createUdpWrapBinding(),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),
+  zlib: (ctx) => createZlibBinding(ctx),
 };
 
 // One fs binding per realm: fs and fs_dir must share file handles and state.

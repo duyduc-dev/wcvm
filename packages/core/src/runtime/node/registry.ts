@@ -110,6 +110,7 @@ import f_timers from "./lib/timers.js";
 import f_timers_promises from "./lib/timers/promises.js";
 import f_util from "./lib/util.js";
 import f_util_types from "./lib/util/types.js";
+import f_zlib from "./lib/zlib.js";
 
 export const NODE_VERSION = "v24.18.0";
 
@@ -223,6 +224,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "timers/promises": f_timers_promises,
   "util": f_util,
   "util/types": f_util_types,
+  "zlib": f_zlib,
 };
 
 export const perContextFactories: Record<string, PerContextFactory> = {

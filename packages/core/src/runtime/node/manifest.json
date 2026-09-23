@@ -110,6 +110,7 @@
     "_http_server": "builtin",
     "_http_outgoing": "builtin",
     "internal/freelist": "builtin",
-    "_http_incoming": "builtin"
+    "_http_incoming": "builtin",
+    "zlib": "builtin"
   }
 }

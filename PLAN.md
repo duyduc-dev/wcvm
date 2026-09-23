@@ -91,7 +91,7 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   - unlike async `spawn()`'s `pipe_wrap`/`process_wrap`, this really blocks the calling Process
   Worker (`Atomics.wait`) until the child has fully exited. It uses a SECOND per-process SAB
   (`OP_SPAWN_SYNC`, `protocols/syscall.ts`) whose servicer runs directly in the Kernel Worker,
-  not the FS Worker (`kernel/spawnSyncServer.ts` - process supervision lives in the kernel, a
+  not the FS Worker (`kernel/kernelSyncServer.ts` - process supervision lives in the kernel, a
   different thread from the fs SAB's FS Worker servicer). `kernel/processes.ts`'s `onExit` hook
   buffers the child's whole stdout/stderr (instead of streaming it live to a parent worker or the
   host) and delivers it all at once, when the child exits, alongside its status/signal - real
@@ -174,7 +174,7 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   `net.js`'s own contract (it emits `'listening'` right after `handle.listen()` returns `0`, with
   no further async confirmation awaited) - a THIRD per-process SAB (`OP_NET_LISTEN`,
   `protocols/syscall.ts`), serviced by the kernel exactly like `spawnSync`'s own second one
-  (`kernel/netServer.ts`'s `service`, mirroring `kernel/spawnSyncServer.ts`). `connect()`/reads/
+  (`kernel/netServer.ts`'s `service`, mirroring `kernel/kernelSyncServer.ts`). `connect()`/reads/
   writes are all naturally async, ordinary postMessage relay. `stream_wrap`'s shared
   `streamBaseState` scratch array (real read/write completions live there, per realm) used to be
   private to `child_process.ts`'s own router; pulled out to `runtime/bindings/streamBaseState.ts`
@@ -278,10 +278,98 @@ OPFS has no symlinks, so a script's own symlinks are not persisted (a documented
 See CLAUDE.md's Status section for the full writeup, including two real gotchas (write-behind
 needing a serialized queue to avoid a stale result racing a fresher one; restore needing to
 finish before the mirror is even wired up, or it would write straight back what it just read).
-Real npm (vendoring the actual CLI), Phase 7's one remaining piece, needs the Fetcher Worker and
-is not done yet.
+Also done - `zlib` (Phase 7's third piece, and real npm's first concrete blocker resolved - see the
+2026-09-23 feasibility findings below): Node's real vendored `lib/zlib.js`, unmodified, over an
+`internalBinding('zlib')` backed by the browser's real, native `CompressionStream`/
+`DecompressionStream` rather than a WASM/pure-JS zlib port. Covers `Deflate`/`Inflate`/`Gzip`/
+`Gunzip`/`DeflateRaw`/`InflateRaw`/`Unzip` - both the streaming `Transform` classes
+(`zlib.createGzip()` etc., pipeable) and the convenience functions (async callback, promisified,
+and the blocking `*Sync` family) - plus `zlib.crc32()`. Not done: Brotli/Zstd (the Compression
+Streams API supports neither format at all, so `new zlib.BrotliCompress()` etc. throw a plain
+`TypeError` - `binding.BrotliEncoder` is simply absent) and true mid-stream flush
+(`.flush()`/`Z_SYNC_FLUSH`/etc. - the Compression Streams API has no "flush without closing"
+primitive, only `close()`, which ends the stream for good; a non-finish flush is accepted but is a
+no-op). `windowBits`/`memLevel`/`strategy`/`dictionary` are accepted but ignored, same treatment as
+`net`'s fixed virtual address.
+- **Key design simplification**: every real caller that matters here (a piped `Transform`, and the
+  `*Sync` convenience functions) only truly needs output once the whole input is known
+  (`.end()`/finish) - real zlib's own C streaming API (`avail_in`/`avail_out`, many small calls each
+  draining a bounded output buffer) has no equivalent in the Compression Streams API anyway (push
+  bytes in, read whatever's ready, close to finish - no per-call bounded output, no forced
+  mid-stream flush). So `bindings/zlib.ts`'s `Zlib` class accumulates every input chunk across
+  calls, and only actually runs `CompressionStream`/`DecompressionStream` **once**, on a
+  finish-flagged call: write the whole thing, close, drain the reader fully
+  (`runZlibOnce(format, direction, wholeInput)`, a small shared, stateless codec core). That single
+  result is then handed out across possibly-multiple `write()`/`writeSync()` calls, bounded by each
+  call's own `out_len` - exactly the "not done, call me again" loop the *unmodified* vendored
+  `zlib.js` (`processCallback` for async, `processChunkSync` for sync) already drives; the binding
+  only has to report `state[0]`/`state[1]` (availOutAfter/availInAfter) honestly each call and, for
+  the async path, invoke the real `processCallback` function captured at `init()` time - the same
+  "implement the low-level step, let vendored JS own the state machine" split this repo already used
+  for `httpParser.ts`. Trade-off, documented: output is produced once, on finish, not dribbled out
+  per input chunk - fine for whole-package-sized npm tarballs, revisit with a background
+  reader-pump if a real large-file case shows it matters.
+- **Sync path, genuinely blocking**: `Atomics.wait`-blocking the calling Process Worker while also
+  `await`-ing a Promise on that same thread is a deadlock, so `*Sync` needs a second real thread to
+  run `CompressionStream` on - the same problem `execSync`/`spawnSync` and `net.listen()` already
+  solved. Unlike `net.listen()`, zlib has no cross-process/global state to coordinate, so rather than
+  a fourth per-process SharedArrayBuffer, it reuses the existing sync SAB
+  (`protocols/syscall.ts`'s new `OP_ZLIB_SYNC = KERNEL_OPCODE_MIN + 2`, alongside `OP_SPAWN_SYNC`) -
+  `kernel/spawnSyncServer.ts` was renamed `kernel/kernelSyncServer.ts` (`createKernelSyncServer`)
+  since it now dispatches on opcode between two unrelated blocking capabilities instead of being
+  spawn-specific, and its `serviceZlibSync` calls the SAME `runZlibOnce` the async path uses,
+  directly in the Kernel Worker's own realm (`CompressionStream` is an ordinary Worker global there
+  too) - `respondOk`/`respondErr` once the promise settles, same "service() kicks off async work,
+  responds later" shape `OP_SPAWN_SYNC` already has via `onExit`. Combined output must fit the 1 MiB
+  SAB window (`EMSGSIZE` otherwise), the same documented limit `OP_SPAWN_SYNC` already has for its
+  own stdout+stderr.
+- **Two real bugs found and fixed, both only surfaced by an actual Gzip→Gunzip pipe, not by
+  `runZlibOnce`'s own direct tests or the sync path**: (1) `drain()` used
+  `this.pendingOutput ?? new Uint8Array(0)` and then unconditionally wrote the result back to
+  `this.pendingOutput` - turning a `null` "nothing computed yet" into a non-null, merely-empty
+  array the very first time `drain()` ran (even on the "just buffering, nothing to compute yet"
+  branch). Since `null` vs. "computed, possibly empty" is exactly the signal `write()`/`writeSync()`
+  use to decide whether the whole-buffer compression has already run, this made the FINISH-flagged
+  call silently take the "already computed, just drain" branch instead of ever actually calling
+  `runZlibOnce` - `gz.end(str)` ran (buffered its input, produced nothing), and `gunz` then received
+  an empty finish-only call and failed to decompress zero bytes ("incorrect header check"). Fixed by
+  leaving `pendingOutput` untouched (not reassigned to an empty array) when it started `null`. (2) On
+  a `runZlibOnce` rejection, the async path called `this.fail(error)` (routing to `onerror` ->
+  `self.destroy(error)`) but then let the promise chain continue on to *also* drain/report
+  state/invoke `processCallback` for the same failed operation - real Node's native binding treats
+  success and failure as mutually exclusive outcomes for one write; doing both left a `zlib.gunzip()`
+  callback seeing neither a clean error nor a clean result. Fixed with a two-armed
+  `.then(onSuccess, onFailure)` instead of a `.then().catch().then()` chain, so only one path ever
+  runs. Neither bug was catchable by testing `runZlibOnce` in isolation (it has no state to get
+  confused) or by the sync path (whose caller throws immediately on error, before ever consulting
+  the post-error state) - only an actual multi-call streaming sequence with a real vendored
+  `Transform` pair exercises the exact call pattern that exposed them.
+- Also found, testing-environment-only (not a bug in this code): under **plain Node/Vitest**,
+  Node's own global `DecompressionStream` is itself a shim wrapping Node's own native `zlib` Gunzip
+  stream (`node:internal/webstreams/adapters`) - a malformed-input rejection there can surface as a
+  process-level unhandled-rejection warning if nothing has attached a handler to the internal pump
+  promise yet, purely an artifact of Node's own polyfill's internal timing (a real browser's
+  `DecompressionStream` is a native, unrelated implementation). Fixed defensively in
+  `runZlibOnce` with a same-tick no-op `.catch()` on the pump promise so it's never reported
+  unhandled, independent of when the real, still-propagated rejection is actually awaited.
+- Verified: `runtime/bindings/zlib.test.ts` (12 Vitest: `runZlibOnce` round-trips and malformed-input
+  rejection directly; the streaming `Transform`/callback/`util.promisify`/`Unzip` auto-detect/error
+  paths against a real Node `CompressionStream`/`DecompressionStream`; the `*Sync` path against a
+  fake `spawnSync` client backed by Node's own `zlib` module - same "prove the wire protocol, not
+  the real servicer" spirit `spawnSync.test.ts`'s own fake already established; `crc32` against
+  known vectors and Node's own output), `kernel/kernelSyncServer.test.ts`'s new `OP_ZLIB_SYNC`
+  cases (a real gzip round trip and a malformed-input error, run for real since Node has
+  `CompressionStream` globally too). 2 new Playwright tests in real Chromium (a streaming
+  `createGzip()`/`createGunzip()` pipe round trip, and a `gzipSync`/`gunzipSync` round trip proving
+  the real kernel-mediated blocking path) - neither the real native browser `CompressionStream` nor
+  the genuine cross-thread `Atomics.wait` blocking path can be exercised outside Chromium. A full,
+  clean `pnpm exec playwright test` run (85/85) and `vitest run` (553/553) confirm no regressions.
 
-Verified by Vitest (539) and Playwright in real Chromium (82), including a script reading a
+Real npm (vendoring the actual CLI), Phase 7's one remaining piece, needs the Fetcher Worker and
+`zlib`/`crypto` - `zlib` is now done (above); `crypto` and the real-internet-access question are
+not.
+
+Verified by Vitest (553) and Playwright in real Chromium (85), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
 Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
@@ -316,9 +404,9 @@ Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
   uid/gid report 1000.
 - fd numbers come from one VFS table shared by all processes (each process's fds are closed
   when it exits or is killed, checked in Chromium), so they are not 3,4,5... per process.
-- The process worker bundle is ~1.6 MB because it contains the whole runtime (acorn, vendored
-  for ESM, is real added weight); every process pays to parse it even for `echo`. Split `node`
-  into its own worker entry if that shows up.
+- The process worker bundle is ~1.9 MB because it contains the whole runtime (acorn, vendored
+  for ESM, is real added weight; vendored `zlib.js` added more); every process pays to parse it
+  even for `echo`. Split `node` into its own worker entry if that shows up.
 - `assert`'s "show the failing expression" enrichment (`assert(x)` with no message) tokenizes the
   failing line with Node's real vendored acorn (`internal/deps/acorn`, outside `lib/` - vendored
   via `scripts/vendor-node-lib.mjs`'s `repoPathFor`, added for ESM's own parsing needs; see
@@ -395,6 +483,16 @@ Not done: UDP/DNS, `worker_threads`, `process.binding`, `node -p`.
   Node's own incremental `kOnHeaders` callback path, which would deliver them, is never used here
   (see the file's header comment: headers are always delivered whole, since real Node's JS already
   falls back gracefully when they arrive that way).
+- `zlib` (`bindings/zlib.ts`, see "Current state"): Brotli (`BrotliCompress`/`BrotliDecompress`) and
+  Zstd (`ZstdCompress`/`ZstdDecompress`) aren't implemented - the Compression Streams API supports
+  neither format, so their handle classes are simply absent (`new zlib.BrotliCompress()` throws a
+  plain `TypeError`). True mid-stream flush (`.flush()`/`Z_SYNC_FLUSH`/`Z_PARTIAL_FLUSH`/
+  `Z_FULL_FLUSH`) is accepted but a no-op - the Compression Streams API has no "flush what you have,
+  stay open" primitive, only `close()` (ends the stream for good). `windowBits`/`memLevel`/
+  `strategy`/`dictionary` are accepted but ignored - no equivalent control surface exists either.
+  Output is produced once, on finish, rather than dribbled out per input chunk (every real chunk is
+  accumulated and compressed/decompressed in one shot when the stream ends) - fine for
+  whole-package-sized data, a documented memory/latency tradeoff for anything much larger.
 
 ## Architecture to build (from vivari)
 
@@ -485,16 +583,18 @@ module: `Thing.test.ts`).
 - Remaining (not blocking this phase, tracked in the roadmap's own DNS/UDP item below): DNS
   (`dns.lookup()` is a fixed-address shim for now, not a real resolver).
 
-### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence DONE - see "Current state"; real npm remaining)
+### Phase 7 - Fetcher worker, real npm, persistence  (fetcher worker + OPFS persistence + zlib DONE - see "Current state"; real npm remaining)
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
   state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
 - OPFS mirror (write-behind), restored before serving syscalls - done, see "Current state":
   `boot({ persist })`, `fs/opfsPersistence.ts`.
+- `zlib` (the first of the two missing builtins the feasibility investigation below flagged) -
+  done, see "Current state": `bindings/zlib.ts`, `OP_ZLIB_SYNC`, `kernel/kernelSyncServer.ts`.
 - Real npm CLI, vendored as one packed asset unpacked in a single batched write. **Feasibility
   investigated 2026-09-23, not started - see "Real npm: feasibility findings" below before writing
   any code.**
 
-#### Real npm: feasibility findings (2026-09-23, no code written yet)
+#### Real npm: feasibility findings (2026-09-23, no code written yet; `zlib` finding resolved 2026-09-23 - see "Current state")
 
 Checked the locally installed npm CLI (v11.9.0) as a stand-in for what vendoring would mean: ~16MB,
 984 JS files, a huge dependency tree (`node-gyp`, `@sigstore/*`, `tar`, `pacote`, `cacache`,
@@ -502,13 +602,12 @@ Checked the locally installed npm CLI (v11.9.0) as a stand-in for what vendoring
 Worker or OPFS persistence - budget accordingly, and re-scope with the user before committing to
 the literal "vendor real npm" approach once they've seen the blocker below.
 
-**Two load-bearing Node builtins are completely missing** (`packages/core/src/runtime/node/
-manifest.json` has neither `zlib` nor `crypto`; no `bindings/zlib.ts`/`bindings/crypto.ts` exist):
-- `zlib` - needed to gunzip registry tarballs (`.tar.gz`) and gzip-encoded HTTP responses.
-  `require('zlib')` throws `Cannot find module 'zlib'` today (confirmed in real Chromium, not just
-  by inspection).
+**Two load-bearing Node builtins were completely missing** (`packages/core/src/runtime/node/
+manifest.json` had neither `zlib` nor `crypto`; no `bindings/zlib.ts`/`bindings/crypto.ts` existed):
+- `zlib` - needed to gunzip registry tarballs (`.tar.gz`) and gzip-encoded HTTP responses. **Done**
+  (see "Current state"): backed by the real, native `CompressionStream`/`DecompressionStream`.
 - `crypto` - needed for the sha512 integrity checks `pacote`/`cacache` rely on throughout.
-  `require('crypto')` also throws `Cannot find module 'crypto'` today.
+  `require('crypto')` still throws `Cannot find module 'crypto'` today - not started.
 
 **The deeper, architectural blocker: npm needs the real internet; wcvm's `net`/`http` are 100%
 virtual.** `net.connect()` only ever resolves to another wcvm process listening on a virtual port
@@ -533,18 +632,23 @@ and `crypto` is `"object"` with a working `crypto.subtle`. This is the SAME real
 Fetcher Worker already calls `fetch` from directly (`workers/fetcher/fetcherRuntime.ts`).
 
 Recommended next steps, in order:
-1. `CompressionStream`/`DecompressionStream` (real, native, already available) could back a
-   vendored `zlib` `internalBinding` (gzip/deflate) without needing a WASM zlib port - the most
-   promising, concrete first sub-task.
+1. ~~`CompressionStream`/`DecompressionStream` (real, native, already available) could back a
+   vendored `zlib` `internalBinding` (gzip/deflate) without needing a WASM zlib port~~ - **done**,
+   see "Current state"'s `zlib` entry: `bindings/zlib.ts`, backed by exactly that, plus a
+   kernel-mediated `OP_ZLIB_SYNC` opcode for the blocking `*Sync` family (the same sync-bridge
+   pattern `execSync`/`spawnSync`/`net.listen()` already use, reusing their existing per-process
+   SAB rather than adding a new one, since zlib has no cross-process state to coordinate).
 2. `crypto.subtle` (Web Crypto API, already available) could back a `crypto` module for hashing
    (`createHash('sha256'/'sha512')`) - but it's async (`SubtleCrypto.digest()` returns a Promise)
    while Node's real `crypto.createHash().update().digest()` is synchronous. Same category of
    sync/async bridging the sync-syscall-over-SAB architecture already solves elsewhere (see
-   CLAUDE.md's "Sync bridge" section) - likely solvable the same way, but real new work.
+   CLAUDE.md's "Sync bridge" section, and now `zlib`'s own `OP_ZLIB_SYNC` precedent above) - likely
+   solvable the same way, but real new work.
 3. Resolve the "real internet access" open question above before going further - it decides
    whether the rest of this is worth attempting as literally "vendor real npm" at all.
 
-No code was written or committed for this investigation.
+No code was written or committed for the real-npm investigation itself; `zlib` (step 1) was
+implemented and verified separately, tracked in "Current state" above.
 
 ### Phase 8 - Dev servers
 - Vite dev + HMR over a WebSocket tunnel, templates. `fs.watch`/`watchFile` are already done (see
@@ -632,7 +736,7 @@ host -> kernel -> process worker -> SAB -> FS worker -> back.
   (`runtime/spawnSync.test.ts`) that supplied `spawnSync` without a `childProcess` fake too.
 - A servicer's `service(clientId)` must wrap request decoding in try/catch and respond with an
   error instead of letting a bad frame throw uncaught (`fs/FsServer.ts`'s existing pattern;
-  `kernel/spawnSyncServer.ts` mirrors it) - the doorbell handler that calls it has no other
+  `kernel/kernelSyncServer.ts` mirrors it) - the doorbell handler that calls it has no other
   safety net, so an unhandled throw there would take down the whole Kernel Worker, not just the
   one caller. A quick test with a malformed opcode/body catches this immediately.
 - Not every real Node consumer of a Pipe's `onread(arrayBuffer)` treats EOF the same way.
