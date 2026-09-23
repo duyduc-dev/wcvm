@@ -422,9 +422,45 @@ Done and verified in real Chromium:
   for the same input; `randomBytes`/`randomUUID` producing real, distinct values) - the real
   browser `SubtleCrypto`/`crypto.getRandomValues()` can't be exercised outside Chromium. A full,
   clean `pnpm exec playwright test` run (87/87) and `vitest run` (562/562) confirm no regressions.
-- Tests: 562 Vitest + 87 Playwright (Chromium). See "Verifying".
+- `dgram` (real UDP): Node's real vendored `lib/dgram.js`/`internal/dgram.js`, unmodified, over a
+  real `internalBinding('udp_wrap')` (`runtime/bindings/udp.ts`), mirroring `tcp_wrap`'s own "no
+  real sockets, relay through the kernel" design but connectionless - just `bind()` (claim a port)
+  and `send()` (fire-and-forget to whoever, if anyone, is bound to the destination port; a real OS
+  UDP socket drops silently when nobody's listening, so this does too). UDP and TCP are separate
+  port namespaces (`kernel/netServer.ts`'s own separate `udpBindings` map/ephemeral allocator, the
+  same file that already hosts TCP's `listeners`). Real `dgram.js`'s own `bind()` calls
+  `state.handle.bind()` SYNCHRONOUSLY and returns its error code directly (unlike TCP, where the
+  port-conflict check is deferred to `listen()` specifically) - so `bind()` needs the exact same
+  globally-coordinated, kernel-mediated answer `OP_NET_LISTEN` gives TCP; rather than a new
+  per-process SAB, it reuses that one under a new opcode (`OP_UDP_BIND`) - `kernel/netServer.ts`'s
+  `service()` now dispatches between the two by opcode, same "one shared SAB, multiple unrelated
+  opcodes" shape `kernel/kernelSyncServer.ts` already established. Only udp4 (`bind6`/`connect6`/
+  `send6` fail `EAFNOSUPPORT`, matching `tcp_wrap`'s own IPv6 stance); multicast/broadcast are
+  accepted no-ops (nothing for either to mean in a single virtual host). `handle.lookup` needed no
+  new work: real `internal/dgram.js`'s own `newHandle()` already binds it straight to the
+  already-shimmed `dns.lookup()`.
+  - **Real bug found and fixed**: an incoming datagram's `onmessage` callback was handed a plain
+    `Uint8Array`, not a real (sandbox) `Buffer` - real Node's native binding constructs one before
+    ever calling into JS, but `dgram.js`'s own `onMessage(nread, handle, buf, rinfo)` just re-emits
+    `buf` as-is with no wrapping step of its own, so this binding has to do that wrapping itself.
+    Symptom: `msg.toString()` in a guest `'message'` handler printed comma-joined byte values
+    (`TypedArray.prototype.toString`'s own inherited join behavior) instead of decoding text.
+    Fixed in `UdpRouter.dispatch()` with the sandbox's own vendored `Buffer.from(...)` (via
+    `requireBuiltin("buffer")`, the same pattern `childProcess.ts`'s exec()/execFile() output
+    already uses) before handing the chunk to `onmessage`. Caught by a quick manual smoke test
+    with a real `.toString()` call, before any formal test coverage was even written.
+  - Verified: `runtime/udp.test.ts` (6 Vitest), `kernel/netServer.test.ts`'s new UDP cases (6). 4
+    new Playwright tests in real Chromium (a real client sending a datagram to a real server which
+    echoes it back; `bind(0)` auto-assigning different real ports across two processes; a real
+    `EADDRINUSE` for a second bind; a datagram to an unbound port being silently dropped, not a
+    hang) - the actual cross-Process-Worker postMessage relay can't be exercised in the
+    single-threaded Vitest suite. A full, clean `pnpm exec playwright test` run (91/91) and
+    `vitest run` (574/574) confirm no regressions.
+- Tests: 574 Vitest + 91 Playwright (Chromium). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): UDP/DNS, real `npm` (investigated and DEFERRED - its fetch
+Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
+single virtual host with no real network to resolve a name against), real `npm` (investigated and
+DEFERRED - its fetch
 stack has no path to a real network from inside wcvm's virtual `net`/`http`, confirmed by reading
 the actual installed source; see PLAN.md's "Real npm: feasibility findings" before picking this
 back up), Vite dev server/HMR, Python/Bun, Studio UI.

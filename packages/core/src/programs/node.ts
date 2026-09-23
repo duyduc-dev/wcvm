@@ -59,6 +59,7 @@ const node: Program = async (ctx) => {
       fsWatch: ctx.fsWatch,
       net: ctx.net,
       netSync: ctx.netSync,
+      udp: ctx.udp,
     },
   });
 

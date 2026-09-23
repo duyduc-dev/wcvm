@@ -51,7 +51,11 @@ export type ChildEvent =
    *  stays registered - we may still write, and (if the peer is only half-closed too) receive. */
   | { type: "net:eof"; connId: number }
   /** The peer fully closed: EOF for our read side, and the connection is gone for good. */
-  | { type: "net:close"; connId: number };
+  | { type: "net:close"; connId: number }
+  /** A UDP datagram arrived on one of this process's own bound ports (kernel/netServer.ts's
+   *  udpSend) - connectionless, so there's no equivalent of net:incoming/net:close: every message
+   *  just arrives, addressed by port, exactly like a real one. */
+  | { type: "udp:message"; port: number; fromPort: number; chunk: Uint8Array };
 
 /** Process worker -> kernel. */
 export type ProcessEvent =
@@ -76,4 +80,8 @@ export type ProcessEvent =
   | { type: "net:data"; connId: number; chunk: Uint8Array }
   /** Half-close (done writing) vs full teardown - see kernel/netServer.ts's shutdown()/close(). */
   | { type: "net:shutdown"; connId: number }
-  | { type: "net:close"; connId: number };
+  | { type: "net:close"; connId: number }
+  /** dgram.Socket.close(): release a UDP port binding - see kernel/netServer.ts's udpUnbind(). */
+  | { type: "udp:unbind"; port: number }
+  /** A datagram this process is sending from its own `fromPort` to `toPort` - see udpSend(). */
+  | { type: "udp:send"; fromPort: number; toPort: number; chunk: Uint8Array };

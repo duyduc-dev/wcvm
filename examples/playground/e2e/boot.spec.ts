@@ -901,6 +901,100 @@ test.describe("node", () => {
     });
   });
 
+  test.describe("dgram", () => {
+    // dgram.createSocket/bind/send are entirely virtual too (kernel/netServer.ts's own, separate
+    // UDP port registry) - same reason as net's own describe block above: this needs a real
+    // postMessage round-trip through a real Kernel Worker between two separate real Process
+    // Workers, which the single-threaded Vitest suite (packages/core/src/runtime/udp.test.ts)
+    // can't exercise.
+
+    test("a real client process sends a datagram to a real server process, which echoes it back", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const server = await wc.spawn("node", [
+          "-e",
+          "const dgram = require('dgram');" +
+            "const s = dgram.createSocket('udp4');" +
+            "s.on('message', (msg, rinfo) => s.send('echo:' + msg, rinfo.port));" +
+            "s.bind(7000, () => console.log('ready'));",
+        ]);
+        const serverReader = server.stdout.getReader();
+        const first = await serverReader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+
+        const client = await wc.spawn("node", [
+          "-e",
+          "const dgram = require('dgram');" +
+            "const s = dgram.createSocket('udp4');" +
+            "s.on('message', (msg) => { console.log(msg.toString()); process.exit(0); });" +
+            "s.bind(0, () => s.send('hi', 7000));",
+        ]);
+        const [clientOut, clientErr, clientExit] = await Promise.all([
+          new Response(client.stdout).text(),
+          new Response(client.stderr).text(),
+          client.exit,
+        ]);
+
+        server.kill();
+        const serverExit = await server.exit;
+        return { clientOut, clientErr, clientCode: clientExit.exitCode, serverSignal: serverExit.signal };
+      });
+      expect(r).toEqual({ clientOut: "echo:hi\n", clientErr: "", clientCode: 0, serverSignal: "SIGTERM" });
+    });
+
+    test("bind(0) auto-assigns different real ports to two different real processes", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const spawnBound = () =>
+          wc.spawn("node", ["-e", "const dgram = require('dgram'); const s = dgram.createSocket('udp4'); s.bind(0, () => { console.log(s.address().port); s.close(); });"]);
+        const [a, b] = await Promise.all([spawnBound(), spawnBound()]);
+        const [outA, outB] = await Promise.all([new Response(a.stdout).text(), new Response(b.stdout).text()]);
+        return { portA: Number(outA), portB: Number(outB) };
+      });
+      expect(r.portA).toBeGreaterThan(0);
+      expect(r.portB).toBeGreaterThan(0);
+      expect(r.portA).not.toBe(r.portB);
+    });
+
+    test("a second real process binding an already-bound UDP port gets a real EADDRINUSE", async ({ page }) => {
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const first = await wc.spawn("node", ["-e", "const dgram = require('dgram'); dgram.createSocket('udp4').bind(7100, () => console.log('ready'));"]);
+        const reader = first.stdout.getReader();
+        const ready = await reader.read();
+        if (new TextDecoder().decode(ready.value) !== "ready\n") throw new Error("first socket did not become ready");
+
+        const second = await wc.spawn("node", [
+          "-e",
+          "const dgram = require('dgram');" +
+            "const s = dgram.createSocket('udp4');" +
+            "s.on('error', (e) => { console.log('error', e.code); process.exit(0); });" +
+            "s.bind(7100);",
+        ]);
+        const [secondOut, secondErr, secondExit] = await Promise.all([
+          new Response(second.stdout).text(),
+          new Response(second.stderr).text(),
+          second.exit,
+        ]);
+
+        first.kill();
+        await first.exit;
+        return { out: secondOut, err: secondErr, code: secondExit.exitCode };
+      });
+      expect(r).toEqual({ code: 0, out: "error EADDRINUSE\n", err: "" });
+    });
+
+    test("a datagram sent to a port nobody is bound to is simply never delivered - no error, no hang", async ({ page }) => {
+      const r = await spawn(page, "node", [
+        "-e",
+        "const dgram = require('dgram');" +
+          "const s = dgram.createSocket('udp4');" +
+          "s.send('nobody home', 7200, () => { s.close(); console.log('done'); });",
+      ]);
+      expect(r).toEqual({ code: 0, out: "done\n", err: "" });
+    });
+  });
+
   test.describe("http", () => {
     // http.createServer()/http.request() run entirely on top of net (net.test.ts already covers
     // net's own cross-process plumbing) - these prove the real vendored _http_server.js/

@@ -160,6 +160,7 @@ const createKernelHost = async ({
       endIpc: (pid) => processes.endIpc(pid),
       notifyWatch: (pid, watchId, eventType, filename) => processes.notifyWatch(pid, watchId, eventType, filename),
       notifyNet: (pid, event) => processes.notifyNet(pid, event),
+      notifyUdp: (pid, event) => processes.notifyUdp(pid, event),
       kill: (pid, signal) => processes.kill(pid, signal),
       has: (pid) => processes.has(pid),
       get size() {
@@ -176,6 +177,9 @@ const createKernelHost = async ({
   // of a postMessage to a worker that doesn't exist.
   const netServer = createNetServer({
     notify: (pid, event) => (pid === PREVIEW_PID ? preview.onNetEvent(event) : processes.notifyNet(pid, event)),
+    // UDP has no PREVIEW_PID-style caller (the preview relay only ever does one-shot HTTP fetches
+    // over TCP) - every UDP event always targets a real process.
+    notifyUdp: (pid, event) => processes.notifyUdp(pid, event),
     // PREVIEW_PID's own outgoing relay connections never call listen(), so this is always a real
     // guest server - the host's only way to learn a virtual port came up or went away without
     // polling (e.g. to point a preview iframe at it).
@@ -219,6 +223,11 @@ const createKernelHost = async ({
       shutdown: (fromPid, connId) => netServer.shutdown(fromPid, connId),
       close: (fromPid, connId) => netServer.close(fromPid, connId),
       releasePid: (pid) => netServer.releasePid(pid),
+    },
+    udpRelay: {
+      unbind: (pid, port) => netServer.udpUnbind(pid, port),
+      send: (fromPid, fromPort, toPort, chunk) => netServer.udpSend(fromPid, fromPort, toPort, chunk),
+      releasePid: (pid) => netServer.udpReleasePid(pid),
     },
   });
 

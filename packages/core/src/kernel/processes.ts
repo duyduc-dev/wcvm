@@ -1,6 +1,6 @@
 import type { KernelMessage } from "../bridges/models";
 import type { ChildEvent, IProcessInit, ProcessEvent } from "../workers/process/messages";
-import type { NetKernelEvent } from "./netServer";
+import type { NetKernelEvent, UdpKernelEvent } from "./netServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
 export interface IProcessWorkerLike {
@@ -28,6 +28,12 @@ export interface IProcessTableParams {
     data(fromPid: number, connId: number, chunk: Uint8Array): void;
     shutdown(fromPid: number, connId: number): void;
     close(fromPid: number, connId: number): void;
+    releasePid(pid: number): void;
+  };
+  /** The async half of UDP (kernel/netServer.ts): unbind/send relay. */
+  udpRelay: {
+    unbind(pid: number, port: number): void;
+    send(fromPid: number, fromPort: number, toPort: number, chunk: Uint8Array): void;
     releasePid(pid: number): void;
   };
   /** Sends an event to the host (`process:stdout`, `process:exit`, ...). */
@@ -73,6 +79,9 @@ export interface IProcessTable {
   /** Delivers a net event (connect result, incoming connection, data, close) to `pid`'s own
    *  process worker; a no-op if `pid` isn't running any more - kernel/netServer.ts's `notify`. */
   notifyNet(pid: number, event: NetKernelEvent): void;
+  /** Delivers an incoming UDP datagram to `pid`'s own process worker; same no-op-if-unknown
+   *  semantics - kernel/netServer.ts's `notifyUdp`. */
+  notifyUdp(pid: number, event: UdpKernelEvent): void;
   has(pid: number): boolean;
   readonly size: number;
 }
@@ -111,6 +120,7 @@ const createProcessTable = ({
   attachNetClient,
   detachNetClient,
   netRelay,
+  udpRelay,
   emit,
 }: IProcessTableParams): IProcessTable => {
   const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number; sync?: ISyncEntry }>();
@@ -159,6 +169,7 @@ const createProcessTable = ({
     detachSyncClient(pid);
     detachNetClient(pid);
     netRelay.releasePid(pid);
+    udpRelay.releasePid(pid);
     if (entry.sync) {
       entry.sync.onExit({ code, signal: extra.signal, stdout: concatBytes(entry.sync.stdout), stderr: concatBytes(entry.sync.stderr) });
     } else if (!cascade) {
@@ -200,6 +211,10 @@ const createProcessTable = ({
   };
 
   const notifyNet = (pid: number, event: NetKernelEvent) => {
+    workers.get(pid)?.worker.postMessage(event);
+  };
+
+  const notifyUdp = (pid: number, event: UdpKernelEvent) => {
     workers.get(pid)?.worker.postMessage(event);
   };
 
@@ -284,6 +299,12 @@ const createProcessTable = ({
         case "net:close":
           netRelay.close(pid, data.connId);
           break;
+        case "udp:unbind":
+          udpRelay.unbind(pid, data.port);
+          break;
+        case "udp:send":
+          udpRelay.send(pid, data.fromPort, data.toPort, data.chunk);
+          break;
       }
     };
     worker.onerror = (event) => {
@@ -326,6 +347,7 @@ const createProcessTable = ({
     endIpc,
     notifyWatch,
     notifyNet,
+    notifyUdp,
     has: (pid) => workers.has(pid),
     get size() {
       return workers.size;

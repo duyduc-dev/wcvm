@@ -21,6 +21,7 @@ const setup = () => {
   }));
   const detachNet = vi.fn();
   const netRelay = { unlisten: vi.fn(), connect: vi.fn(), data: vi.fn(), shutdown: vi.fn(), close: vi.fn(), releasePid: vi.fn() };
+  const udpRelay = { unbind: vi.fn(), send: vi.fn(), releasePid: vi.fn() };
   const table = createProcessTable({
     createProcessWorker: () => {
       const worker = createFakeProcessWorker();
@@ -34,9 +35,10 @@ const setup = () => {
     attachNetClient: attachNet,
     detachNetClient: detachNet,
     netRelay,
+    udpRelay,
     emit: (m) => events.push(m),
   });
-  return { table, workers, events, attach, detach, attachSync, detachSync, attachNet, detachNet, netRelay };
+  return { table, workers, events, attach, detach, attachSync, detachSync, attachNet, detachNet, netRelay, udpRelay };
 };
 
 let t: ReturnType<typeof setup>;
@@ -172,6 +174,7 @@ describe("process table", () => {
       attachNetClient: t.attachNet,
       detachNetClient: t.detachNet,
       netRelay: t.netRelay,
+      udpRelay: t.udpRelay,
       emit: (m) => events.push(m),
     });
     table.spawn({ processId: 1, command: "x", args: [] });

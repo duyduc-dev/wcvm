@@ -25,12 +25,12 @@ import {
   createProfilerBinding,
   createTraceEventsBinding,
   createTtyWrapBinding,
-  createUdpWrapBinding,
   createUvBinding,
 } from "./misc";
 import { createTcpWrapBinding, type INetHost } from "./net";
 import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
+import { createUdpWrapBinding, type IUdpHost } from "./udp";
 import { createSymbolsBinding, createUtilBinding } from "./util";
 import { createZlibBinding } from "./zlib";
 
@@ -52,8 +52,11 @@ interface IBindingContext {
   fsWatch?: IFsWatchHost;
   /** The virtual network's async half (connect/data/close); without it, TCP methods return ENOSYS/ENOTCONN. */
   net?: INetHost;
-  /** The virtual network's blocking half (net.Server.listen() only); without it, listen() returns ENOSYS. */
+  /** The virtual network's blocking half (net.Server.listen() and dgram's Socket.bind() - see
+   *  protocols/syscall.ts's OP_NET_LISTEN/OP_UDP_BIND); without it, listen()/bind() return ENOSYS. */
   netSync?: ISyscallClient;
+  /** UDP's async half (incoming datagrams); without it, dgram methods return ENOSYS/ENOTCONN. */
+  udp?: IUdpHost;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -92,7 +95,7 @@ const factories: Record<string, BindingFactory> = {
   task_queue: (ctx) => createTaskQueueBinding(ctx.loop),
   timers: (ctx) => createTimersBinding(ctx.loop),
   types: () => createTypesBinding(),
-  udp_wrap: () => createUdpWrapBinding(),
+  udp_wrap: (ctx) => createUdpWrapBinding({ loop: ctx.loop, udp: ctx.udp, udpSync: ctx.netSync, requireBuiltin: ctx.requireBuiltin }),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),
   zlib: (ctx) => createZlibBinding(ctx),

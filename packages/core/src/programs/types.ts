@@ -3,6 +3,7 @@ import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost, IForkIpcHost } from "../runtime/bindings/childProcess";
 import type { IFsWatchHost } from "../runtime/bindings/fs";
 import type { INetHost } from "../runtime/bindings/net";
+import type { IUdpHost } from "../runtime/bindings/udp";
 import type { IStdinHost } from "../runtime/runtime";
 
 export interface IProgramContext {
@@ -30,8 +31,10 @@ export interface IProgramContext {
   fsWatch?: IFsWatchHost;
   /** The virtual network's async half; undefined outside a real process worker. */
   net?: INetHost;
-  /** The virtual network's blocking half (net.Server.listen() only); undefined outside a real process worker. */
+  /** The virtual network's blocking half (net.Server.listen() and dgram's Socket.bind()); undefined outside a real process worker. */
   netSync?: ISyscallClient;
+  /** UDP's async half (incoming datagrams); undefined outside a real process worker. */
+  udp?: IUdpHost;
 }
 
 /** Resolves to the process exit status. */

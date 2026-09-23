@@ -4,6 +4,7 @@ import type { ISyscallClient } from "../protocols/syscall";
 import type { IChildProcessHost, IForkIpcHost } from "./bindings/childProcess";
 import type { IFsWatchHost } from "./bindings/fs";
 import type { INetHost } from "./bindings/net";
+import type { IUdpHost } from "./bindings/udp";
 import { createRuntime, type IRuntimeOptions, type IStdinHost } from "./runtime";
 
 const dirname = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
@@ -20,6 +21,7 @@ export const runScript = async (
     ipc?: IForkIpcHost;
     net?: INetHost;
     netSync?: ISyscallClient;
+    udp?: IUdpHost;
   } = {},
 ) => {
   // fs.watch is entirely local to one FsServer (no worker boundary in this single-thread
@@ -54,6 +56,7 @@ export const runScript = async (
       fsWatch,
       net: options.net,
       netSync: options.netSync,
+      udp: options.udp,
     },
   });
   options.setup?.(runtime);

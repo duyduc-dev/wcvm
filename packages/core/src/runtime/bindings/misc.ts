@@ -232,15 +232,10 @@ const notSupported = (name: string) => () => {
   throw uvException("ENOSYS", name);
 };
 
-// net.js and internal/child_process.js destructure these at module load even though
-// child_process only needs pipes: real UDP/TTY/DNS are still later work (tcp_wrap is real now -
-// see runtime/bindings/net.ts). Each class only needs to exist for `instanceof` checks; any
-// real use throws.
-export const createUdpWrapBinding = () => ({
-  UDP: class UDP {},
-  constants: { SOCKET: 0, SERVER: 1, UDP_DGRAM_IS_REMOTE: 1 },
-});
-
+// net.js and internal/child_process.js destructure this at module load even though
+// child_process only needs pipes: real TTY/DNS are still later work (tcp_wrap and udp_wrap are
+// real now - see runtime/bindings/net.ts and udp.ts). This class only needs to exist for
+// `instanceof` checks; any real use throws.
 export const createTtyWrapBinding = () => ({
   TTY: class TTY {},
   isTTY: () => false,
