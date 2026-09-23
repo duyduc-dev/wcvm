@@ -490,7 +490,61 @@ module: `Thing.test.ts`).
   state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
 - OPFS mirror (write-behind), restored before serving syscalls - done, see "Current state":
   `boot({ persist })`, `fs/opfsPersistence.ts`.
-- Real npm CLI, vendored as one packed asset unpacked in a single batched write.
+- Real npm CLI, vendored as one packed asset unpacked in a single batched write. **Feasibility
+  investigated 2026-09-23, not started - see "Real npm: feasibility findings" below before writing
+  any code.**
+
+#### Real npm: feasibility findings (2026-09-23, no code written yet)
+
+Checked the locally installed npm CLI (v11.9.0) as a stand-in for what vendoring would mean: ~16MB,
+984 JS files, a huge dependency tree (`node-gyp`, `@sigstore/*`, `tar`, `pacote`, `cacache`,
+`make-fetch-happen`, `bin-links`, `semver`, `glob`, ...). Much bigger than either the Fetcher
+Worker or OPFS persistence - budget accordingly, and re-scope with the user before committing to
+the literal "vendor real npm" approach once they've seen the blocker below.
+
+**Two load-bearing Node builtins are completely missing** (`packages/core/src/runtime/node/
+manifest.json` has neither `zlib` nor `crypto`; no `bindings/zlib.ts`/`bindings/crypto.ts` exist):
+- `zlib` - needed to gunzip registry tarballs (`.tar.gz`) and gzip-encoded HTTP responses.
+  `require('zlib')` throws `Cannot find module 'zlib'` today (confirmed in real Chromium, not just
+  by inspection).
+- `crypto` - needed for the sha512 integrity checks `pacote`/`cacache` rely on throughout.
+  `require('crypto')` also throws `Cannot find module 'crypto'` today.
+
+**The deeper, architectural blocker: npm needs the real internet; wcvm's `net`/`http` are 100%
+virtual.** `net.connect()` only ever resolves to another wcvm process listening on a virtual port
+(`kernel/netServer.ts`) - there's no path from it to a real external host, and fundamentally can't
+be one: browsers don't expose raw TCP sockets to JS at all, not even from a Worker. The only way to
+reach the real internet from browser JS is `fetch()`/XHR/WebSocket. Real npm's registry client
+(`make-fetch-happen` → `minipass-fetch`, itself built on Node's `http`) can't just work unmodified
+against a real registry from here - it would need to be monkey-patched/reconfigured to use a real
+`fetch()` instead, or wcvm would need a fundamentally different bridge. **Open question, worth
+resolving before writing code**: does a modern `make-fetch-happen`/`minipass-fetch` already
+delegate to a global `fetch()` when present, or does it always go through Node's own `http`? This
+determines whether real npm is realistic at all here, versus a much smaller custom installer
+against the real registry (a real deviation from this phase's stated scope - raise with the user
+explicitly rather than deciding unilaterally).
+
+**One genuinely good finding: guest Node scripts already see several real browser globals**,
+since nothing in the runtime bootstrap strips them (`globalObject: self` means a guest script's
+global scope IS the real Process Worker's real `self` - see CLAUDE.md's existing gotchas on this).
+Confirmed via a real Chromium `node -e` check (`typeof x` for each): `fetch`, `Response`,
+`Headers`, `TextDecoderStream`, `CompressionStream`, `DecompressionStream` are all `"function"`,
+and `crypto` is `"object"` with a working `crypto.subtle`. This is the SAME real global scope the
+Fetcher Worker already calls `fetch` from directly (`workers/fetcher/fetcherRuntime.ts`).
+
+Recommended next steps, in order:
+1. `CompressionStream`/`DecompressionStream` (real, native, already available) could back a
+   vendored `zlib` `internalBinding` (gzip/deflate) without needing a WASM zlib port - the most
+   promising, concrete first sub-task.
+2. `crypto.subtle` (Web Crypto API, already available) could back a `crypto` module for hashing
+   (`createHash('sha256'/'sha512')`) - but it's async (`SubtleCrypto.digest()` returns a Promise)
+   while Node's real `crypto.createHash().update().digest()` is synchronous. Same category of
+   sync/async bridging the sync-syscall-over-SAB architecture already solves elsewhere (see
+   CLAUDE.md's "Sync bridge" section) - likely solvable the same way, but real new work.
+3. Resolve the "real internet access" open question above before going further - it decides
+   whether the rest of this is worth attempting as literally "vendor real npm" at all.
+
+No code was written or committed for this investigation.
 
 ### Phase 8 - Dev servers
 - Vite dev + HMR over a WebSocket tunnel, templates. `fs.watch`/`watchFile` are already done (see
