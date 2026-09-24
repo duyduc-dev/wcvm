@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createLoopbackFs } from "../../testing/loopbackFs";
 import type { IFsClient } from "../../fs/fsClient";
-import { createEsmResolver, EsmResolveError, IEsmResolver } from "./resolve";
+import { createEsmResolver, EsmResolveError, IEsmResolver, modulePath, moduleUrlSuffix } from "./resolve";
 
 const path = {
   resolve: (...parts: string[]) => {
@@ -166,6 +166,35 @@ describe("bare package specifiers", () => {
       expect(() => r.resolveEsmSpecifier("#bad", from)).toThrow(expect.objectContaining({ code: "ERR_INVALID_PACKAGE_TARGET" }));
       expect(() => r.resolveEsmSpecifier("#/x", from)).toThrow(expect.objectContaining({ code: "ERR_PACKAGE_IMPORT_NOT_DEFINED" }));
     });
+  });
+});
+
+describe("file: URL specifiers", () => {
+  // How Vite loads the config file it just bundled: import(pathToFileURL(tmp).href).
+  const write = (file: string) => {
+    fs.mkdir(path.dirname(file), { recursive: true });
+    fs.writeFile(file, "");
+  };
+
+  it("resolves an absolute file URL to its path, percent-decoded", () => {
+    write("/app/vite config.mjs");
+    expect(resolver.resolveEsmSpecifier("file:///app/vite%20config.mjs", "/elsewhere")).toEqual({ format: "esm", key: "/app/vite config.mjs" });
+  });
+
+  it("keeps a ?query/#hash as a separate module instance of the same file", () => {
+    write("/app/vite.config.ts.timestamp-1-abc.mjs");
+    const a = resolver.resolveEsmSpecifier("file:///app/vite.config.ts.timestamp-1-abc.mjs?t=1", "/");
+    const b = resolver.resolveEsmSpecifier("file:///app/vite.config.ts.timestamp-1-abc.mjs?t=2#x", "/");
+    expect(a.key).not.toBe(b.key);
+    expect(modulePath(a.key)).toBe("/app/vite.config.ts.timestamp-1-abc.mjs");
+    expect(modulePath(b.key)).toBe("/app/vite.config.ts.timestamp-1-abc.mjs");
+    expect([moduleUrlSuffix(a.key), moduleUrlSuffix(b.key)]).toEqual(["?t=1", "?t=2#x"]);
+    expect(moduleUrlSuffix("/plain/path.mjs")).toBe("");
+  });
+
+  it("rejects a missing file and a remote host, with Node's codes", () => {
+    expect(() => resolver.resolveEsmSpecifier("file:///nope.mjs", "/")).toThrow(expect.objectContaining({ code: "ERR_MODULE_NOT_FOUND" }));
+    expect(() => resolver.resolveEsmSpecifier("file://server/share/x.mjs", "/")).toThrow(expect.objectContaining({ code: "ERR_INVALID_FILE_URL_HOST" }));
   });
 });
 

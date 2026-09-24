@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { IChildProcessHost } from "./bindings/childProcess";
-import { createFakeCryptoDigestSync } from "../testing/fakeCryptoDigestSync";
 import { runScript } from "./harness";
 
 // The builtins Vite imports that this runtime used to lack. `url`, `querystring`, `tty`,
@@ -15,12 +14,7 @@ const noopChildProcessHost: IChildProcessHost = {
 };
 
 const run = (source: string, files: Record<string, string> = {}) =>
-  runScript({ ...files, "/app/main.js": source }, "/app/main.js", {
-    cwd: "/app",
-    childProcess: noopChildProcessHost,
-    // crypto's hashes block on the kernel's digest servicer; a fake backed by Node's own crypto.
-    spawnSync: createFakeCryptoDigestSync(),
-  });
+  runScript({ ...files, "/app/main.js": source }, "/app/main.js", { cwd: "/app", childProcess: noopChildProcessHost });
 
 // Run under real Node 24 once, output pinned below: this runtime must print exactly the same.
 const DIFFERENTIAL_SCRIPT = String.raw`const url = require("url");

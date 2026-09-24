@@ -264,56 +264,52 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
    * Brotli/Zstd support has.
    */
   const cryptoShim: BuiltinFactory = (_exports, require, module, process, internalBinding) => {
-    // SubtleCrypto.digest() supports exactly these four - no md5, sha224, sha3-*, blake2*, etc.;
-    // unsupported by the platform API itself, not a choice made here.
-    const WEB_CRYPTO_ALGORITHM: Record<string, string> = {
-      sha1: "SHA-1",
-      sha256: "SHA-256",
-      sha384: "SHA-384",
-      sha512: "SHA-512",
-    };
-
-    const concatBytes = (parts: Uint8Array[]): Uint8Array => {
-      const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-      let offset = 0;
-      for (const part of parts) {
-        out.set(part, offset);
-        offset += part.length;
-      }
-      return out;
-    };
+    // Hashing is plain JS, synchronous, in this thread (bindings/hash.ts via internalBinding
+    // ('crypto')): md5, sha1, sha224/256, sha384/512 - no sha3-*/blake2*/md4.
+    const { createHasher, hashAlgorithms } = internalBinding("crypto");
+    const { codes } = require("internal/errors");
+    const kHasher = Symbol("kHasher");
 
     // The sandbox's OWN Buffer (bindings/buffer.ts), not a real Node/platform one - same
     // "require the vendored module to get its class" pattern childProcess.ts's own exec()/
     // execFile() output already uses.
     const toBytes = (data: unknown, inputEncoding?: string): Uint8Array => {
       if (typeof data === "string") return new Uint8Array(require("buffer").Buffer.from(data, inputEncoding ?? "utf8"));
-      if (data instanceof Uint8Array) return data;
-      throw new TypeError("crypto: Hash.update() expects a string, Buffer, or TypedArray");
+      if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      throw new codes.ERR_INVALID_ARG_TYPE("data", ["string", "Buffer", "TypedArray", "DataView"], data);
     };
+
+    const finalized = () => new codes.ERR_CRYPTO_HASH_FINALIZED();
 
     class Hash {
       algorithm: string;
-      chunks: Uint8Array[] = [];
+      [kHasher]: { update(data: Uint8Array): void; digest(): Uint8Array; copy(): unknown } | null;
 
-      constructor(algorithm: string) {
-        const normalized = algorithm.toLowerCase();
-        if (!WEB_CRYPTO_ALGORITHM[normalized]) {
-          throw new Error(`crypto.createHash: unsupported digest algorithm '${algorithm}' (supported: ${Object.keys(WEB_CRYPTO_ALGORITHM).join(", ")})`);
-        }
-        this.algorithm = normalized;
+      constructor(algorithm: string, hasher?: Hash[typeof kHasher]) {
+        const created = hasher ?? createHasher(algorithm);
+        // Real Node's own message (OpenSSL's), with no `code` either.
+        if (!created) throw new Error("Digest method not supported");
+        this.algorithm = algorithm;
+        this[kHasher] = created;
       }
 
       update(data: unknown, inputEncoding?: string) {
-        this.chunks.push(toBytes(data, inputEncoding));
+        if (!this[kHasher]) throw finalized();
+        this[kHasher].update(toBytes(data, inputEncoding));
         return this;
       }
 
       digest(encoding?: string) {
-        const input = concatBytes(this.chunks);
-        const bytes = internalBinding("crypto").digestSync(WEB_CRYPTO_ALGORITHM[this.algorithm], input);
-        const result = require("buffer").Buffer.from(bytes);
-        return encoding ? result.toString(encoding) : result;
+        if (!this[kHasher]) throw finalized();
+        const bytes = this[kHasher].digest();
+        this[kHasher] = null;
+        const result = require("buffer").Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        return encoding && encoding !== "buffer" ? result.toString(encoding) : result;
+      }
+
+      copy() {
+        if (!this[kHasher]) throw finalized();
+        return new Hash(this.algorithm, this[kHasher].copy() as Hash[typeof kHasher]);
       }
     }
 
@@ -327,7 +323,6 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
     const viewOf = (buffer: ArrayBuffer | ArrayBufferView): Uint8Array =>
       buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-    const { codes } = require("internal/errors");
 
     const randomBytes = (size: number, callback?: (error: Error | null, buffer?: unknown) => void) => {
       const bytes = new Uint8Array(size);
@@ -376,7 +371,7 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
       createHash,
       Hash,
       hash,
-      getHashes: () => Object.keys(WEB_CRYPTO_ALGORITHM),
+      getHashes: () => [...hashAlgorithms],
       randomBytes,
       randomFill,
       randomFillSync,

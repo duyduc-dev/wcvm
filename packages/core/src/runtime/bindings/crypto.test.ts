@@ -1,9 +1,10 @@
+import nodeCrypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import type { ISyscallClient } from "../../protocols/syscall";
-import { createFakeCryptoDigestSync } from "../../testing/fakeCryptoDigestSync";
 import { runScript } from "../harness";
 
-const run = (source: string, spawnSync?: ISyscallClient) => runScript({ "/app/main.js": source }, "/app/main.js", { cwd: "/app", spawnSync });
+// Hashing needs nothing from the kernel any more (bindings/hash.ts - plain synchronous JS), so
+// these run with no spawnSync client at all.
+const run = (source: string) => runScript({ "/app/main.js": source }, "/app/main.js", { cwd: "/app" });
 
 describe("crypto (hand-written shim)", () => {
   it("createHash('sha256').update().digest('hex') matches a known SHA-256 vector", async () => {
@@ -11,8 +12,7 @@ describe("crypto (hand-written shim)", () => {
       `
       const crypto = require('crypto');
       console.log(crypto.createHash('sha256').update('hello').digest('hex'));
-      `,
-      createFakeCryptoDigestSync(),
+      `
     );
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\n");
@@ -25,8 +25,7 @@ describe("crypto (hand-written shim)", () => {
       const whole = crypto.createHash('sha512').update('hello world').digest('hex');
       const chunked = crypto.createHash('sha512').update('hello').update(' ').update('world').digest('hex');
       console.log(whole === chunked, whole.length);
-      `,
-      createFakeCryptoDigestSync(),
+      `
     );
     expect(r.stdout).toBe("true 128\n");
   });
@@ -37,26 +36,46 @@ describe("crypto (hand-written shim)", () => {
       const crypto = require('crypto');
       const digest = crypto.createHash('sha1').update('x').digest();
       console.log(Buffer.isBuffer(digest), digest.length);
-      `,
-      createFakeCryptoDigestSync(),
+      `
     );
     expect(r.stdout).toBe("true 20\n");
   });
 
-  it("createHash() throws a clear error for an unsupported algorithm (md5 - not in SubtleCrypto)", async () => {
+  it("md5 and sha224 work too; an unknown algorithm fails with real Node's message", async () => {
     const r = await run(
       `
       const crypto = require('crypto');
-      try {
-        crypto.createHash('md5');
-        console.log('no error');
-      } catch (e) {
-        console.log(e.message.includes('md5'));
+      console.log(crypto.createHash('md5').update('hello').digest('hex'), crypto.createHash('sha224').update('').digest('hex'));
+      try { crypto.createHash('sha3-256'); } catch (e) { console.log(e.message); }
+      `,
+    );
+    expect(r.stdout).toBe("5d41402abc4b2a76b9719d911017c592 d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f\nDigest method not supported\n");
+  });
+
+  it("a finished hash can't be updated, digested or copied again; copy() forks a running one", async () => {
+    const r = await run(
+      `
+      const crypto = require('crypto');
+      const h = crypto.createHash('sha256').update('hello ');
+      const fork = h.copy();
+      console.log(h.update('world').digest('hex') === crypto.createHash('sha256').update('hello world').digest('hex'));
+      console.log(fork.update('there').digest('base64url').length);
+      for (const again of [() => h.update('x'), () => h.digest(), () => h.copy()]) {
+        try { again(); } catch (e) { console.log(e.code); }
       }
       `,
-      createFakeCryptoDigestSync(),
     );
-    expect(r.stdout).toBe("true\n");
+    expect(r.stdout).toBe("true\n43\n" + "ERR_CRYPTO_HASH_FINALIZED\n".repeat(3));
+  });
+
+  it("hashes a multi-megabyte input in one update() - no 1 MiB limit", async () => {
+    const r = await run(
+      `
+      const crypto = require('crypto');
+      console.log(crypto.createHash('sha1').update(Buffer.alloc(3 * 1024 * 1024, 7)).digest('hex'));
+      `,
+    );
+    expect(r.stdout).toBe(`${nodeCrypto.createHash("sha1").update(Buffer.alloc(3 * 1024 * 1024, 7)).digest("hex")}\n`);
   });
 
   it("randomBytes(size) is a real Buffer of the right length, sync with no callback and async with one", async () => {
@@ -81,16 +100,4 @@ describe("crypto (hand-written shim)", () => {
     expect(r.stdout).toBe("true\n");
   });
 
-  it("digest sync operations throw a clear error when no spawnSync client is wired", async () => {
-    const r = await run(`
-      const crypto = require('crypto');
-      try {
-        crypto.createHash('sha256').update('x').digest('hex');
-        console.log('no error');
-      } catch (e) {
-        console.log(e.message.includes('spawnSync client'));
-      }
-    `);
-    expect(r.stdout).toBe("true\n");
-  });
 });

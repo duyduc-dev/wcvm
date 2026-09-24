@@ -2024,25 +2024,44 @@ test.describe("sh", () => {
     // the SAME IStdinHost sh's REPL is reading from, displacing it; without lineReader.ts's
     // reattach() (programs/sh/sh.ts's runReplSh), further typed input after `.exit` would go
     // nowhere - sh would look frozen even though the whole process's stdin is still open.
+    //
+    // Each line waits for the prompt/result it follows, like a person at a terminal - not a fixed
+    // delay: a nested `node` can take far longer than any fixed delay to start on a loaded
+    // machine, and then `.exit` and the next line arrive together and node (correctly, as real
+    // node would with typed-ahead input) consumes both before its exit takes effect.
     const r = await page.evaluate(async () => {
       const wc = (window as unknown as WcWindow).wc;
       const proc = await wc.spawn("sh", []);
       const writer = proc.stdin.getWriter();
       const encoder = new TextEncoder();
-      const send = async (line: string) => {
-        await writer.write(encoder.encode(`${line}\n`));
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      let out = "";
+      const reading = (async () => {
+        const reader = proc.stdout.getReader();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          out += new TextDecoder().decode(value);
+        }
+      })();
+      const waitFor = async (after: number, text: string) => {
+        const deadline = Date.now() + 20_000;
+        while (!out.slice(after).includes(text)) {
+          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in ${JSON.stringify(out)}`);
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
       };
-      await send("node"); // starts a nested interactive node REPL, in the same process
-      await send("1 + 1"); // evaluated by node, not sh
-      await send(".exit"); // node exits normally - does NOT end the whole process's stdin
-      await send("echo still alive"); // must reach sh's REPL, not a now-defunct handler
+      const send = async (line: string, thenWaitFor: string) => {
+        const mark = out.length;
+        await writer.write(encoder.encode(`${line}\n`));
+        await waitFor(mark, thenWaitFor);
+      };
+      await waitFor(0, "$ ");
+      await send("node", "> "); // starts a nested interactive node REPL, in the same process
+      await send("1 + 1", "2\n"); // evaluated by node, not sh
+      await send(".exit", "$ "); // node exits normally - does NOT end the whole process's stdin
+      await send("echo still alive", "still alive\n"); // must reach sh's REPL, not a now-defunct handler
       await writer.close();
-      const [out, err, exit] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exit,
-      ]);
+      const [err, exit] = await Promise.all([new Response(proc.stderr).text(), proc.exit, reading]);
       return { out, err, code: exit.exitCode };
     });
     expect(r.out).toContain("2\n");
