@@ -465,7 +465,8 @@ before picking this back up.
 Verified by Vitest (574) and Playwright in real Chromium (91), including a script reading a
 file the host wrote and the host reading what the script wrote.
 
-Not done: real npm (deferred - see above), DNS (`dns.lookup()` is a fixed-address shim, not a
+Not done: real npm (deferred - see above; a minimal built-in `npm install` is done instead, see
+CLAUDE.md's "Status"), DNS (`dns.lookup()` is a fixed-address shim, not a
 real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `node -p`.
 (`worker_threads` is done - see CLAUDE.md's "Status".)
 
@@ -592,6 +593,15 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   `<script>`, so a guest page whose own CSP forbids inline scripts never gets it; a compressed
   (`Content-Encoding`) HTML document isn't injected at all. A page opened with no same-origin wcvm
   page embedding it (or as its opener) falls back to the real `WebSocket`, which reaches nothing.
+- `npm` (`programs/npm/`): only `npm install` (from package.json, or named packages, saved the way
+  real npm saves them). No lockfile (read or written), no install/lifecycle scripts (reported, never
+  run - esbuild's postinstall included), no git/file/link/workspace/tarball-URL specs
+  (`EUNSUPPORTEDPROTOCOL`), no `overrides`, no workspaces, no `.npmrc` (registry via `--registry` or
+  `npm_config_registry` only), no auth/private registries. Optional dependencies with `os`/`cpu`
+  restrictions are skipped unless they allow `cpu: wasm32` (every native build - nothing native can
+  run here); a REQUIRED one is installed anyway, with a warning, instead of npm's `EBADPLATFORM`. A
+  peer dependency that conflicts with an already-placed copy is kept as-is with a warning (npm would
+  fail with `ERESOLVE`). Tarball symlinks/hardlinks aren't extracted (npm doesn't either).
 - Preview absolute-path routing (`workers/preview/previewRouting.ts`): an absolute URL from a
   previewed page is REDIRECTED into its port's prefix, so `response.url` is the prefixed URL and a
   `fetch(url, { redirect: "manual" | "error" })` to one sees an opaque redirect/a network error. A
@@ -768,6 +778,13 @@ a tarball, and gunzip+untar it with the now-real `zlib`) - were both offered and
 declined in favor of parking this feature entirely. Revisit by re-reading this section fresh
 rather than assuming either path is still the right scope by the time it comes back up.
 
+**Revisited (2026-09-24), for Phase 8: the minimal custom installer was chosen** (asked again
+explicitly, against a prebuilt Vite snapshot or pausing Vite) - real npm itself stays deferred.
+Done: a built-in `npm install` (`programs/npm/`), see CLAUDE.md's "Status". It fetches from the
+real registry with the browser's own `fetch()` (not wcvm's virtual `http`), which is what makes it
+possible at all - registry.npmjs.org answers `Access-Control-Allow-Origin: *` on packuments and
+tarballs alike, so a CORS-mode fetch passes the page's COEP.
+
 **One genuinely good finding: guest Node scripts already see several real browser globals**,
 since nothing in the runtime bootstrap strips them (`globalObject: self` means a guest script's
 global scope IS the real Process Worker's real `self` - see CLAUDE.md's existing gotchas on this).
@@ -817,8 +834,17 @@ picking this back up.
   a link to `/about`) into that page's own port prefix (`workers/preview/previewRouting.ts`), keyed
   by the requesting client (recorded at its navigation; one async `clients.get()` for a client the
   SW has never seen) or, for a navigation, its referrer.
-- **Next**: getting Vite itself into the VFS with no npm (real npm is deferred - see Phase 7), and
-  Vite's own needs (esbuild-wasm or Rollup's wasm build in place of native binaries, chokidar over
+- Getting Vite into the VFS - **done** via a minimal built-in `npm install` (`programs/npm/`, see
+  CLAUDE.md's "Status"; chosen over a prebuilt snapshot). Checked for real in Chromium against
+  registry.npmjs.org: `npm install vite@7` resolves vite 7.3.6 plus 9 dependencies in ~6s, skipping
+  the native `@esbuild/*`/`@rollup/*` optional builds.
+- **Next: dynamic `import()` from CommonJS code** (a pre-existing runtime gap, found by the npm e2e
+  test): only real ES modules get their `import()` calls rewritten to the runtime's bridge
+  (`runtime/esm/rewrite.ts`) - an `import()` in a CJS module or `node -e` reaches the browser's
+  native `import()`, which can't resolve a bare specifier or VFS path, and the idle event loop
+  exits before the rejection surfaces, so it fails SILENTLY. Plenty of CJS tooling loads ESM this
+  way (config loaders, CLIs).
+- Then: Vite's own needs (esbuild-wasm or Rollup's wasm build in place of native binaries, chokidar over
   our `fs.watch`).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.

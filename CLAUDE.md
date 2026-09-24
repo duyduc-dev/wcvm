@@ -24,7 +24,7 @@ Done and verified in real Chromium:
   Killing (or the natural exit of) a process kills its whole subtree: a `child_process` with no
   live parent left would otherwise strand a Process Worker in the tab forever (`detached` is
   accepted but not honoured, so there is no opt-out yet).
-- Built-ins: `echo cat ls pwd mkdir rm sleep true false node sh`. `cat` with no args streams real
+- Built-ins: `echo cat ls pwd mkdir rm sleep true false node sh npm`. `cat` with no args streams real
   stdin.
 - `sh -c "..."` / `sh script.sh` (`programs/sh/`): `;`/`&&`/`||` sequencing, `|` pipes (in-memory,
   everything is one worker), `>`/`>>`/`<` redirects, `cd` as a shell builtin. Runs over the same
@@ -657,15 +657,54 @@ Done and verified in real Chromium:
   same page still routed after `ServiceWorker.stopAllWorkers` (CDP) wipes the SW's map - confirmed
   to FAIL with the async lookup deliberately broken, so it really exercises that path. A full,
   clean `pnpm exec playwright test` run (101/101) and `vitest run` (658/658) confirm no regressions.
-- Tests: 658 Vitest + 101 Playwright (Chromium). See "Verifying".
+- `npm install` (Phase 8's third piece - getting Vite's packages into the VFS; a minimal
+  installer, NOT real npm, which stays deferred - see PLAN.md's "Real npm: feasibility findings",
+  revisited 2026-09-24): a built-in program (`programs/npm/`) that runs in a Process Worker and talks
+  to the real registry with the browser's own `fetch()` - registry.npmjs.org answers
+  `Access-Control-Allow-Origin: *` on packuments and tarballs, so a CORS-mode fetch passes the
+  page's COEP (checked with curl, then for real in Chromium). `npm install` installs package.json's
+  dependencies+devDependencies (+optional, +non-optional peers); `npm install <pkg>...` (`-D`,
+  `--registry`, `npm_config_registry`) installs and saves them exactly the way npm 11 saves them
+  (`^<installed>` unless that's looser than the typed range - checked against real npm). Pieces:
+  `semver.ts` (npm's range semantics incl. the prerelease rule, hand-written, pinned by an ORACLE
+  table generated from the real `semver` package: 60 ranges x 37 versions + maxSatisfying +
+  invalid ranges), `tar.ts` (ustar + 155-byte prefix + pax `x`/`g` + GNU `L`/`K` + base-256 sizes,
+  checksums verified; tested on a real `npm pack` tarball), `registry.ts` (abbreviated packuments via
+  the CORS-safelisted `application/vnd.npm.install-v1+json` Accept - no preflight; SRI sha512 (or
+  sha1 `shasum`) integrity via SubtleCrypto; gunzip via `DecompressionStream`'s own reader/writer,
+  no Blob/Response), `install.ts` (breadth-first resolution with npm v3-style hoisting: reuse the
+  nearest copy Node's resolution would find if it satisfies, nest under the requester if the
+  nearest conflicts, hoist to the root if there's none - BFS makes a later hoist unable to shadow an
+  earlier resolution; version picking like npm-pick-manifest: a dist-tag, else `latest` if it
+  satisfies, else the highest match preferring non-deprecated; packuments prefetched as names are
+  discovered so the network runs ahead of the deterministic placement; tarballs 8 at a time;
+  `npm:` aliases; bundled deps skipped; extraneous packages pruned (dot-dirs like Vite's
+  `node_modules/.vite` never), a package whose installed package.json already matches is kept, and
+  package.json is written LAST during extraction so an interrupted one never looks complete; bins
+  linked as relative symlinks in the right `node_modules/.bin`). Native `fetch`/`crypto.subtle`/
+  `DecompressionStream` are captured in `builtins.ts` at module load and injected (the "never call a
+  global by its bare name" gotcha - a `node` run earlier in the same worker via `sh` replaces
+  globals). Checked for real in Chromium against registry.npmjs.org (a one-off, proxied run - not a
+  committed test, since CI has no guaranteed network): `npm install vite@7` got vite 7.3.6 plus 9
+  dependencies in ~6s, skipped every native `@esbuild/*`/`@rollup/*` build, reported esbuild's
+  unrun install script, and `node` could `require` all of it. See PLAN.md's "Known differences" for
+  everything it deliberately doesn't do. Found along the way (pre-existing, next up - see PLAN.md
+  Phase 8): dynamic `import()` from CommonJS/`node -e` code fails SILENTLY. Verified:
+  `semver.test.ts` (139), `tar.test.ts` (7), `npm.test.ts` (17, the whole installer end to end on a
+  real Vfs against `testing/fakeRegistry.ts` - real gzipped tarballs, real sha512), and 2 new
+  Playwright tests against `e2e/fixtureRegistry.ts` (the same fake registry served over real HTTP on
+  its own origin with CORS, a second Playwright `webServer`): install with a nested conflict, a
+  skipped native optional, a bin, then `require`/ESM `import`/running the bin through `node`, and an
+  up-to-date second run; a missing package failing with `E404`. A full, clean `pnpm exec playwright
+  test` run (103/103) and `vitest run` (821/821) confirm no regressions.
+- Tests: 821 Vitest + 103 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
-DEFERRED - its fetch
-stack has no path to a real network from inside wcvm's virtual `net`/`http`, confirmed by reading
-the actual installed source; see PLAN.md's "Real npm: feasibility findings" before picking this
-back up), Vite dev server/HMR (the preview WebSocket tunnel and absolute-path routing are done;
-getting Vite itself into the VFS with no npm is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
+DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
+a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
+findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
+are done; dynamic `import()` from CommonJS is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
 
 ## Architecture in one page
 

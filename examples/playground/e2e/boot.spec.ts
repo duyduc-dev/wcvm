@@ -1401,6 +1401,64 @@ test.describe("preview absolute paths", () => {
   });
 });
 
+test.describe("npm install", () => {
+  // wcvm's minimal npm (packages/core/src/programs/npm/): a real CORS fetch() from a Process Worker
+  // to a registry on another origin (e2e/fixtureRegistry.ts, the same cross-origin shape as
+  // registry.npmjs.org), real sha512 integrity checks via SubtleCrypto, real gunzip via the
+  // browser's DecompressionStream, then the installed tree used for real by `node`.
+  const REGISTRY = "http://localhost:5184/";
+
+  test("installs from a cross-origin registry, and node can require, import and run what it installed", async ({ page }) => {
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/app", { recursive: true });
+      await fs.writeFile("/app/package.json", JSON.stringify({ name: "app", dependencies: { "colors-lite": "^1.0.0", "esm-only": "^1.0.0" } }));
+    });
+
+    const install = await spawn(page, "npm", ["install", "greet", "--registry", REGISTRY], "/app");
+    expect(install).toEqual({ code: 0, out: expect.stringMatching(/^\nadded 5 packages in \d+m?s\n$/), err: "" });
+
+    const used = await spawn(page, "node", ["-e", `
+      console.log(require("greet")("world"));
+      console.log(require("colors-lite").tag);
+    `], "/app");
+    // greet's own ^2 of colors-lite is nested under it; the app's ^1 stays at the top.
+    expect(used).toEqual({ code: 0, out: "[hello world] colors@2\ncolors@1\n", err: "" });
+
+    await page.evaluate(() => (window as unknown as WcWindow).wc.fs.writeFile("/app/main.mjs", 'import { answer } from "esm-only"; console.log("esm", answer);'));
+    expect(await spawn(page, "node", ["main.mjs"], "/app")).toEqual({ code: 0, out: "esm 42\n", err: "" });
+
+    const bin = await spawn(page, "node", ["node_modules/.bin/greet", "bin"], "/app");
+    expect(bin).toEqual({ code: 0, out: "[hello bin] colors@2\n", err: "" });
+
+    const layout = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const read = async (path: string) => new TextDecoder().decode(await fs.readFile(path));
+      return {
+        pkg: JSON.parse(await read("/app/package.json")),
+        top: (await fs.readdir("/app/node_modules")).sort(),
+        nested: JSON.parse(await read("/app/node_modules/greet/node_modules/colors-lite/package.json")).version,
+      };
+    });
+    expect(layout).toEqual({
+      pkg: { name: "app", dependencies: { "colors-lite": "^1.0.0", "esm-only": "^1.0.0", greet: "^1.2.0" } },
+      // No @demo/native-linux-x64: an optional native build, which nothing here could run.
+      top: [".bin", "@demo", "colors-lite", "esm-only", "greet"],
+      nested: "2.0.0",
+    });
+
+    const again = await spawn(page, "npm", ["install", "--registry", REGISTRY], "/app");
+    expect(again).toEqual({ code: 0, out: expect.stringMatching(/^\nup to date in \d+m?s\n$/), err: "" });
+  });
+
+  test("a registry that has no such package fails the install with npm's own error code", async ({ page }) => {
+    await page.evaluate(() => (window as unknown as WcWindow).wc.fs.mkdir("/empty", { recursive: true }));
+    const r = await spawn(page, "npm", ["install", "no-such-package", "--registry", REGISTRY], "/empty");
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/^npm error code E404\n/);
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over
