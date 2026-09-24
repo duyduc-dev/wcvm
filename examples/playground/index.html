@@ -10,11 +10,13 @@
       #terminal { padding: 0 8px; }
       #preview { padding: 8px; border-top: 1px solid #444; margin-top: 8px; }
       #preview-status { font-size: 12px; color: #aaa; padding-bottom: 4px; }
-      #preview-frame { width: 100%; height: 240px; border: 1px solid #444; background: #fff; }
+      #preview-frame { width: 100%; height: 320px; border: 1px solid #444; background: #fff; }
       #example { padding: 8px; border-top: 1px solid #444; margin-top: 8px; }
       #example-label { font-size: 12px; color: #ddd; padding-bottom: 4px; }
       #example-status { font-size: 12px; color: #aaa; padding: 4px 0; }
-      #example-source { font-size: 11px; max-height: 160px; overflow: auto; background: #111; padding: 8px; margin: 4px 0 0; white-space: pre-wrap; }
+      #example-status { white-space: pre-wrap; }
+      #example-hint { font-size: 12px; color: #aaa; padding: 4px 0 2px; }
+      #example-editor { width: 100%; box-sizing: border-box; height: 260px; font: 12px monospace; background: #111; color: #ddd; border: 1px solid #444; padding: 8px; tab-size: 2; }
     </style>
   </head>
   <body>
@@ -25,10 +27,11 @@
     </div>
     <div id="terminal"></div>
     <div id="example">
-      <div id="example-label">Example: a real Node.js HTTP server, live in the preview pane below</div>
-      <button id="example-run">run example server</button>
+      <div id="example-label">Example: a Vite + React + TypeScript app - installed from npm and run entirely in this tab, live in the preview pane below</div>
+      <button id="example-run">run React example</button>
       <div id="example-status">Not running.</div>
-      <pre id="example-source"></pre>
+      <div id="example-hint">src/App.tsx - edit it while the app runs; changes hot-reload in the preview (React Fast Refresh keeps its state).</div>
+      <textarea id="example-editor" spellcheck="false" aria-label="src/App.tsx"></textarea>
     </div>
     <div id="preview">
       <button id="preview-enable">enable preview</button>
