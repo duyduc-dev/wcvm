@@ -837,7 +837,23 @@ Done and verified in real Chromium:
   runtime, one pushes >1 MiB through the syscall window) got 20 s timeouts: ~2 s alone, they
   occasionally crossed the 5 s default under full-suite load. A full, clean `pnpm exec playwright
   test` run (109/109) and `vitest run` (848/848) confirm no regressions.
-- Tests: 848 Vitest + 109 Playwright (Chromium). See "Verifying".
+- Vite dev server + HMR, end to end (Phase 8's ninth piece - the headline): an OPT-IN Playwright
+  test (`e2e/boot.spec.ts`'s "Vite dev server"; `WCVM_E2E_VITE=1 pnpm exec playwright test -g
+  "Vite dev server"`, skipped otherwise) runs an unmodified Vite 7.3.6 from `npm install` to hot
+  module replacement, entirely in the tab: wcvm's own `npm install` from the REAL registry (~5 MB;
+  behind a proxy, playwright.config.ts hands `HTTPS_PROXY` to Chromium for this test only),
+  esbuild/Rollup swapped for their wasm builds via `overrides`, Vite's real CLI, the playground's
+  own preview pane pointing itself at it via `onListen()`, a TypeScript entry transformed and an
+  npm dependency (`mitt`) pre-bundled by esbuild-wasm, then a CSS edit and a self-accepting module
+  edit both HOT-applied - asserted to be the same page (a boot marker on the iframe's window
+  survives) - and the pane resetting when the server is killed. Opt-in rather than always-on by
+  the user's choice: every building block it relies on already has its own small offline test, and
+  keeping it on by default meant committing a 5.4 MB recorded registry slice (tried, then dropped
+  and squashed out of history before it could stick). HMR itself needed NO new code: the preview
+  WebSocket tunnel, absolute-path routing and `fs.watch` (chokidar runs over it) built earlier were
+  exactly enough. Verified: the opt-in test passes against the real registry (~10 s); a default
+  full `pnpm exec playwright test` run is 109 passed, 1 skipped.
+- Tests: 848 Vitest + 110 Playwright (Chromium; 1 of them opt-in - see the Vite entry). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
@@ -845,8 +861,7 @@ DEFERRED - its fetch stack has no path to a real network from inside wcvm's virt
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
 CJS `import()`, the builtins Vite imports and a real `import.meta.url` are done, and Vite's dev
-server runs, with esbuild-wasm doing TS and dependency pre-bundling; the page and HMR in a real
-preview iframe are next - see PLAN.md Phase 8),
+dev server runs WITH HMR, under an opt-in e2e test - see PLAN.md Phase 8 for what's left),
 Python/Bun, Studio UI.
 
 ## Architecture in one page

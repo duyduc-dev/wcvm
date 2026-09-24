@@ -840,7 +840,7 @@ No code was written or committed for the real-npm investigation itself; `zlib` a
 Real npm itself (step 3's conclusion) is deferred - see the "Decision" paragraph above before
 picking this back up.
 
-### Phase 8 - Dev servers
+### Phase 8 - Dev servers  (Vite dev + HMR DONE, under an opt-in e2e test - see CLAUDE.md's "Status")
 - Vite dev + HMR over a WebSocket tunnel, templates. `fs.watch`/`watchFile` are already done (see
   "Current state") - picked up ahead of this phase, not blocking it.
 - WebSocket tunnel for previewed pages - **done**, see CLAUDE.md's "Status": the preview SW
@@ -874,10 +874,16 @@ picking this back up.
   "Status"), an unmodified Vite 7.3 starts in ~1s and serves `/`, `/main.js` and `/@vite/client`
   through the preview relay. esbuild-wasm now works too (fd 0 reads, `child.unref()` and an
   inherited child `cwd` were the fixes - see CLAUDE.md's "Status"): Vite transforms TypeScript and
-  pre-bundles npm dependencies. **Next:** (1) the page in a real preview iframe, its HMR WebSocket
-  through the tunnel, and a file edit reaching it (chokidar over our `fs.watch`); (2) a committed
-  e2e test, which needs Vite's packages without the real registry (a fixture tarball set, or a
-  recorded registry).
+  pre-bundles npm dependencies.
+- The page in a real preview iframe with HMR - **done**, and needed no new code: Vite's client
+  connects over the preview WebSocket tunnel, chokidar sees edits through our `fs.watch`, and CSS
+  and self-accepting modules hot-update without a reload (a non-accepting module gets Vite's full
+  page reload, also working). Checked by an OPT-IN Playwright test (`WCVM_E2E_VITE=1`) that installs
+  from the real registry - the user's call, to keep the repo lean: every building block has its own
+  small offline test, and an always-on version needed a 5.4 MB committed registry slice (tried,
+  then dropped and squashed out of history).
+- Left in this phase: templates (starter projects to pick from), and anything a bigger real app
+  hits (a framework plugin - React/Vue - is the obvious next thing to try).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 
