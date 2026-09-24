@@ -444,6 +444,34 @@ test.describe("node", () => {
       expect(JSON.parse(r.out)).toEqual({ code: 0, signal: null, out: "hello from child\n", pid: "number" });
     });
 
+    test("a long-lived service child: requests in over fs.read(0), replies out over fs.write(1), and an unref'd child doesn't hold its parent", async ({ page }) => {
+      // esbuild-wasm's own shape: its JS API spawns `node .../bin/esbuild --service`, whose Go
+      // WebAssembly runtime reads requests with fs.read(0) and answers with fs.write(1), then
+      // unrefs the child and both pipes so an idle service never keeps the script alive.
+      await writeFiles(page, {
+        "/svc/service.js": `
+          const fs = require("fs");
+          const buf = Buffer.alloc(64);
+          const loop = () => fs.read(0, buf, 0, buf.length, null, (err, n) => {
+            if (err || n === 0) return;
+            const reply = Buffer.from("echo:" + buf.toString("utf8", 0, n).toUpperCase());
+            fs.write(1, reply, 0, reply.length, null, loop);
+          });
+          loop();
+        `,
+        "/svc/main.js": `
+          const child = require("child_process").spawn("node", ["service.js"], { stdio: ["pipe", "pipe", "inherit"] });
+          child.stdout.on("data", (d) => {
+            console.log("got", String(d));
+            child.unref(); child.stdin.unref?.(); child.stdout.unref?.();
+          });
+          child.stdin.write("ping");
+        `,
+      });
+      const r = await spawn(page, "node", ["main.js"], "/svc");
+      expect(r).toEqual({ code: 0, out: "got echo:PING\n", err: "" });
+    });
+
     test("a child that fails to run reports a nonzero exit, not a crash", async ({ page }) => {
       const r = await spawn(page, "node", [
         "-e",

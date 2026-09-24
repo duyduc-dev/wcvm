@@ -801,13 +801,43 @@ Done and verified in real Chromium:
     ref nor reported `'close'` - a closed port with a listener attached kept the whole process
     alive forever, and `port.close(cb)`'s `cb` never ran. Now `close()` releases the ref and
     reports `'close'` through io.js's own `handle_onclose` hook, like real Node.
-  Still open (next): esbuild-wasm's service stops during Vite's dependency scan ("The service was
-  stopped"; Vite skips pre-bundling and carries on), and the page/HMR in a real preview iframe.
+  Still open then: esbuild-wasm's service stopping (fixed since - see the esbuild-wasm entry
+  below), and the page/HMR in a real preview iframe.
   Verified: new cases in `esm/resolve.test.ts` (4), `runtime.test.ts` (1), `viteBuiltins.test.ts`
   (2 - dns.promises; crypto against real Node's output), 1 new Playwright test (MessagePort
   onmessage/addEventListener/close(cb) + clean exit). A full, clean `pnpm exec playwright test` run
   (108/108) and `vitest run` (843/843) confirm no regressions.
-- Tests: 843 Vitest + 108 Playwright (Chromium). See "Verifying".
+- esbuild-wasm runs, so Vite's full TS pipeline does (Phase 8's eighth piece): esbuild's JS API
+  spawns `node esbuild-wasm/bin/esbuild --service` as a child and talks to it over stdio - its Go
+  WebAssembly runtime reads requests with `fs.read(0, ...)` and answers with `fs.write(1, ...)`.
+  Three real runtime bugs stood in the way, each fixed and tested:
+  - `fs.read(0)` answered EOF at once (`bindings/fs.ts` treated fd 0 as an empty file), so the
+    service exited on its first read ("The service was stopped"). An async `fs.read(0)` now waits
+    on the process's real stdin - consuming from the SAME Readable `process.stdin` reads
+    (`runtime.ts`'s `readStdin`: at most `length` bytes, the rest unshifted back, `null` at EOF), so
+    the two never race for chunks - and holds the loop open meanwhile, as a pending libuv read does.
+    `readSync(0)` returns what's buffered, 0 at EOF, else `EAGAIN` (real Node on a non-blocking
+    pipe) - it used to report a false EOF.
+  - `child.ref()`/`unref()` were no-ops (`bindings/childProcess.ts`'s `Process`): a running child
+    always kept its parent alive, and esbuild deliberately unrefs its idle service - so any script
+    using esbuild's API never exited. Now they toggle the child's event-loop ref (`ChildRouter.
+    setProcessRef`), like `uv_ref`/`uv_unref` on a process handle.
+  - A child spawned without a `cwd` option started at `/` instead of inheriting the parent's
+    current directory (real libuv passes a NULL cwd; the OS inherits). `spawn` and `spawnSync` now
+    pass the parent's `process.cwd()` (worker_threads already did). esbuild always passes `cwd`
+    itself, so this surfaced only in the new e2e test's own plain `spawn("node", ["service.js"])`.
+  Result, checked for real in Chromium against the real registry: `esbuild.transform()` of TS in
+  ~0.5s, and Vite serving a `src/main.ts` (types stripped by esbuild) importing an npm package that
+  Vite's dependency scan found and esbuild PRE-BUNDLED into `/node_modules/.vite/deps/`. Verified:
+  2 new `runtime.test.ts` cases (async fd 0 reads with partial lengths/leftover/EOF, `readSync(0)`
+  semantics), 2 new `childProcess.test.ts` cases (unref lets the parent exit mid-child; ref after
+  unref holds it again), 1 new `spawnSync.test.ts` case (inherited cwd), and 1 Playwright test (an
+  esbuild-shaped service child: requests over `fs.read(0)`, replies over `fs.write(1)`, unref'd so
+  the parent exits while it still runs). Three pre-existing heavy tests (two boot a whole Node
+  runtime, one pushes >1 MiB through the syscall window) got 20 s timeouts: ~2 s alone, they
+  occasionally crossed the 5 s default under full-suite load. A full, clean `pnpm exec playwright
+  test` run (109/109) and `vitest run` (848/848) confirm no regressions.
+- Tests: 848 Vitest + 109 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
@@ -815,8 +845,8 @@ DEFERRED - its fetch stack has no path to a real network from inside wcvm's virt
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
 CJS `import()`, the builtins Vite imports and a real `import.meta.url` are done, and Vite's dev
-server now runs and serves pages; esbuild-wasm's service and in-iframe HMR are next - see PLAN.md
-Phase 8),
+server runs, with esbuild-wasm doing TS and dependency pre-bundling; the page and HMR in a real
+preview iframe are next - see PLAN.md Phase 8),
 Python/Bun, Studio UI.
 
 ## Architecture in one page

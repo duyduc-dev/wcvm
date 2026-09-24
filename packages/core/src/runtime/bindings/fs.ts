@@ -24,6 +24,14 @@ export interface IFsBindingContext {
   requireBuiltin(id: string): any;
   /** Writes to the process's stdout (fd 1) / stderr (fd 2). */
   writeStdio(fd: 1 | 2, chunk: Uint8Array): void;
+  /**
+   * Reads fd 0 - the process's own stdin (the same stream process.stdin reads). `wait`: resolve
+   * once data or EOF arrives, like a real blocking read on a pipe; otherwise answer from what's
+   * already buffered right now (`undefined` = nothing yet, not EOF). `null` = EOF. At most
+   * `length` bytes; the rest stays buffered for the next read.
+   */
+  readStdin?(length: number, wait: true): Promise<Uint8Array | null>;
+  readStdin?(length: number, wait: false): Uint8Array | null | undefined;
 }
 
 const kUsePromises = Symbol("fs_use_promises_symbol");
@@ -136,6 +144,38 @@ const resolvingClient = (fs: IFsClient, cwd: () => string): IFsClient => {
 
 const createFsBinding = (ctx: IFsBindingContext) => {
   const { loop, writeStdio } = ctx;
+
+  /**
+   * An async `fs.read(0, ...)`: wait for the process's real stdin, the way libuv's read on a pipe
+   * does - holding the loop open meanwhile, as a pending threadpool read keeps a real process
+   * alive. Go's WebAssembly runtime reads stdin exactly like this (esbuild-wasm's service: requests
+   * in on fd 0, responses out on fd 1); answering "EOF" at once, as fd 0 used to here, made the
+   * service exit on its first read.
+   */
+  const readStdinAsync = (buffer: Uint8Array, offset: number, length: number, req: unknown) => {
+    const release = loop.ref();
+    const bytesRead = ctx.readStdin!(length, true).then((chunk) => {
+      if (chunk) buffer.set(chunk, offset);
+      return chunk?.length ?? 0;
+    });
+    const settle = (fn: () => void) =>
+      loop.post(() => {
+        try {
+          fn();
+        } finally {
+          release();
+        }
+      });
+    if (req === kUsePromises) {
+      return new Promise((resolve, reject) => bytesRead.then((n) => settle(() => resolve(n)), (e) => settle(() => reject(e))));
+    }
+    const callback = req as FSReqCallback;
+    bytesRead.then(
+      (n) => settle(() => callback.oncomplete?.call(callback, null, n)),
+      (e) => settle(() => callback.oncomplete?.call(callback, toUv(e, "read", undefined, undefined))),
+    );
+    return undefined;
+  };
   const fs = resolvingClient(ctx.fs, ctx.cwd);
   const decoder = new TextDecoder();
   const Buffer = () => ctx.requireBuiltin("buffer").Buffer;
@@ -425,8 +465,20 @@ const createFsBinding = (ctx: IFsBindingContext) => {
       }),
 
     read: (fd: number, buffer: Uint8Array, offset: number, length: number, position: unknown, req: unknown) =>
-      dispatch(req, "read", undefined, undefined, () => {
-        if (fd === 0 || length === 0) return 0;
+      fd === 0 && req !== undefined && length > 0 && ctx.readStdin
+        ? readStdinAsync(buffer, offset, length, req)
+        : dispatch(req, "read", undefined, undefined, () => {
+        if (length === 0) return 0;
+        if (fd === 0) {
+          // readSync(0): what's buffered already, or EOF - never a blocking wait (this thread
+          // can't block on async input). A non-blocking pipe with nothing yet is EAGAIN in real
+          // Node too.
+          if (!ctx.readStdin) return 0; // no stdin at all: already at EOF
+          const chunk = ctx.readStdin(length, false);
+          if (chunk === undefined) throw Object.assign(new Error("EAGAIN"), { code: "EAGAIN" });
+          if (chunk) buffer.set(chunk, offset);
+          return chunk?.length ?? 0;
+        }
         if (isStdio(fd)) throw Object.assign(new Error("EBADF"), { code: "EBADF" });
         const chunk = fs.read(fd, length, pos(position));
         buffer.set(chunk, offset);

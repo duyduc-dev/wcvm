@@ -107,6 +107,8 @@ const createRuntime = (options: IRuntimeOptions) => {
     fs,
     process,
     writeStdio: (fd, chunk) => host.write(fd === 1 ? "stdout" : "stderr", chunk),
+    // Only once stdin exists (below) - a read of fd 0 can't happen before user code runs.
+    readStdin: ((length: number, wait: boolean) => readStdin(length, wait)) as IBindingContext["readStdin"],
     childProcess: host.childProcess,
     spawnSync: host.spawnSync,
     fsWatch: host.fsWatch,
@@ -213,6 +215,32 @@ const createRuntime = (options: IRuntimeOptions) => {
   // touches stdin must still be able to exit on its own.
   const stdin = new Readable({ read() {} });
   Object.assign(stdin, { fd: 0, isTTY: false });
+  let stdinEnded = !host.stdin;
+
+  /** fd 0 reads (bindings/fs.ts): straight from this same Readable, so process.stdin and a raw
+   *  fs.read(0) never race each other for chunks. What's buffered now, `null` at EOF, `undefined`
+   *  if neither yet; at most `length` bytes, the rest put back for the next read. */
+  const takeStdin = (length: number): Uint8Array | null | undefined => {
+    const data: Uint8Array | null = stdin.read();
+    if (data === null) return stdinEnded ? null : undefined;
+    if (data.length <= length) return data;
+    stdin.unshift(data.subarray(length));
+    return data.subarray(0, length);
+  };
+  function readStdin(length: number, wait: boolean): Uint8Array | null | undefined | Promise<Uint8Array | null> {
+    if (!wait) return takeStdin(length);
+    return new Promise((resolve) => {
+      const attempt = () => {
+        const chunk = takeStdin(length);
+        if (chunk === undefined) return;
+        stdin.off("readable", attempt);
+        resolve(chunk);
+      };
+      stdin.on("readable", attempt);
+      attempt();
+    });
+  }
+
   if (host.stdin) {
     let release: (() => void) | null = null;
     stdin.on("resume", () => {
@@ -224,7 +252,10 @@ const createRuntime = (options: IRuntimeOptions) => {
     };
     stdin.on("pause", unref);
     stdin.on("end", unref);
-    host.stdin.onData((chunk) => stdin.push(chunk));
+    host.stdin.onData((chunk) => {
+      if (chunk === null) stdinEnded = true;
+      stdin.push(chunk);
+    });
   } else {
     stdin.push(null);
   }

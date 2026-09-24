@@ -482,6 +482,41 @@ describe("standard streams", () => {
     expect(r.stdout()).toBe("still running\nended\n");
   });
 
+  it("an async fs.read(0) waits for real stdin data, takes at most `length`, keeps the rest, and reads 0 at EOF", async () => {
+    // What Go's WebAssembly runtime does for stdin (esbuild-wasm's service reads its requests so).
+    const r = await runInterleaved(`
+      const fs = require("fs");
+      const readOnce = (length) => new Promise((resolve) => fs.read(0, Buffer.alloc(length), 0, length, null, (err, n, buf) => resolve(err ? err.code : buf.toString("utf8", 0, n) + "|" + n)));
+      (async () => {
+        console.log("first", await readOnce(4));
+        console.log("rest", await readOnce(64));
+        console.log("eof", await readOnce(64));
+      })();
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 20)); // the read is genuinely pending meanwhile
+    r.deliver(new TextEncoder().encode("hello world"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    r.deliver(null);
+    expect(await r.done).toBe(0);
+    expect(r.stdout()).toBe("first hell|4\nrest o world|7\neof |0\n");
+  });
+
+  it("fs.readSync(0) returns what's buffered, EAGAIN when nothing is yet, 0 at EOF", async () => {
+    const r = await runInterleaved(`
+      const fs = require("fs");
+      const readSync = () => { try { const b = Buffer.alloc(16); const n = fs.readSync(0, b, 0, 16, null); return b.toString("utf8", 0, n) + "|" + n; } catch (e) { return e.code; } };
+      console.log("before", readSync());
+      setTimeout(() => console.log("after", readSync()), 30);
+      setTimeout(() => console.log("ended", readSync()), 60);
+    `);
+    r.deliver(new TextEncoder().encode("abc"));
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    r.deliver(null);
+    expect(await r.done).toBe(0);
+    expect(r.stdout()).toBe("before EAGAIN\nafter abc|3\nended |0\n");
+  });
+
+
   it("a script that never touches stdin exits normally even with a live host that never ends it", async () => {
     const r = await runInterleaved(`console.log("done")`);
     expect(await r.done).toBe(0);
