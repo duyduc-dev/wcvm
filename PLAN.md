@@ -596,7 +596,8 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
 - `npm` (`programs/npm/`): only `npm install` (from package.json, or named packages, saved the way
   real npm saves them). No lockfile (read or written), no install/lifecycle scripts (reported, never
   run - esbuild's postinstall included), no git/file/link/workspace/tarball-URL specs
-  (`EUNSUPPORTEDPROTOCOL`), no `overrides`, no workspaces, no `.npmrc` (registry via `--registry` or
+  (`EUNSUPPORTEDPROTOCOL`), only npm's FLAT `overrides` form (`"name": "spec"` and `"$name"`;
+  nested/versioned-key forms are warned about and ignored), no workspaces, no `.npmrc` (registry via `--registry` or
   `npm_config_registry` only), no auth/private registries. Optional dependencies with `os`/`cpu`
   restrictions are skipped unless they allow `cpu: wasm32` (every native build - nothing native can
   run here); a REQUIRED one is installed anyway, with a warning, instead of npm's `EBADPLATFORM`. A
@@ -842,10 +843,15 @@ picking this back up.
   reach the browser's native `import()` and fail silently; `cjs.ts` now rewrites it to the same
   runtime bridge ES modules use (`esm/loader.ts`'s `rewriteScript`), parsing only source that might
   contain one.
-- **Next: actually run Vite's dev server.** Its packages install (`npm install vite@7`); what's
-  untested is Vite itself on this runtime - esbuild's native binary can't run here (esbuild-wasm, or
-  an `npm:` alias to it, in its place), Rollup's native build likewise (`@rollup/wasm-node`), and
-  chokidar has to work over our `fs.watch`.
+- **Next: actually run Vite's dev server.** Its packages install with the native builds swapped
+  for wasm ones via `overrides` (`"esbuild": "npm:esbuild-wasm@^0.25.0"`, `"rollup":
+  "npm:@rollup/wasm-node@^4"` - done, flat form), 11 packages from the real registry in ~5s. A
+  first real run (2026-09-24, Chromium) stops at once: `node:perf_hooks` isn't a builtin. Probed
+  every `node:` builtin Vite 7's own code imports against a real wcvm process - missing: `module`
+  (createRequire - needs our own cjs.ts, not Node's loader), `perf_hooks`, `url` (the public
+  module; `internal/url` is shimmed), `https`, `tls`, `inspector`, `tty`, `querystring`,
+  `process`. After those: whatever Vite hits next (esbuild-wasm's own child-process service,
+  chokidar over our `fs.watch`, ...).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 

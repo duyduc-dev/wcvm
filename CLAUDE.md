@@ -678,7 +678,10 @@ Done and verified in real Chromium:
   earlier resolution; version picking like npm-pick-manifest: a dist-tag, else `latest` if it
   satisfies, else the highest match preferring non-deprecated; packuments prefetched as names are
   discovered so the network runs ahead of the deterministic placement; tarballs 8 at a time;
-  `npm:` aliases; bundled deps skipped; extraneous packages pruned (dot-dirs like Vite's
+  `npm:` aliases; npm's flat `overrides` (`"esbuild": "npm:esbuild-wasm@^0.25.0"` swaps the native
+  package for its wasm build on EVERY edge - a root alias alone can't, since a dependency on
+  `esbuild` rejects a copy whose real name differs, exactly like npm; `"$name"` references work);
+  bundled deps skipped; extraneous packages pruned (dot-dirs like Vite's
   `node_modules/.vite` never), a package whose installed package.json already matches is kept, and
   package.json is written LAST during extraction so an interrupted one never looks complete; bins
   linked as relative symlinks in the right `node_modules/.bin`). Native `fetch`/`crypto.subtle`/
@@ -718,14 +721,15 @@ Done and verified in real Chromium:
   clean `pnpm exec playwright test` run (105/105) and `vitest run` (828/828) confirm no regressions
   (one full Vitest run hit 3 unrelated 5 s timeouts under load, incl. the untouched fetcher; they
   passed alone and in two further full runs).
-- Tests: 828 Vitest + 105 Playwright (Chromium). See "Verifying".
+- Tests: 829 Vitest + 105 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-and CJS `import()` are done; actually running Vite's dev server is next - see PLAN.md Phase 8),
+and CJS `import()` are done; running Vite's dev server is next, starting with 9 missing builtins
+- see PLAN.md Phase 8),
 Python/Bun, Studio UI.
 
 ## Architecture in one page
