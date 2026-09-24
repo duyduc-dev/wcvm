@@ -91,8 +91,11 @@ button { font-size: 1rem; padding: 0.5rem 1rem; border-radius: 8px; border: 1px 
 
 type Process = Awaited<ReturnType<IWcvm["spawn"]>>;
 
-/** Everything a process writes, as text, as it arrives. */
-const collect = (proc: Process, onText: (text: string) => void) => {
+/** Everything a process writes, as text, as it arrives - also mirrored into the shared terminal
+ *  pane (if one's attached), interleaved with whatever that session is doing, so npm install's
+ *  and Vite's own output (including its ongoing HMR log lines) are visible somewhere in full,
+ *  not just the one-line status text derived from them. */
+const collect = (proc: Process, onText: (text: string) => void, writeToTerminal?: (text: string) => void) => {
   for (const stream of [proc.stdout, proc.stderr]) {
     void (async () => {
       const reader = stream.getReader();
@@ -100,7 +103,9 @@ const collect = (proc: Process, onText: (text: string) => void) => {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) return;
-        onText(decoder.decode(value));
+        const text = decoder.decode(value);
+        onText(text);
+        writeToTerminal?.(text);
       }
     })();
   }
@@ -108,9 +113,15 @@ const collect = (proc: Process, onText: (text: string) => void) => {
 
 export const attachReactExample = (
   wc: IWcvm,
-  elements: { runButton: HTMLButtonElement; status: HTMLElement; editor: HTMLTextAreaElement },
+  elements: {
+    runButton: HTMLButtonElement;
+    status: HTMLElement;
+    editor: HTMLTextAreaElement;
+    /** Mirrors this example's npm/vite output into the shared terminal pane, if one's attached. */
+    writeToTerminal?: (text: string) => void;
+  },
 ) => {
-  const { runButton, status, editor } = elements;
+  const { runButton, status, editor, writeToTerminal } = elements;
   editor.value = APP_TSX;
 
   let vite: Process | undefined;
@@ -147,7 +158,7 @@ export const attachReactExample = (
     status.textContent = "Installing React, Vite and friends from registry.npmjs.org with wcvm's npm install (~10s the first time)...";
     const install = await wc.spawn("npm", ["install"], { cwd: PROJECT });
     let installLog = "";
-    collect(install, (text) => (installLog += text));
+    collect(install, (text) => (installLog += text), writeToTerminal);
     const installed = await install.exit;
     if (installed.exitCode !== 0) throw new Error(`npm install failed:\n${installLog.trim()}`);
 
@@ -161,7 +172,7 @@ export const attachReactExample = (
       if (/Local:/.test(log) && vite === started) {
         status.textContent = `Vite is running on virtual port ${PORT} - the app is in the preview pane below. Edit src/App.tsx here and watch it hot-reload.`;
       }
-    });
+    }, writeToTerminal);
     started.exit.then((result) => {
       if (vite !== started) return; // already stopped (or restarted) by the user
       stop(`Vite exited unexpectedly (code ${result.exitCode}):\n${log.trim().split("\n").slice(-5).join("\n")}`);
