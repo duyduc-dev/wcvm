@@ -21,7 +21,6 @@ import {
   createMksnapshotBinding,
   createOptionsBinding,
   createOsBinding,
-  createPerformanceBinding,
   createPermissionBinding,
   createProfilerBinding,
   createTraceEventsBinding,
@@ -29,9 +28,11 @@ import {
   createUvBinding,
 } from "./misc";
 import { createTcpWrapBinding, type INetHost } from "./net";
+import { createPerformanceBinding } from "./performance";
 import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
 import { createUdpWrapBinding, type IUdpHost } from "./udp";
+import { createEncodingBinding, createUrlBinding, createUrlPatternBinding } from "./url";
 import { createSymbolsBinding, createUtilBinding } from "./util";
 import { createWorkerBinding, type IWorkerContext, type IWorkerThreadHost } from "./worker";
 import { createZlibBinding } from "./zlib";
@@ -87,6 +88,7 @@ const factories: Record<string, BindingFactory> = {
   config: () => createConfigBinding(),
   constants: () => createConstantsBinding(),
   crypto: (ctx) => createCryptoBinding(ctx),
+  encoding_binding: () => createEncodingBinding(),
   diagnostics_channel: () => createDiagnosticsChannelBinding(),
   errors: () => createErrorsBinding(),
   fs: (ctx) => createFsBindingFor(ctx),
@@ -114,6 +116,8 @@ const factories: Record<string, BindingFactory> = {
   task_queue: (ctx) => createTaskQueueBinding(ctx.loop),
   timers: (ctx) => createTimersBinding(ctx.loop),
   types: () => createTypesBinding(),
+  url: () => createUrlBinding(),
+  url_pattern: () => createUrlPatternBinding(),
   udp_wrap: (ctx) => createUdpWrapBinding({ loop: ctx.loop, udp: ctx.udp, udpSync: ctx.netSync, requireBuiltin: ctx.requireBuiltin }),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),

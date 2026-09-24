@@ -23,9 +23,12 @@ describe("vendored Node lib", () => {
     "internal/encoding",
     "internal/blob",
     "internal/bootstrap/realm",
-    "internal/perf/observe",
     "dns",
     "cluster",
+    "tls",
+    "https",
+    "inspector",
+    "inspector/promises",
   ];
 
   it("registers exactly the modules in the manifest, at one pinned version", () => {

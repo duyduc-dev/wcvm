@@ -15,10 +15,12 @@ const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
  * Hand-written stand-ins, for two different reasons:
  *  - Node modules that are part of Node's C++ bootstrap rather than its `lib/`, so they cannot
  *    be vendored verbatim at all (`internal/url`, `internal/encoding`, `internal/blob`,
- *    `internal/perf/observe`, `v8`).
+ *    `v8`). (`internal/perf/observe` used to be one too; it's the real vendored module now, over
+ *    bindings/performance.ts, since `perf_hooks` needs a real PerformanceObserver.)
  *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified,
  *    or narrower result instead of fully implementing: `dns`/`cluster` because there's nothing
- *    real behind them to report; `crypto` because real Node's own `crypto.js` needs a much bigger
+ *    real behind them to report; `tls`/`https`/`inspector` because there's no TLS stack or V8
+ *    inspector to put behind them (they load, and fail with real Node's own error on use); `crypto` because real Node's own `crypto.js` needs a much bigger
  *    native-crypto binding surface (KeyObject/PEM, X.509, DiffieHellman, scrypt, argon2 - none of
  *    it mappable onto the Web Crypto API) than this sandbox's actual need (hashing) justifies -
  *    see their own comments below for why.
@@ -104,11 +106,19 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
       return options;
     };
 
+    // The public `url` module's legacy url.parse()/format() protocol tables (real Node defines them
+    // here too, in internal/url.js; it only ever calls `.has()` on them).
+    const protocols = (...names: string[]) => new Set(names.flatMap((name) => [name, `${name}:`]));
+
     module.exports = {
       URL: URLCtor,
       URLSearchParams: URLSearchParamsCtor,
       isURL,
       fileURLToPath,
+      fileURLToPathBuffer: (input: any) => ctx.requireBuiltin("buffer").Buffer.from(fileURLToPath(input)),
+      unsafeProtocol: protocols("javascript"),
+      hostlessProtocol: protocols("javascript"),
+      slashedProtocol: protocols("http", "https", "ftp", "gopher", "file", "ws", "wss"),
       pathToFileURL,
       toPathIfFileURL,
       urlToHttpOptions,
@@ -148,16 +158,6 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
       createBlobFromFilePath: (path: string, options?: { type?: string }) =>
         new BlobCtor([ctx.internalBinding("fs").__readForBlob(path)], options),
     };
-  };
-
-  /**
-   * `internal/perf/observe` is a large PerformanceObserver implementation; net.js requires it
-   * unconditionally at module load and calls it from real, working `connect()` now, but only to
-   * check whether anything is actually observing 'net' events - no observer is ever subscribed
-   * here, so this is exactly real Node's own default (unobserved) state, not an approximation.
-   */
-  const internalPerfObserve: BuiltinFactory = (_exports, _require, module) => {
-    module.exports = { hasObserver: () => false, startPerf: () => {}, stopPerf: () => {} };
   };
 
   /**
@@ -308,11 +308,99 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     module.exports = { createHash, Hash, randomBytes, randomUUID };
   };
 
+  /**
+   * `tls`/`https` need a real TLS stack (OpenSSL behind a raw socket), which this sandbox has
+   * neither of: its sockets are virtual, and the Web Crypto API can't secure a stream. Real Node
+   * built without OpenSSL throws ERR_NO_CRYPTO the moment either module is required - but here
+   * they must still LOAD: plenty of code imports them unconditionally and only reaches for TLS on
+   * an opt-in path (Vite: only with `server.https` set). So both load, report nothing to offer
+   * (no ciphers, no root certificates), and throw real Node's own ERR_NO_CRYPTO from anything that
+   * would actually need TLS. `https.Agent` stays constructible - libraries build one at load time.
+   */
+  const tlsShim: BuiltinFactory = (_exports, _require, module) => {
+    const { codes } = ctx.requireBuiltin("internal/errors");
+    const net = ctx.requireBuiltin("net");
+    const noCrypto = () => {
+      throw new codes.ERR_NO_CRYPTO();
+    };
+    class TLSSocket extends net.Socket {
+      constructor() {
+        super();
+        noCrypto();
+      }
+    }
+    class Server extends net.Server {
+      constructor() {
+        super();
+        noCrypto();
+      }
+    }
+    class SecureContext {
+      constructor() {
+        noCrypto();
+      }
+    }
+    module.exports = {
+      CLIENT_RENEG_LIMIT: 3,
+      CLIENT_RENEG_WINDOW: 600,
+      DEFAULT_CIPHERS: "",
+      DEFAULT_ECDH_CURVE: "auto",
+      DEFAULT_MIN_VERSION: "TLSv1.2",
+      DEFAULT_MAX_VERSION: "TLSv1.3",
+      rootCertificates: Object.freeze([]),
+      getCiphers: () => [],
+      getCACertificates: () => [],
+      setDefaultCACertificates: noCrypto,
+      checkServerIdentity: noCrypto,
+      convertALPNProtocols: noCrypto,
+      createSecureContext: noCrypto,
+      createSecurePair: noCrypto,
+      connect: noCrypto,
+      createServer: noCrypto,
+      SecureContext,
+      TLSSocket,
+      Server,
+    };
+  };
+
+  const httpsShim: BuiltinFactory = (_exports, _require, module) => {
+    const { codes } = ctx.requireBuiltin("internal/errors");
+    const http = ctx.requireBuiltin("http");
+    const tls = ctx.requireBuiltin("tls");
+    const noCrypto = () => {
+      throw new codes.ERR_NO_CRYPTO();
+    };
+    class Agent extends http.Agent {
+      constructor(options?: Record<string, unknown>) {
+        super(options);
+        this.defaultPort = 443;
+        this.protocol = "https:";
+      }
+    }
+    module.exports = {
+      Agent,
+      globalAgent: new Agent({ keepAlive: true, scheduling: "lifo", timeout: 5000 }),
+      Server: tls.Server,
+      createServer: noCrypto,
+      request: noCrypto,
+      get: noCrypto,
+    };
+  };
+
+  /** Real Node built without the inspector (`--without-inspector`) throws this on require; there's
+   *  no V8 inspector protocol reachable from inside a Worker here either. */
+  const inspectorShim: BuiltinFactory = () => {
+    throw new (ctx.requireBuiltin("internal/errors").codes.ERR_INSPECTOR_NOT_AVAILABLE)();
+  };
+
   return {
+    tls: tlsShim,
+    https: httpsShim,
+    inspector: inspectorShim,
+    "inspector/promises": inspectorShim,
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
-    "internal/perf/observe": internalPerfObserve,
     dns: dnsShim,
     cluster: clusterShim,
     crypto: cryptoShim,

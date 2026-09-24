@@ -356,7 +356,17 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
       const anchor = new Module(`${fromDir === "/" ? "" : fromDir}/[eval]`, null);
       return load(request, anchor);
     },
+    /** `module.createRequire(filename)`: a require() that resolves as if called from `filename`
+     *  (an absolute path; one ending in `/` means "from inside this directory"). */
+    createRequire: (filename: string) => {
+      const module = new Module(filename.endsWith("/") ? `${filename}[createRequire]` : filename, null);
+      module.paths = nodeModulesPaths(module.path);
+      module.require = (id) => load(id, module);
+      return makeRequire(module);
+    },
+    nodeModulesPaths,
     resolve,
+    Module,
   };
 };
 

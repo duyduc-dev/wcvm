@@ -51,19 +51,29 @@ import f_internal_fs_streams from "./lib/internal/fs/streams.js";
 import f_internal_fs_sync_write_stream from "./lib/internal/fs/sync_write_stream.js";
 import f_internal_fs_utils from "./lib/internal/fs/utils.js";
 import f_internal_fs_watchers from "./lib/internal/fs/watchers.js";
+import f_internal_histogram from "./lib/internal/histogram.js";
 import f_internal_http from "./lib/internal/http.js";
 import f_internal_linkedlist from "./lib/internal/linkedlist.js";
 import f_internal_locks from "./lib/internal/locks.js";
 import f_internal_net from "./lib/internal/net.js";
 import f_internal_options from "./lib/internal/options.js";
 import f_internal_per_context_primordials from "./lib/internal/per_context/primordials.js";
+import f_internal_perf_event_loop_delay from "./lib/internal/perf/event_loop_delay.js";
 import f_internal_perf_event_loop_utilization from "./lib/internal/perf/event_loop_utilization.js";
+import f_internal_perf_nodetiming from "./lib/internal/perf/nodetiming.js";
+import f_internal_perf_observe from "./lib/internal/perf/observe.js";
+import f_internal_perf_performance from "./lib/internal/perf/performance.js";
+import f_internal_perf_performance_entry from "./lib/internal/perf/performance_entry.js";
+import f_internal_perf_resource_timing from "./lib/internal/perf/resource_timing.js";
+import f_internal_perf_timerify from "./lib/internal/perf/timerify.js";
+import f_internal_perf_usertiming from "./lib/internal/perf/usertiming.js";
 import f_internal_perf_utils from "./lib/internal/perf/utils.js";
 import f_internal_priority_queue from "./lib/internal/priority_queue.js";
 import f_internal_process_permission from "./lib/internal/process/permission.js";
 import f_internal_process_promises from "./lib/internal/process/promises.js";
 import f_internal_process_task_queues from "./lib/internal/process/task_queues.js";
 import f_internal_process_warning from "./lib/internal/process/warning.js";
+import f_internal_querystring from "./lib/internal/querystring.js";
 import f_internal_readline_callbacks from "./lib/internal/readline/callbacks.js";
 import f_internal_readline_emitKeypressEvents from "./lib/internal/readline/emitKeypressEvents.js";
 import f_internal_readline_interface from "./lib/internal/readline/interface.js";
@@ -91,6 +101,7 @@ import f_internal_streams_transform from "./lib/internal/streams/transform.js";
 import f_internal_streams_utils from "./lib/internal/streams/utils.js";
 import f_internal_streams_writable from "./lib/internal/streams/writable.js";
 import f_internal_timers from "./lib/internal/timers.js";
+import f_internal_tty from "./lib/internal/tty.js";
 import f_internal_util from "./lib/internal/util.js";
 import f_internal_util_colors from "./lib/internal/util/colors.js";
 import f_internal_util_comparisons from "./lib/internal/util/comparisons.js";
@@ -107,6 +118,9 @@ import f_internal_worker_messaging from "./lib/internal/worker/messaging.js";
 import f_net from "./lib/net.js";
 import f_os from "./lib/os.js";
 import f_path from "./lib/path.js";
+import f_perf_hooks from "./lib/perf_hooks.js";
+import f_process from "./lib/process.js";
+import f_querystring from "./lib/querystring.js";
 import f_readline from "./lib/readline.js";
 import f_readline_promises from "./lib/readline/promises.js";
 import f_stream from "./lib/stream.js";
@@ -114,6 +128,8 @@ import f_stream_promises from "./lib/stream/promises.js";
 import f_string_decoder from "./lib/string_decoder.js";
 import f_timers from "./lib/timers.js";
 import f_timers_promises from "./lib/timers/promises.js";
+import f_tty from "./lib/tty.js";
+import f_url from "./lib/url.js";
 import f_util from "./lib/util.js";
 import f_util_types from "./lib/util/types.js";
 import f_worker_threads from "./lib/worker_threads.js";
@@ -173,18 +189,28 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/fs/sync_write_stream": f_internal_fs_sync_write_stream,
   "internal/fs/utils": f_internal_fs_utils,
   "internal/fs/watchers": f_internal_fs_watchers,
+  "internal/histogram": f_internal_histogram,
   "internal/http": f_internal_http,
   "internal/linkedlist": f_internal_linkedlist,
   "internal/locks": f_internal_locks,
   "internal/net": f_internal_net,
   "internal/options": f_internal_options,
+  "internal/perf/event_loop_delay": f_internal_perf_event_loop_delay,
   "internal/perf/event_loop_utilization": f_internal_perf_event_loop_utilization,
+  "internal/perf/nodetiming": f_internal_perf_nodetiming,
+  "internal/perf/observe": f_internal_perf_observe,
+  "internal/perf/performance": f_internal_perf_performance,
+  "internal/perf/performance_entry": f_internal_perf_performance_entry,
+  "internal/perf/resource_timing": f_internal_perf_resource_timing,
+  "internal/perf/timerify": f_internal_perf_timerify,
+  "internal/perf/usertiming": f_internal_perf_usertiming,
   "internal/perf/utils": f_internal_perf_utils,
   "internal/priority_queue": f_internal_priority_queue,
   "internal/process/permission": f_internal_process_permission,
   "internal/process/promises": f_internal_process_promises,
   "internal/process/task_queues": f_internal_process_task_queues,
   "internal/process/warning": f_internal_process_warning,
+  "internal/querystring": f_internal_querystring,
   "internal/readline/callbacks": f_internal_readline_callbacks,
   "internal/readline/emitKeypressEvents": f_internal_readline_emitKeypressEvents,
   "internal/readline/interface": f_internal_readline_interface,
@@ -212,6 +238,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/streams/utils": f_internal_streams_utils,
   "internal/streams/writable": f_internal_streams_writable,
   "internal/timers": f_internal_timers,
+  "internal/tty": f_internal_tty,
   "internal/util": f_internal_util,
   "internal/util/colors": f_internal_util_colors,
   "internal/util/comparisons": f_internal_util_comparisons,
@@ -228,6 +255,9 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "net": f_net,
   "os": f_os,
   "path": f_path,
+  "perf_hooks": f_perf_hooks,
+  "process": f_process,
+  "querystring": f_querystring,
   "readline": f_readline,
   "readline/promises": f_readline_promises,
   "stream": f_stream,
@@ -235,6 +265,8 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "string_decoder": f_string_decoder,
   "timers": f_timers,
   "timers/promises": f_timers_promises,
+  "tty": f_tty,
+  "url": f_url,
   "util": f_util,
   "util/types": f_util_types,
   "worker_threads": f_worker_threads,

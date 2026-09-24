@@ -40,7 +40,8 @@ Done and verified in real Chromium:
 - `node script.js` / `node -e`: Node v24.18.0's own `lib/` (vendored verbatim) on our own
   `internalBinding`, libuv-shaped event loop, `process`, CommonJS loader, `fs`, `fs/promises`, `os`,
   `stream`, `events`, `buffer`, `util`, `timers`, `console`, `string_decoder`, `path`, `assert`,
-  `readline`, `readline/promises`, `child_process.spawn`/`exec`/`execFile` (real Node code; a
+  `readline`, `readline/promises`, `url`, `querystring`, `tty`, `perf_hooks`, `process`,
+  `child_process.spawn`/`exec`/`execFile` (real Node code; a
   child is another real Process Worker the kernel supervises - see `kernel/processes.ts`'s
   `parentPid` and `runtime/bindings/childProcess.ts`). `child.stdin.write()`/`.end()` deliver for
   real, over the same stdin plumbing as top-level processes.
@@ -721,15 +722,42 @@ Done and verified in real Chromium:
   clean `pnpm exec playwright test` run (105/105) and `vitest run` (828/828) confirm no regressions
   (one full Vitest run hit 3 unrelated 5 s timeouts under load, incl. the untouched fetcher; they
   passed alone and in two further full runs).
-- Tests: 829 Vitest + 105 Playwright (Chromium). See "Verifying".
+- The builtins Vite imports (Phase 8's fifth piece): a first real `node vite.js` run stopped at
+  once on `node:perf_hooks`; probing every `node:` builtin Vite 7's own code imports against a real
+  process found 9 missing. Vendored (Node's real lib/, via `discover-node-lib.mjs`): `process`,
+  `querystring`, `url` (over new `bindings/url.ts`: `url_pattern` = the platform's own WHATWG
+  `URLPattern`, `encoding_binding.toASCII` = IDNA via the platform `URL`, `url.format`'s C++ half;
+  `internal/url`'s shim gained `fileURLToPathBuffer` and the legacy protocol tables), `tty` (over
+  the existing inert `tty_wrap`: `isatty()` is always false), and `perf_hooks` - which also swapped
+  the old hand-written `internal/perf/observe` stub for Node's REAL `observe.js` (a real
+  `PerformanceObserver` for mark/measure), over a rewritten `bindings/performance.ts`: all of
+  node_perf_common.h's milestone/entry-type constants, no-op GC/observer hooks (no native entries
+  to push), and `Histogram`/`createELDHistogram` - an EXACT (value->count) stand-in for C++
+  HdrHistogram following its percentile rules, pinned against real Node's own numbers;
+  `monitorEventLoopDelay` samples on a native `setInterval` that never keeps the process alive,
+  like Node's unref'd timer. Hand-written: `module` (`runtime/moduleBuiltin.ts`, over OUR cjs.ts -
+  real lib/module.js fronts Node's own C++-backed loader: `createRequire` from a path or `file:`
+  URL, `builtinModules` (the loader's new `publicIds()`), `isBuiltin`, cjs.ts's own `Module` class
+  with the common statics; `register`/`registerHooks` deliberately ABSENT - no hook points here,
+  and Vite checks for them and falls back cleanly), `tls`/`https` (must LOAD - Vite imports them
+  statically - but no TLS stack exists here, so every real TLS operation throws real Node's own
+  `ERR_NO_CRYPTO`; `https.Agent` stays constructible), `inspector` (throws
+  `ERR_INSPECTOR_NOT_AVAILABLE` on require, exactly like a Node built without it). Verified:
+  `runtime/viteBuiltins.test.ts` (5 Vitest, one of them DIFFERENTIAL - a script run under real
+  Node 24 once, its stdout pinned; this runtime must print byte-for-byte the same: url.parse/
+  format/resolve, fileURLToPath/pathToFileURL, IDNA, URLPattern, querystring, tty, process, histograms,
+  mark/measure, PerformanceObserver), 1 Playwright test in real Chromium (native URLPattern/
+  performance/timers inside a real worker). A full, clean `pnpm exec playwright test` run (106/106)
+  and `vitest run` (834/834) confirm no regressions.
+- Tests: 834 Vitest + 106 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-and CJS `import()` are done; running Vite's dev server is next, starting with 9 missing builtins
-- see PLAN.md Phase 8),
+CJS `import()` and the 9 builtins Vite imports are done; a real `file://` `import.meta.url` is
+next - see PLAN.md Phase 8),
 Python/Bun, Studio UI.
 
 ## Architecture in one page

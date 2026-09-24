@@ -12,6 +12,7 @@ import type { IUdpHost } from "./bindings/udp";
 import type { IWorkerContext, IWorkerThreadHost } from "./bindings/worker";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
+import { createModuleBuiltin } from "./moduleBuiltin";
 import { createEsmResolver } from "./esm/resolve";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
@@ -121,7 +122,24 @@ const createRuntime = (options: IRuntimeOptions) => {
   // A binding may need to call another binding (messaging needs symbols' own no_message_symbol) -
   // this closes that forward reference now that internalBinding itself exists.
   bindingCtx.internalBinding = internalBinding;
-  loader = createBuiltinLoader({ process, internalBinding, primordials });
+  loader = createBuiltinLoader({
+    process,
+    internalBinding,
+    primordials,
+    factories: {
+      // Over OUR CommonJS loader (see moduleBuiltin.ts) - `modules` is created further down, but
+      // this factory only runs once user code actually requires "module", long after.
+      module: (_exports, _require, module) => {
+        module.exports = createModuleBuiltin({
+          modules: () => modules,
+          requireBuiltin: loader.requireBuiltin,
+          canBeRequiredByUsers: loader.canBeRequiredByUsers,
+          publicIds: loader.publicIds,
+          cwd: () => process.cwd(),
+        });
+      },
+    },
+  });
   const { requireBuiltin } = loader;
 
   // Node's startup initialises debuglog before anything logs.

@@ -118,6 +118,22 @@
     "internal/worker/io": "b4c084d5fc9329b90467a5554f95a2e32dd4434785d82cb20849ef2268419f8a",
     "internal/worker/messaging": "65fea9368be820a66dc7d14573d0efcd9c0d77ce968a32cc510a853b68744519",
     "internal/error_serdes": "ddea3fc5a79eefd670fa1f0810efc86fa1169e3efcd8661ca26edd7666233849",
-    "internal/locks": "a14a6a26b00f8a26dcf33469f12c020947626a0b84cb4bee3e16f44a3fbe0b68"
+    "internal/locks": "a14a6a26b00f8a26dcf33469f12c020947626a0b84cb4bee3e16f44a3fbe0b68",
+    "process": "93ff86f9669940eae34dafe6a2e734efd3eaa202bbda0709e7a49e19612b28e4",
+    "querystring": "513ace4440c97fcaf3da958598be85f136eb044c6045b06dcac945395c4a7b56",
+    "internal/querystring": "92d0cbd561d7cce93936b083d56d2a41063d177f3aa6772ae2c1871f160163d1",
+    "url": "0a53e0c4e8bfb5946380577bf9d5ae9c227ad54ae738f5bd5e4a5e8682921f38",
+    "tty": "9d05c1f3cbacb47623d49eeb09dd185cca4d80bcdfb4ed769fde90e0535ffe7b",
+    "internal/tty": "996ae301ee60854817401545811fd908c332cd3ed071c6a498d211ccdd9a932d",
+    "perf_hooks": "4464d395ecde3d4ef16607b57b36d007af764190203ec3f1b905427d2f25f234",
+    "internal/perf/performance_entry": "8f13ef192d56d23ab344f3ccf760cf3cbfc625277378006bdfc0415d4b7791ee",
+    "internal/perf/resource_timing": "ad7ffef84d082bf0bd97f5e85bc99548a80a5205dc5a245573debde84a7601f4",
+    "internal/perf/usertiming": "51f709377b76dd94dc50ed3fee62037b5629ef3337155588b51860bdf83f04b3",
+    "internal/perf/nodetiming": "3ecac721d8650e10b175086a1d4d5ed0a2dbba58174ab157057eb83d6b219d3f",
+    "internal/perf/performance": "e726129389491f2a9d37c64c71aa002b679cdeb22a23ebedafd0fb924561f29b",
+    "internal/perf/timerify": "ed4377905e5b188aa4e5fff66d37b3a1c657d8cdebbdded3fd690ed5f2b2f9cf",
+    "internal/histogram": "f58d668e628819bbf078690ac3c14a4c7250c530df6c1b6a41d1df97b1d2ce8d",
+    "internal/perf/observe": "4317a10d8d147dd1a2bf27a83bb84c80c36d131c91895fa314130f4808de283a",
+    "internal/perf/event_loop_delay": "e6b8f9a013f501332e17951abed6717f0c4b85fd3e3b3da02ad7a952cea3449e"
   }
 }
