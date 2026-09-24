@@ -152,6 +152,47 @@ describe("http.createServer (server side, over a real net.Server)", () => {
     expect(written).toContain("Transfer-Encoding: chunked");
     expect(written).toMatch(/2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n$/);
   });
+
+  it("an Upgrade request fires 'upgrade' with the raw socket and any bytes past the headers", async () => {
+    const fake = createFakeNet();
+    const netSync = createFakeNetSync((port) => {
+      const assigned = port === 0 ? 4003 : port;
+      queueMicrotask(() => {
+        fake.emit({ type: "incoming", connId: 4, port: assigned });
+        queueMicrotask(() =>
+          fake.emit({
+            type: "data",
+            connId: 4,
+            chunk: new TextEncoder().encode("GET /ws HTTP/1.1\r\nHost: h\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nHEAD"),
+          }),
+        );
+        // A later chunk on the same connection must reach the upgraded socket, not the parser.
+        setTimeout(() => fake.emit({ type: "data", connId: 4, chunk: new TextEncoder().encode("LATER") }), 20);
+      });
+      return assigned;
+    });
+    const r = await runScript(
+      {
+        "/main.js": `
+          const http = require('http');
+          const server = http.createServer(() => console.log('request handler must not run'));
+          server.on('upgrade', (req, socket, head) => {
+            console.log('upgrade', req.url, req.headers.upgrade, head.toString());
+            socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
+            socket.on('data', (d) => {
+              console.log('data', d.toString());
+              process.exit(0);
+            });
+          });
+          server.listen(0);
+        `,
+      },
+      "/main.js",
+      { childProcess: noopChildProcessHost, net: fake.host, netSync },
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "upgrade /ws websocket HEAD\ndata LATER\n", stderr: "" }));
+    expect(fake.writtenText()).toBe("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
+  });
 });
 
 describe("http.request/http.get (client side, over a real net.Socket)", () => {

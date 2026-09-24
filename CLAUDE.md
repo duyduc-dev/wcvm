@@ -591,14 +591,59 @@ Done and verified in real Chromium:
     `pnpm exec playwright test` run (97/97, `--repeat-each=3` on the new tests specifically to rule
     out flakiness from the async, multi-hop event dispatch involved) and `vitest run` (578/578)
     confirm no regressions.
-- Tests: 578 Vitest + 97 Playwright (Chromium). See "Verifying".
+- Preview WebSocket tunnel (Phase 8's first piece): a previewed page's own `new WebSocket(...)`
+  reaches the guest server's real `http.Server` `'upgrade'` handler - e.g. Vite's HMR client's
+  `new WebSocket("ws://" + location.host + ...)`. A Service Worker never sees WebSocket traffic, so
+  the preview SW injects a shim (`workers/preview/webSocketShim.ts`'s `injectWebSocketShim`) as the
+  first script of every HTML document a preview frame NAVIGATES to (after an early `<meta charset>`
+  if any, so the browser's 1024-byte charset prescan still finds it; never into a page's own
+  `fetch()` of HTML, nor a `Content-Encoding`-compressed body; the guest's `Content-Length` is
+  dropped). The shim replaces `window.WebSocket` with a same-API class for URLs meaning "a preview
+  server" (same host as the page -> this frame's own virtual port; an explicit
+  `/__wcvm_preview__/<port>/...`; `ws://localhost:<port>`/`127.0.0.1:<port>` -> that port), falling
+  back to the real `WebSocket` for everything else. It posts the embedding wcvm page (nearest
+  same-origin ancestor or opener that isn't itself a preview document) an
+  `IPreviewWebSocketRequest` with a transferred `MessagePort` for that one socket;
+  `apis/Preview.ts`'s `createPreviewWebSocketRelay` (listening on `window` once `enable()` has
+  run, same-origin senders only) mints the socket id and relays the port to the kernel
+  (`preview:wsOpen`/`wsSend`/`wsClose`, fire-and-forget) and the kernel's `preview:ws` events back
+  down it. `kernel/previewWebSocket.ts` is the real RFC 6455 CLIENT over a virtual TCP connection
+  (the same `netServer.connect()` `previewRelay.ts` uses, under its own `PREVIEW_WS_PID = -1`
+  sentinel so each module gets only its own net events): upgrade request, 101 validation (status,
+  `Upgrade: websocket`, only an offered subprotocol), masked frames out, unmasked frames in via
+  `kernel/webSocketFrames.ts`'s incremental `WebSocketReader` (fragmentation, 16/64-bit lengths,
+  ping->pong, close handshake both directions with a 5 s timeout for a silent server, protocol
+  errors -> 1002 to the server and 1006 to the page). Every outcome is an ordered EVENT, not a
+  request reply - open() has no response, since a server that sends a message the instant it
+  upgrades (Vite's does) would otherwise race it. The shim's `installPreviewWebSocketShim` is
+  injected as SOURCE TEXT (`Function.prototype.toString`), so it must stay self-contained - no
+  imports or module-level helpers, `declare`-only class fields, every DOM global via its `win`
+  param; a Vitest case runs the injected text on its own to catch a violation, and the built SW
+  was checked for esbuild helpers. The page's `pagehide` sends 1001 synchronously so a reloading
+  page (HMR's full reload) doesn't leak its tunnel. Not implemented: `Sec-WebSocket-Accept`
+  verification (the peer is always a guest in this sandbox), extensions (permessage-deflate is
+  never offered), cookies; `error` fires before every unclean close. A guest server is
+  unmodified (checked for a real `http.createServer()` `'upgrade'` handler in Vitest,
+  `runtime/http.test.ts`). **Still missing for Vite** (next step, see PLAN.md Phase 8): an
+  ABSOLUTE-path subresource inside a preview frame (`<script src="/@vite/client">`, `fetch("/api")`)
+  resolves against the host page's origin root, never the `/__wcvm_preview__/<port>/` prefix, so
+  the SW doesn't intercept it at all today. Verified: `kernel/webSocketFrames.test.ts` (17),
+  `kernel/previewWebSocket.test.ts` (21), `workers/preview/webSocketShim.test.ts` (23),
+  `apis/Preview.test.ts`'s relay cases (4), `workers/kernel/handlers/preview.test.ts` (3), and 2
+  new Playwright tests in real Chromium (a real iframe page's WebSocket against a hand-rolled guest
+  `'upgrade'` server - real SHA-1 accept, text+binary both ways, a clean close handshake with its
+  code/reason seen by both ends; killing that server drops the page's socket with `error` then
+  close 1006), `--repeat-each=3`. A full, clean `pnpm exec playwright test` run (99/99) and
+  `vitest run` (647/647) confirm no regressions.
+- Tests: 647 Vitest + 99 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch
 stack has no path to a real network from inside wcvm's virtual `net`/`http`, confirmed by reading
 the actual installed source; see PLAN.md's "Real npm: feasibility findings" before picking this
-back up), Vite dev server/HMR, Python/Bun, Studio UI.
+back up), Vite dev server/HMR (the preview WebSocket tunnel is done; absolute-path subresource
+routing in a preview frame is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
 
 ## Architecture in one page
 

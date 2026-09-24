@@ -1,5 +1,14 @@
 import type { IKernelBridge } from "../bridges/kernel";
-import { PREVIEW_PATH_PREFIX, type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../protocols/preview";
+import {
+  PREVIEW_PATH_PREFIX,
+  type IPreviewFetchMessage,
+  type IPreviewFetchReply,
+  type IPreviewFetchResult,
+  type IPreviewWebSocketOpen,
+  type IPreviewWebSocketRequest,
+  type PreviewWebSocketCommand,
+  type PreviewWebSocketEvent,
+} from "../protocols/preview";
 
 export interface IPreviewApi {
   /**
@@ -20,8 +29,53 @@ export interface IPreviewApi {
   onListen(handler: (info: { port: number; listening: boolean }) => void): () => void;
 }
 
+/**
+ * The host page's half of a previewed page's WebSockets: the page's shim
+ * (workers/preview/webSocketShim.ts) posts this window an IPreviewWebSocketRequest with a
+ * MessagePort for that one socket; this relays the port's commands to the kernel's tunnel
+ * (kernel/previewWebSocket.ts) and the tunnel's "preview:ws" events back down the port. The id is
+ * minted here, before the kernel ever hears of the socket, so no event can arrive unroutable.
+ */
+const createPreviewWebSocketRelay = (kernelBridge: IKernelBridge) => {
+  let nextId = 1;
+  const ports = new Map<number, MessagePort>();
+
+  kernelBridge.on("preview:ws", (m) => {
+    const id = m.id as number;
+    const port = ports.get(id);
+    if (!port) return;
+    const event = m.event as PreviewWebSocketEvent;
+    port.postMessage(event);
+    if (event.kind === "close") {
+      ports.delete(id);
+      port.close();
+    }
+  });
+
+  /** A `message` event on this window. Only a same-origin sender counts: every previewed page is
+   *  served through the Service Worker on this page's own origin, and nothing else may open one. */
+  const handleMessage = (event: MessageEvent, ownOrigin: string) => {
+    const request = event.data as IPreviewWebSocketRequest | null;
+    if (!request || request.type !== "wcvm:previewWebSocket" || event.origin !== ownOrigin) return;
+    const port = event.ports[0];
+    if (!port) return;
+    const id = nextId++;
+    ports.set(id, port);
+    port.onmessage = (e: MessageEvent) => {
+      const command = e.data as PreviewWebSocketCommand;
+      if (command.kind === "send") kernelBridge.postMessage("preview:wsSend", { id, data: command.data });
+      else if (command.kind === "close") kernelBridge.postMessage("preview:wsClose", { id, code: command.code, reason: command.reason });
+    };
+    const open: IPreviewWebSocketOpen = { id, port: request.port, path: request.path, protocols: request.protocols };
+    kernelBridge.postMessage("preview:wsOpen", { ...open });
+  };
+
+  return { handleMessage };
+};
+
 const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   let enabled: Promise<void> | undefined;
+  const webSockets = createPreviewWebSocketRelay(kernelBridge);
 
   const handleMessage = (event: MessageEvent) => {
     const message = event.data as IPreviewFetchMessage | null;
@@ -62,6 +116,10 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
           });
         }
         navigator.serviceWorker.addEventListener("message", handleMessage);
+        // Every previewed HTML document is served by the Service Worker registered above, which
+        // is what injects the WebSocket shim that talks to this listener - so it only matters
+        // once that worker is controlling this page.
+        globalThis.addEventListener("message", (event) => webSockets.handleMessage(event, location.origin));
       })();
     }
     return enabled;
@@ -81,4 +139,4 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   return { enable, url, onListen };
 };
 
-export { createPreviewApi };
+export { createPreviewApi, createPreviewWebSocketRelay };

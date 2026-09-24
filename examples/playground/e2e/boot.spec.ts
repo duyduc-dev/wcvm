@@ -1196,6 +1196,121 @@ test.describe("preview UI", () => {
 
     await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
   });
+
+  // A previewed page's own `new WebSocket("ws://" + location.host + ...)` - exactly what Vite's
+  // HMR client does - tunnelled to the guest server's real 'upgrade' handler: the Service Worker
+  // injects the shim (workers/preview/webSocketShim.ts) into the iframe's document, the shim hands
+  // the host page a MessagePort (apis/Preview.ts), and the kernel is the real RFC 6455 client over
+  // a virtual TCP connection (kernel/previewWebSocket.ts). The server here is hand-rolled on
+  // purpose (no npm to install `ws` with) - the real handshake, masking and close handshake are
+  // the point, and a real `ws` would speak exactly the same bytes.
+  const WS_SERVER = `
+    const http = require('http');
+    const crypto = require('crypto');
+    const PAGE = [
+      '<!doctype html><html><head><meta charset="utf-8"><title>ws</title></head><body><pre id="log"></pre><script>',
+      'const log = (s) => { document.getElementById("log").textContent += s + "\\\\n"; };',
+      'const ws = new WebSocket("ws://" + location.host + "/echo?x=1", ["echo-v1"]);',
+      'ws.binaryType = "arraybuffer";',
+      'let seen = 0;',
+      'ws.onopen = () => { log("open " + ws.protocol); ws.send("hi from page"); ws.send(new Uint8Array([1, 2, 3])); };',
+      'ws.onmessage = (e) => { log("message " + (typeof e.data === "string" ? e.data : new Uint8Array(e.data).join(","))); if (++seen === 3) ws.close(1000, "done"); };',
+      'ws.onerror = () => log("error");',
+      'ws.onclose = (e) => log("close " + e.code + " " + e.reason + " " + e.wasClean);',
+      '</script></body></html>',
+    ].join('');
+    const frame = (opcode, payload) => {
+      const header = payload.length < 126 ? [0x80 | opcode, payload.length] : [0x80 | opcode, 126, payload.length >> 8, payload.length & 255];
+      return Buffer.concat([Buffer.from(header), payload]);
+    };
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(PAGE);
+    });
+    server.on('upgrade', (req, socket) => {
+      console.log('upgrade ' + req.url + ' ' + req.headers['sec-websocket-protocol']);
+      const accept = crypto.createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+      socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\nSec-WebSocket-Protocol: echo-v1\\r\\n\\r\\n');
+      socket.write(frame(1, Buffer.from('welcome')));
+      let buffered = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        if (process.argv[3] === 'hold') return; // never answer: the page's socket stays open
+        buffered = Buffer.concat([buffered, chunk]);
+        while (buffered.length >= 2) {
+          const opcode = buffered[0] & 15;
+          let length = buffered[1] & 127;
+          let offset = 2;
+          if (length === 126) { length = buffered.readUInt16BE(2); offset = 4; }
+          if (buffered.length < offset + 4 + length) return;
+          const mask = buffered.subarray(offset, offset + 4);
+          const payload = Buffer.from(buffered.subarray(offset + 4, offset + 4 + length).map((b, i) => b ^ mask[i & 3]));
+          buffered = buffered.subarray(offset + 4 + length);
+          if (opcode === 1) socket.write(frame(1, Buffer.from('echo:' + payload.toString())));
+          else if (opcode === 2) socket.write(frame(2, payload));
+          else if (opcode === 8) {
+            console.log('client closed ' + payload.readUInt16BE(0) + ' ' + payload.subarray(2).toString());
+            socket.end(frame(8, payload));
+          }
+        }
+      });
+    });
+    server.listen(Number(process.argv[2]), () => console.log('ready'));
+  `;
+
+  const startWsServer = (page: import("@playwright/test").Page, port: number, mode = "echo") =>
+    page.evaluate(
+      async ({ source, port, mode }) => {
+        const wc = (window as unknown as WcWindow).wc;
+        await wc.fs.writeFile("/ws-server.js", source);
+        const server = await wc.spawn("node", ["/ws-server.js", String(port), mode]);
+        const w = window as unknown as { __server: typeof server; __serverOut: string[] };
+        w.__server = server;
+        w.__serverOut = [];
+        const reader = server.stdout.getReader();
+        const first = await reader.read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+        void (async () => {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__serverOut.push(new TextDecoder().decode(value));
+          }
+        })();
+      },
+      { source: WS_SERVER, port, mode },
+    );
+
+  const serverOutput = (page: import("@playwright/test").Page) =>
+    page.evaluate(() => (window as unknown as { __serverOut: string[] }).__serverOut.join(""));
+
+  test("a previewed page's WebSocket reaches the guest server's real 'upgrade' handler, both ways", async ({ page }) => {
+    await page.click("#preview-enable");
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+    await startWsServer(page, 6200);
+
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/6200/");
+    await expect(page.frameLocator("#preview-frame").locator("#log")).toHaveText(
+      ["open echo-v1", "message welcome", "message echo:hi from page", "message 1,2,3", "close 1000 done true", ""].join("\n"),
+    );
+    expect(await serverOutput(page)).toBe("upgrade /echo?x=1 echo-v1\nclient closed 1000 done\n");
+  });
+
+  test("the guest server dying drops the page's WebSocket with an unclean close", async ({ page }) => {
+    // Its own iframe, not the playground's #preview-frame: that pane (rightly) resets to
+    // about:blank the moment the server stops listening, taking the page under test with it.
+    await page.evaluate(() => (window as unknown as WcWindow).wc.preview.enable());
+    await startWsServer(page, 6201, "hold");
+    await page.evaluate(() => {
+      const frame = document.createElement("iframe");
+      frame.id = "ws-frame";
+      frame.src = (window as unknown as WcWindow).wc.preview.url(6201);
+      document.body.append(frame);
+    });
+    const log = page.frameLocator("#ws-frame").locator("#log");
+    await expect(log).toHaveText("open echo-v1\nmessage welcome\n");
+    await page.evaluate(() => (window as unknown as { __server: { kill: () => void } }).__server.kill());
+    await expect(log).toHaveText("open echo-v1\nmessage welcome\nerror\nclose 1006  false\n");
+  });
 });
 
 test.describe("fetcher", () => {

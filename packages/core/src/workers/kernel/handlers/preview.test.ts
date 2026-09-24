@@ -7,18 +7,20 @@ import { registerPreviewHandlers } from "./preview";
 
 const setup = (ready = true, fetchImpl = vi.fn()) => {
   const preview = { fetch: fetchImpl, onNetEvent: vi.fn() };
+  const previewWebSockets = { open: vi.fn(), send: vi.fn(), close: vi.fn(), onNetEvent: vi.fn() };
   const stateManager = createState<IWorkerState>({
-    kernel: ready ? ({ preview } as unknown as IKernelHost) : null,
+    kernel: ready ? ({ preview, previewWebSockets } as unknown as IKernelHost) : null,
   });
   const router = createRouter();
   registerPreviewHandlers(router);
-  const send = (data: Record<string, unknown>) =>
-    router.dispatch("preview:fetch", {
-      event: { data: { type: "preview:fetch", ...data } } as MessageEvent,
+  const dispatch = (type: string, data: Record<string, unknown>) =>
+    router.dispatch(type, {
+      event: { data: { type, ...data } } as MessageEvent,
       stateManager,
       onPostMessage: () => {},
     });
-  return { send, preview };
+  const send = (data: Record<string, unknown>) => dispatch("preview:fetch", data);
+  return { send, dispatch, preview, previewWebSockets };
 };
 
 describe("preview handlers", () => {
@@ -50,5 +52,26 @@ describe("preview handlers", () => {
   it("before the kernel is ready, it's rejected instead of hanging", async () => {
     const { send } = setup(false);
     await expect(send({ port: 1, path: "/", method: "GET", headers: [], body: null })).rejects.toMatchObject({ type: "ERR_WORKER" });
+  });
+
+  describe("WebSocket tunnel messages", () => {
+    it("preview:wsOpen opens a tunnel with the host-minted id", async () => {
+      const { dispatch, previewWebSockets } = setup();
+      await dispatch("preview:wsOpen", { id: 3, port: 5173, path: "/?token=x", protocols: ["vite-hmr"] });
+      expect(previewWebSockets.open).toHaveBeenCalledWith({ id: 3, port: 5173, path: "/?token=x", protocols: ["vite-hmr"] });
+    });
+
+    it("preview:wsSend and preview:wsClose reach the matching tunnel", async () => {
+      const { dispatch, previewWebSockets } = setup();
+      await dispatch("preview:wsSend", { id: 3, data: "hi" });
+      await dispatch("preview:wsClose", { id: 3, code: 1000, reason: "bye" });
+      expect(previewWebSockets.send).toHaveBeenCalledWith(3, "hi");
+      expect(previewWebSockets.close).toHaveBeenCalledWith(3, 1000, "bye");
+    });
+
+    it("before the kernel is ready, they're rejected instead of silently dropped", async () => {
+      const { dispatch } = setup(false);
+      await expect(dispatch("preview:wsOpen", { id: 1, port: 1, path: "/", protocols: [] })).rejects.toMatchObject({ type: "ERR_WORKER" });
+    });
   });
 });

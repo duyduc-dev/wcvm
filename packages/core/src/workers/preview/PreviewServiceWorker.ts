@@ -14,7 +14,8 @@
 // below, just the handful actually used here, rather than switching this whole package to the
 // "webworker" lib.
 
-import { parsePreviewPath, type IPreviewFetchMessage, type IPreviewFetchReply } from "../../protocols/preview";
+import { parsePreviewPath, type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../../protocols/preview";
+import { injectWebSocketShim } from "./webSocketShim";
 
 interface IClient {
   frameType?: "top-level" | "nested" | "auxiliary" | "none";
@@ -109,6 +110,26 @@ const previewResponse = (body: BodyInit | null, init: ResponseInit): Response =>
   return new Response(body, { ...init, headers });
 };
 
+const headerValue = (headers: [string, string][], name: string): string | undefined =>
+  headers.find(([key]) => key.toLowerCase() === name)?.[1];
+
+// A previewed page's own `new WebSocket(...)` never reaches this worker at all (a Service Worker
+// only ever sees fetch()es), so every HTML document a preview frame navigates to gets the shim
+// (webSocketShim.ts) that tunnels them through the host page instead - only a real navigation's
+// document, never a page's own fetch() of some HTML, and never a compressed body (no Content-
+// Encoding is ever decoded on this path, so there'd be no way to find where to insert it).
+const withWebSocketShim = (request: Request, result: IPreviewFetchResult): IPreviewFetchResult => {
+  const contentType = headerValue(result.headers, "content-type") ?? "";
+  const encoding = headerValue(result.headers, "content-encoding") ?? "identity";
+  if (request.mode !== "navigate" || !/^\s*text\/html/i.test(contentType) || encoding.toLowerCase() !== "identity") return result;
+  return {
+    ...result,
+    body: injectWebSocketShim(result.body),
+    // The guest's own Content-Length described the body before injection.
+    headers: result.headers.filter(([key]) => key.toLowerCase() !== "content-length"),
+  };
+};
+
 const respondFromGuest = async (event: IFetchEvent, port: number, path: string): Promise<Response> => {
   const client = await findHostClient();
   if (!client) return previewResponse("wcvm preview: no host page available to relay the request to", { status: 502 });
@@ -119,7 +140,7 @@ const respondFromGuest = async (event: IFetchEvent, port: number, path: string):
 
   const reply = await relay(client, { port, path, method, headers, body });
   if (!reply.ok) return previewResponse(`wcvm preview relay error: ${reply.error}`, { status: 502 });
-  const { result } = reply;
+  const result = withWebSocketShim(event.request, reply.result);
   // result.body's static type (Uint8Array<ArrayBufferLike>, from structured-clone deserialization)
   // is stricter than what BodyInit's TS definition accepts - same generic-TypedArray friction as
   // httpParser.ts's own `buffer` field; a real Uint8Array is always a valid BodyInit at runtime.

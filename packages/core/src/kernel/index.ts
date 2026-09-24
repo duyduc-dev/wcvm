@@ -11,6 +11,7 @@ import type { FetcherEvent, FetcherRequest } from "../workers/fetcher/messages";
 import { createFetcher, type IFetcher } from "./fetcher";
 import { createNetServer } from "./netServer";
 import { createPreviewRelay, PREVIEW_PID, type IPreviewRelay } from "./previewRelay";
+import { createPreviewWebSockets, PREVIEW_WS_PID, type IPreviewWebSockets } from "./previewWebSocket";
 import {
   createProcessTable,
   IProcessTable,
@@ -39,6 +40,7 @@ export interface IKernelHost {
   fs: IFsClient;
   processes: IProcessTable;
   preview: IPreviewRelay;
+  previewWebSockets: IPreviewWebSockets;
   fetcher: IFetcher;
   dispose(): void;
 }
@@ -201,9 +203,13 @@ const createKernelHost = async ({
   // kernelSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
   // elsewhere accepts a connection or some data/close event actually fires. PREVIEW_PID is never
   // a real process (see previewRelay.ts) - its own events go to `previewRelay` directly instead
-  // of a postMessage to a worker that doesn't exist.
+  // of a postMessage to a worker that doesn't exist. Same for PREVIEW_WS_PID (previewWebSocket.ts).
   const netServer = createNetServer({
-    notify: (pid, event) => (pid === PREVIEW_PID ? preview.onNetEvent(event) : processes.notifyNet(pid, event)),
+    notify: (pid, event) => {
+      if (pid === PREVIEW_PID) preview.onNetEvent(event);
+      else if (pid === PREVIEW_WS_PID) previewWebSockets.onNetEvent(event);
+      else processes.notifyNet(pid, event);
+    },
     // UDP has no PREVIEW_PID-style caller (the preview relay only ever does one-shot HTTP fetches
     // over TCP) - every UDP event always targets a real process.
     notifyUdp: (pid, event) => processes.notifyUdp(pid, event),
@@ -219,6 +225,15 @@ const createKernelHost = async ({
     connect: (ticket, port) => netServer.connect(PREVIEW_PID, ticket, port),
     writeData: (connId, chunk) => netServer.data(PREVIEW_PID, connId, chunk),
     close: (connId) => netServer.close(PREVIEW_PID, connId),
+  });
+
+  // A preview page's WebSockets: long-lived, so every outcome is pushed to the host as an event
+  // (in order, on this same channel) rather than answered as a request - see previewWebSocket.ts.
+  const previewWebSockets = createPreviewWebSockets({
+    connect: (ticket, port) => netServer.connect(PREVIEW_WS_PID, ticket, port),
+    writeData: (connId, chunk) => netServer.data(PREVIEW_WS_PID, connId, chunk),
+    close: (connId) => netServer.close(PREVIEW_WS_PID, connId),
+    emit: (id, event) => emit({ type: "preview:ws", id, event }),
   });
 
   const processes = createProcessTable({
@@ -264,6 +279,7 @@ const createKernelHost = async ({
     fs,
     processes,
     preview,
+    previewWebSockets,
     fetcher,
     dispose: () => {
       fsWorker.terminate();
