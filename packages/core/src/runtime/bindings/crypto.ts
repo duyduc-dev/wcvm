@@ -4,25 +4,11 @@
 // require()-able at all, most needing native-crypto features (KeyObject/PEM export, X.509
 // certificates, DiffieHellman groups, scrypt, argon2) the Web Crypto API this sandbox would have
 // to back them with simply doesn't have equivalents for - a vendoring job far bigger than this
-// sandbox's actual need (real npm's sha512/sha1 package integrity checks). So `crypto` is a
-// narrow, hand-written module (runtime/shims.ts's cryptoShim, in the same "deliberately
-// simplified real module" category as dns/cluster there) rather than real vendored source; this
-// file is only the one genuinely blocking primitive it needs: a synchronous digest, the same
-// shape zlib's own OP_ZLIB_SYNC bridges (see protocols/syscall.ts's OP_CRYPTO_DIGEST_SYNC).
+// sandbox's actual need (hashing and randomness). So `crypto` is a narrow, hand-written module
+// (runtime/shims.ts's cryptoShim, in the same "deliberately simplified real module" category as
+// dns/cluster there); this file only hands it the synchronous, incremental hashers it's built on
+// (bindings/hash.ts - plain JS, since SubtleCrypto.digest() is async-only and one-shot).
 
-import { OP_CRYPTO_DIGEST_SYNC, encodeRequest, encodeString, type ISyscallClient } from "../../protocols/syscall";
+import { HASH_ALGORITHMS, createHasher } from "./hash";
 
-export interface ICryptoBindingContext {
-  /** Backs the blocking digestSync(); without it, it throws. Real process workers always wire
-   *  this (same as execSync/spawnSync/zlib's own *Sync family). */
-  spawnSync?: ISyscallClient;
-}
-
-export const createCryptoBinding = (ctx: ICryptoBindingContext) => {
-  const digestSync = (algorithm: string, data: Uint8Array): Uint8Array => {
-    if (!ctx.spawnSync) throw new Error("crypto digest operations need a spawnSync client");
-    const request = encodeRequest([encodeString(algorithm), data]);
-    return ctx.spawnSync.call(OP_CRYPTO_DIGEST_SYNC, request);
-  };
-  return { digestSync };
-};
+export const createCryptoBinding = () => ({ createHasher, hashAlgorithms: HASH_ALGORITHMS });

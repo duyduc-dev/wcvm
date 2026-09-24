@@ -156,6 +156,28 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
     return best ? { target: map[best.key], match: best.match, isPattern: true } : undefined;
   };
 
+  /**
+   * An absolute `file:` URL (`import(pathToFileURL(p).href)` - how Vite loads the config file it
+   * just bundled). A `?query`/`#hash` makes a separate module instance, as in real Node (tools
+   * append `?t=<timestamp>` to re-import a changed file fresh), so it stays in the key - after a
+   * NUL, which no real path contains; see modulePath() for getting the file back out.
+   */
+  const resolveFileUrl = (specifier: string, referrerDir: string): IResolvedModule => {
+    let url: URL;
+    try {
+      url = new URL(specifier);
+    } catch {
+      throw new EsmResolveError("ERR_INVALID_URL", `Invalid URL: ${specifier}`);
+    }
+    if (url.hostname !== "" && url.hostname !== "localhost") {
+      throw new EsmResolveError("ERR_INVALID_FILE_URL_HOST", `File URL host must be "localhost" or empty on linux: ${specifier}`);
+    }
+    const path = decodeURIComponent(url.pathname);
+    if (!isFile(path)) throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find module '${path}' imported from ${referrerDir}`);
+    const suffix = url.search + url.hash;
+    return { format: formatOf(path), key: suffix ? `${path}\0${suffix}` : path };
+  };
+
   /** `#x`: the nearest package.json's "imports" field (Node's PACKAGE_IMPORTS_RESOLVE). */
   const resolvePackageImports = (specifier: string, referrerDir: string): IResolvedModule => {
     const notDefined = (where: string) =>
@@ -234,6 +256,7 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
 
   function resolveEsmSpecifier(specifier: string, referrerDir: string): IResolvedModule {
     if (specifier.startsWith("#")) return resolvePackageImports(specifier, referrerDir);
+    if (specifier.startsWith("file:")) return resolveFileUrl(specifier, referrerDir);
     const bare = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
     if (specifier.startsWith("node:") || (!isRelative(specifier) && ctx.builtins.canBeRequiredByUsers(bare))) {
       if (!ctx.builtins.canBeRequiredByUsers(bare)) throw new EsmResolveError("ERR_UNKNOWN_BUILTIN_MODULE", `No such built-in module: ${specifier}`);
@@ -259,3 +282,16 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
 };
 
 export { EsmResolveError };
+
+/** The file behind a module key: keys for a `file:` URL with a query/hash carry it after a NUL
+ *  (see resolveFileUrl) - one module instance per distinct URL, one file on disk. */
+export const modulePath = (key: string): string => {
+  const nul = key.indexOf("\0");
+  return nul === -1 ? key : key.slice(0, nul);
+};
+
+/** The `?query#hash` part of a module key, if any. */
+export const moduleUrlSuffix = (key: string): string => {
+  const nul = key.indexOf("\0");
+  return nul === -1 ? "" : key.slice(nul + 1);
+};

@@ -21,7 +21,7 @@
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
 import { EsmSyntaxError, parseModule, parseScript, type IAcorn } from "./ast";
-import { createEsmResolver, EsmResolveError, type EsmFormat, type IEsmResolveContext } from "./resolve";
+import { createEsmResolver, EsmResolveError, modulePath, moduleUrlSuffix, type EsmFormat, type IEsmResolveContext } from "./resolve";
 import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 
 const REQUIRE_BUILTIN_BRIDGE = "__wcvm_require_builtin__";
@@ -70,7 +70,7 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
       [DYNAMIC_IMPORT_BRIDGE]: (specifier: string, selfUrl: string) => {
         const release = ctx.loop.ref();
         try {
-          const resolved = resolver.resolveEsmSpecifier(specifier, ctx.path.dirname(selfUrl));
+          const resolved = resolver.resolveEsmSpecifier(specifier, ctx.path.dirname(modulePath(selfUrl)));
           const url = prepare(resolved.key, resolved.format);
           return import(/* @vite-ignore */ url).finally(release);
         } catch (error) {
@@ -87,13 +87,14 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
   const metas = new Map<string, Record<string, unknown>>();
   /** A module's `import.meta`, like Node's own: one object per module, so what code stores on it
    *  sticks. `resolve()` answers the way the module's own imports would resolve. */
-  const importMeta = (path: string) => {
-    let meta = metas.get(path);
+  const importMeta = (key: string) => {
+    let meta = metas.get(key);
     if (!meta) {
       const { pathToFileURL } = ctx.builtins.requireBuiltin("url");
+      const path = modulePath(key);
       const dirname = ctx.path.dirname(path);
       meta = {
-        url: pathToFileURL(path).href,
+        url: pathToFileURL(path).href + moduleUrlSuffix(key),
         filename: path,
         dirname,
         resolve: (specifier: string) => {
@@ -101,7 +102,7 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
           return resolved.format === "builtin" ? `node:${resolved.key}` : pathToFileURL(resolved.key).href;
         },
       };
-      metas.set(path, meta);
+      metas.set(key, meta);
     }
     return meta;
   };
@@ -119,15 +120,15 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
       return url;
     }
     if (format === "cjs") {
-      const bridge = `${REQUIRE_CJS_BRIDGE}(${JSON.stringify(key)})`;
+      const bridge = `${REQUIRE_CJS_BRIDGE}(${JSON.stringify(modulePath(key))})`;
       // The CJS module must actually run before we know its export names.
-      const value = ctx.requireCjs(key);
+      const value = ctx.requireCjs(modulePath(key));
       const url = blobFor(`const __m = ${bridge};\nexport default __m;\n${namedReexports("__m", value)}`);
       blobUrls.set(key, url);
       return url;
     }
     if (format === "json") {
-      const url = blobFor(`export default ${decoder.decode(ctx.fs.readFile(key))};`);
+      const url = blobFor(`export default ${decoder.decode(ctx.fs.readFile(modulePath(key)))};`);
       blobUrls.set(key, url);
       return url;
     }
@@ -137,9 +138,10 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
     }
     inProgress.add(key);
     try {
-      const source = decoder.decode(ctx.fs.readFile(key));
-      const ast = parseModule(ctx.acorn, source, key);
-      const dir = ctx.path.dirname(key);
+      const path = modulePath(key);
+      const source = decoder.decode(ctx.fs.readFile(path));
+      const ast = parseModule(ctx.acorn, source, path);
+      const dir = ctx.path.dirname(path);
       const rewritten = rewriteModule(
         source,
         ast,

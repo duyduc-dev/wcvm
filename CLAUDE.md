@@ -853,7 +853,33 @@ Done and verified in real Chromium:
   WebSocket tunnel, absolute-path routing and `fs.watch` (chokidar runs over it) built earlier were
   exactly enough. Verified: the opt-in test passes against the real registry (~10 s); a default
   full `pnpm exec playwright test` run is 109 passed, 1 skipped.
-- Tests: 848 Vitest + 110 Playwright (Chromium; 1 of them opt-in - see the Vite entry). See "Verifying".
+- React + TypeScript runs, with React Fast Refresh (Phase 8's tenth piece): the Vite `react-ts`
+  shape (React 19, `@vitejs/plugin-react` - Babel, pure JS; the SWC plugin needs native binaries),
+  62 packages from the real registry in ~10 s, a real `vite.config.ts`, renders, handles clicks,
+  and an `App.tsx` edit hot-updates the component while its `useState` count survives. Two runtime
+  fixes it took:
+  - `file:` URL specifiers in the ESM resolver (`esm/resolve.ts`'s `resolveFileUrl`): Vite loads
+    `vite.config.ts` by bundling it with esbuild and `import(pathToFileURL(tmp).href)`. A
+    `?query`/`#hash` makes a separate module instance, as in real Node (the key carries it after a
+    NUL - `modulePath()`/`moduleUrlSuffix()` get the file and suffix back; the loader reads, parses,
+    resolves relative imports and builds `import.meta` from the path, `import.meta.url` keeps the
+    query).
+  - Hashing is now plain synchronous JS in the process (`bindings/hash.ts`: md5, sha1,
+    sha224/256, sha384/512, incremental, `copy()`), replacing the `OP_CRYPTO_DIGEST_SYNC` kernel
+    round trip (retired) - `SubtleCrypto.digest()` is async and one-shot, so the whole input went
+    to the kernel in ONE sync-call message, and Vite's etag of the 1 MiB+ pre-bundled `react-dom`
+    failed with `EMSGSIZE` (a 500, a blank page). SHA-2 constants are DERIVED from their FIPS 180-4
+    definitions with BigInt at load rather than transcribed. `Hash` now matches real Node's errors
+    (`Digest method not supported`, `ERR_CRYPTO_HASH_FINALIZED` for update/digest/copy after
+    digest) and gains `copy()`, md5 and sha224. Checked against Node's own crypto on every
+    padding-edge length, random `update()` splits and a 3 MiB input.
+  Also made the nested-REPL stdin e2e test wait on real prompts instead of fixed 100 ms delays -
+  it failed on a loaded machine even at the previous commit (node's REPL started slower than the
+  delay, so `.exit` and the next line arrived together; real node consumes typed-ahead input too).
+  Verified: `bindings/hash.test.ts` (15), `esm/resolve.test.ts`'s file: URL cases (3), reworked
+  `bindings/crypto.test.ts`; `vitest run` (865/865) and a full `pnpm exec playwright test` run
+  (109 passed, 1 opt-in skipped); the React app checked for real in Chromium (one-off probe).
+- Tests: 865 Vitest + 110 Playwright (Chromium; 1 of them opt-in - see the Vite entry). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and

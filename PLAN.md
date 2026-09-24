@@ -607,8 +607,9 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
 - A builtin export whose lazy getter can't load here (`util.setTraceSigInt`, `net.BlockList`,
   `net.SocketAddress`) is `undefined` as an ESM named import, and throws "not vendored yet" on use
   through the module object.
-- `crypto` stays hashing + randomness only (see `crypto` in "Current state"): no ciphers, keys,
-  certificates or md4/md5.
+- `crypto` stays hashing + randomness only (see `crypto` in "Current state"): md5, sha1,
+  sha224/256, sha384/512 (plain JS, bindings/hash.ts) - no ciphers, keys, certificates, md4,
+  sha3-* or blake2*.
 - `tls`/`https`: load, but can't do anything (`ERR_NO_CRYPTO`) - no TLS stack behind wcvm's
   virtual sockets. `inspector` can't even be required (`ERR_INSPECTOR_NOT_AVAILABLE`), like a Node
   built without it.

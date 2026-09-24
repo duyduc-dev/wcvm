@@ -5,7 +5,6 @@ import {
   I_REQ_LEN,
   I_RES_LEN,
   I_STATE,
-  OP_CRYPTO_DIGEST_SYNC,
   OP_SPAWN_SYNC,
   OP_ZLIB_SYNC,
   SPAWN_SYNC_NO_STATUS,
@@ -185,25 +184,6 @@ describe("kernelSyncServer", () => {
       publish(t.views, OP_ZLIB_SYNC, encodeRequest([encodeString("gzip"), encodeString("decompress"), new TextEncoder().encode("not gzip")]));
       t.server.service(1);
       await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_ERR));
-    });
-  });
-
-  describe("OP_CRYPTO_DIGEST_SYNC", () => {
-    it("computes a real SHA-256 digest via SubtleCrypto", async () => {
-      const input = new TextEncoder().encode("hello");
-      publish(t.views, OP_CRYPTO_DIGEST_SYNC, encodeRequest([encodeString("SHA-256"), input]));
-      t.server.service(1);
-      await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_OK));
-      const digest = t.views.data.slice(0, Atomics.load(t.views.ctrl, I_RES_LEN));
-      const expected = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
-      expect(digest).toEqual(expected);
-    });
-
-    it("responds with an error for an algorithm SubtleCrypto doesn't support", async () => {
-      publish(t.views, OP_CRYPTO_DIGEST_SYNC, encodeRequest([encodeString("MD5"), new TextEncoder().encode("x")]));
-      t.server.service(1);
-      await vi.waitFor(() => expect(Atomics.load(t.views.ctrl, I_STATE)).toBe(STATE_RESPONSE_ERR));
-      expect(decodeBytes(t.views.data.slice(0, Atomics.load(t.views.ctrl, I_RES_LEN)))).toBe("ERR_CRYPTO_INVALID_DIGEST");
     });
   });
 });

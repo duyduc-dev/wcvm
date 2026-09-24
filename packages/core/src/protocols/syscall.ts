@@ -359,14 +359,8 @@ export const OP_NET_LISTEN = KERNEL_OPCODE_MIN + 1;
 //        documented limit OP_SPAWN_SYNC already has for its own combined stdout+stderr)
 export const OP_ZLIB_SYNC = KERNEL_OPCODE_MIN + 2;
 
-// crypto.Hash.digest() genuinely blocks too (Node's own crypto.createHash().update().digest() is
-// synchronous), backed by the real, native SubtleCrypto.digest() - which is itself async, so this
-// needs the same second-thread bridge as OP_ZLIB_SYNC (and for the same reason: no cross-process/
-// global state to coordinate, so it reuses this one shared SAB rather than adding a fourth).
-//
-//   OP_CRYPTO_DIGEST_SYNC algorithm (UTF-8: "SHA-1"|"SHA-256"|"SHA-384"|"SHA-512"), input bytes
-//     -> digest bytes
-export const OP_CRYPTO_DIGEST_SYNC = KERNEL_OPCODE_MIN + 3;
+// (KERNEL_OPCODE_MIN + 3 was OP_CRYPTO_DIGEST_SYNC, crypto's Hash.digest() over SubtleCrypto:
+// retired - hashing is plain synchronous JS in the process now, runtime/bindings/hash.ts.)
 
 // dgram's Socket.bind() needs the exact same synchronous, globally-coordinated answer
 // OP_NET_LISTEN gives TCP's net.Server.listen() (port 0 -> the real assigned port; an explicit
