@@ -14,16 +14,21 @@
 // below, just the handful actually used here, rather than switching this whole package to the
 // "webworker" lib.
 
-import { parsePreviewPath, type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../../protocols/preview";
+import { type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../../protocols/preview";
+import { previewPortOf, previewRedirect, routePreviewRequest, type PreviewClientPorts, type PreviewRoute } from "./previewRouting";
 import { injectWebSocketShim } from "./webSocketShim";
 
 interface IClient {
+  id: string;
+  url: string;
   frameType?: "top-level" | "nested" | "auxiliary" | "none";
   postMessage(message: unknown): void;
 }
 
 interface IFetchEvent {
   request: Request;
+  clientId: string;
+  resultingClientId: string;
   respondWith(response: Promise<Response> | Response): void;
   waitUntil(promise: Promise<unknown>): void;
 }
@@ -37,6 +42,7 @@ interface IExtendableMessageEvent {
 }
 
 interface IServiceWorkerGlobal {
+  location: { origin: string };
   addEventListener(type: "install", listener: (event: IExtendableEvent) => void): void;
   addEventListener(type: "activate", listener: (event: IExtendableEvent) => void): void;
   addEventListener(type: "fetch", listener: (event: IFetchEvent) => void): void;
@@ -92,9 +98,10 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 // is attached to - true whether the request came from that page's own fetch() (already covered by
 // the existing preview:fetch tests) or, now, from an iframe's navigation or its own subresource
 // fetches once loaded (also a nested client, so still correctly skipped).
+// A previewed page opened in its own tab is top-level too - but it's not a wcvm page, so skip it.
 const findHostClient = async (): Promise<IClient | undefined> => {
   const clients = await sw.clients.matchAll({ type: "window" });
-  return clients.find((client) => client.frameType === "top-level");
+  return clients.find((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
 };
 
 // A page with COEP: require-corp (needed here for SharedArrayBuffer/crossOriginIsolated, see
@@ -147,9 +154,39 @@ const respondFromGuest = async (event: IFetchEvent, port: number, path: string):
   return previewResponse(result.body as BufferSource, { status: result.status, statusText: result.statusMessage, headers: result.headers });
 };
 
+// See previewRouting.ts: which clients are previewed documents, and the port each was served from.
+const clientPorts: PreviewClientPorts = new Map();
+
+/** A client this worker has never seen (see previewRouting.ts): ask the browser what it is, once. */
+const lookupClientPort = async (clientId: string): Promise<number | undefined> => {
+  const client = await sw.clients.get(clientId);
+  const port = client ? previewPortOf(client.url, sw.location.origin) : undefined;
+  clientPorts.set(clientId, port ?? null);
+  return port;
+};
+
+const respond = (event: IFetchEvent, route: Exclude<PreviewRoute, { kind: "passthrough" }>): Promise<Response> | Response => {
+  switch (route.kind) {
+    case "guest":
+      return respondFromGuest(event, route.port, route.path);
+    case "redirect":
+      // 307, not 302: a redirected POST (a form, a fetch() to "/api") keeps its method and body.
+      return Response.redirect(route.location, 307);
+    case "lookup":
+      return lookupClientPort(route.clientId).then((port) => {
+        if (port === undefined) return fetch(event.request); // not a preview after all: as if untouched
+        return respond(event, previewRedirect(port, new URL(event.request.url)));
+      });
+  }
+};
+
 sw.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  const target = parsePreviewPath(url.pathname);
-  if (!target) return; // not a preview URL - let the browser handle it as normal
-  event.respondWith(respondFromGuest(event, target.port, target.path + url.search));
+  const { request, clientId, resultingClientId } = event;
+  const route = routePreviewRequest(
+    { url: request.url, mode: request.mode, referrer: request.referrer, clientId, resultingClientId },
+    sw.location.origin,
+    clientPorts,
+  );
+  if (route.kind === "passthrough") return; // not calling respondWith(): the browser handles it as normal
+  event.respondWith(respond(event, route));
 });

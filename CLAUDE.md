@@ -624,10 +624,7 @@ Done and verified in real Chromium:
   verification (the peer is always a guest in this sandbox), extensions (permessage-deflate is
   never offered), cookies; `error` fires before every unclean close. A guest server is
   unmodified (checked for a real `http.createServer()` `'upgrade'` handler in Vitest,
-  `runtime/http.test.ts`). **Still missing for Vite** (next step, see PLAN.md Phase 8): an
-  ABSOLUTE-path subresource inside a preview frame (`<script src="/@vite/client">`, `fetch("/api")`)
-  resolves against the host page's origin root, never the `/__wcvm_preview__/<port>/` prefix, so
-  the SW doesn't intercept it at all today. Verified: `kernel/webSocketFrames.test.ts` (17),
+  `runtime/http.test.ts`). Verified: `kernel/webSocketFrames.test.ts` (17),
   `kernel/previewWebSocket.test.ts` (21), `workers/preview/webSocketShim.test.ts` (23),
   `apis/Preview.test.ts`'s relay cases (4), `workers/kernel/handlers/preview.test.ts` (3), and 2
   new Playwright tests in real Chromium (a real iframe page's WebSocket against a hand-rolled guest
@@ -635,15 +632,40 @@ Done and verified in real Chromium:
   code/reason seen by both ends; killing that server drops the page's socket with `error` then
   close 1006), `--repeat-each=3`. A full, clean `pnpm exec playwright test` run (99/99) and
   `vitest run` (647/647) confirm no regressions.
-- Tests: 647 Vitest + 99 Playwright (Chromium). See "Verifying".
+- Preview absolute-path routing (Phase 8's second piece): a previewed page's ABSOLUTE URLs -
+  `<script src="/@vite/client">`, `import "/src/a.ts"`, `fetch("/api")`, a link to `/about` -
+  resolve against the host page's origin root, not the `/__wcvm_preview__/<port>/` prefix, so they
+  used to fall straight through to the host's own server (every Vite module URL is absolute). The
+  preview SW now REDIRECTS (307, so a POST keeps its method/body) each one into the requesting
+  page's own port prefix. A redirect, not a response under the original URL, so every resource has
+  exactly one URL - `/src/a.ts` and `/__wcvm_preview__/5173/src/a.ts` would otherwise be two
+  separate ES module instances - and a module's relative imports/`import.meta.url` stay inside the
+  prefix. The decision logic is `workers/preview/previewRouting.ts` (pure, no SW globals):
+  `respondWith()` must be called synchronously but `clients.get()` is async, so the port each
+  client was served from is recorded when its navigation is seen (`resultingClientId` -> port, or
+  `null` for a non-preview client), making every later request from it a synchronous decision; a
+  client never seen before (the browser stops an idle SW after ~30s, wiping that in-memory map)
+  gets one async `clients.get()` lookup, answered by a plain `fetch(event.request)` passthrough if
+  it turns out not to be a preview. A navigation has no `clientId`, so its REFERRER decides (a
+  preview page navigating to `/about`). A bare `/__wcvm_preview__/<port>` navigation is first
+  redirected to its trailing-slash form (otherwise its own `./x` resolves outside the port).
+  `findHostClient` now also skips a top-level window that is itself a preview document (a preview
+  opened in its own tab). Verified: `workers/preview/previewRouting.test.ts` (11 Vitest), and 2 new
+  Playwright tests in real Chromium: a guest page loading an absolute `<script type=module>` that
+  imports both a relative and an absolute module, POSTs to an absolute `fetch()`, then follows an
+  absolute link (the frame ends up at the prefixed URL; the guest server logs every path); and the
+  same page still routed after `ServiceWorker.stopAllWorkers` (CDP) wipes the SW's map - confirmed
+  to FAIL with the async lookup deliberately broken, so it really exercises that path. A full,
+  clean `pnpm exec playwright test` run (101/101) and `vitest run` (658/658) confirm no regressions.
+- Tests: 658 Vitest + 101 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch
 stack has no path to a real network from inside wcvm's virtual `net`/`http`, confirmed by reading
 the actual installed source; see PLAN.md's "Real npm: feasibility findings" before picking this
-back up), Vite dev server/HMR (the preview WebSocket tunnel is done; absolute-path subresource
-routing in a preview frame is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
+back up), Vite dev server/HMR (the preview WebSocket tunnel and absolute-path routing are done;
+getting Vite itself into the VFS with no npm is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
 
 ## Architecture in one page
 
