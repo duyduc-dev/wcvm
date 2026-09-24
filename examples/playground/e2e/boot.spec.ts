@@ -1582,6 +1582,113 @@ test.describe("npm install", () => {
   });
 });
 
+test.describe("Vite dev server", () => {
+  // An unmodified Vite 7 inside wcvm, the whole way: installed by wcvm's own `npm install` from the
+  // REAL npm registry, esbuild and Rollup swapped for their wasm builds via `overrides`, started
+  // with Vite's real CLI, shown in the playground's own preview pane, TypeScript transformed and an
+  // npm dependency pre-bundled by esbuild-wasm, and hot updates arriving over the preview WebSocket
+  // tunnel - CSS and a self-accepting module both applied WITHOUT a reload.
+  //
+  // OPT-IN (needs the internet, ~5 MB of packages): `WCVM_E2E_VITE=1 pnpm exec playwright test -g
+  // "Vite dev server"`. Behind a proxy, HTTPS_PROXY is passed on to Chromium (playwright.config.ts).
+  // Every building block it relies on has its own small, offline test; this one proves they add up
+  // to real Vite.
+  test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs real Vite from registry.npmjs.org)");
+  const REGISTRY = "https://registry.npmjs.org/";
+  const APP = {
+    "/app/package.json": JSON.stringify({
+      name: "vite-app",
+      private: true,
+      type: "module",
+      dependencies: { mitt: "3.0.1" },
+      devDependencies: { vite: "7.3.6" },
+      overrides: { esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" },
+    }),
+    "/app/index.html": '<!doctype html><html><head><title>vite app</title><script type="module" src="/src/main.ts"></script></head><body><h1 id="t">loading</h1></body></html>',
+    "/app/src/main.ts": [
+      "import './style.css';",
+      "import mitt from 'mitt';",
+      "import { label } from './label';",
+      "(window as any).__boot ??= Math.random();",
+      "const bus = mitt<{ show: string }>();",
+      "bus.on('show', (text: string) => { document.getElementById('t')!.textContent = text; });",
+      "bus.emit('show', 'label ' + label);",
+    ].join("\n"),
+    "/app/src/label.ts": "export const label: string = 'v1';\nif (import.meta.hot) import.meta.hot.accept((m) => { document.getElementById('t')!.textContent = 'label ' + m!.label; });\n",
+    "/app/src/style.css": "h1 { color: rgb(255, 0, 0); }\n",
+  };
+
+  test("runs Vite from npm install to hot module replacement, entirely in the tab", async ({ page }) => {
+    test.setTimeout(180_000); // a real ~5 MB install over the network
+    await page.click("#preview-enable");
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+    await page.evaluate(async (files) => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      for (const [path, contents] of Object.entries(files)) {
+        await fs.mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+        await fs.writeFile(path, contents);
+      }
+    }, APP);
+
+    const install = await spawn(page, "npm", ["install", "--registry", REGISTRY], "/app");
+    expect(install).toEqual({ code: 0, out: expect.stringMatching(/^\nadded \d+ packages in \d+m?s\n$/), err: "" });
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const vite = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", "5173", "--strictPort"], { cwd: "/app" });
+      const w = window as unknown as { __vite: typeof vite; __viteOut: string };
+      w.__vite = vite;
+      w.__viteOut = "";
+      for (const stream of [vite.stdout, vite.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__viteOut += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    const viteOutput = () => page.evaluate(() => (window as unknown as { __viteOut: string }).__viteOut);
+    await expect.poll(viteOutput, { timeout: 30_000 }).toContain("Local:");
+
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5173/");
+    const heading = page.frameLocator("#preview-frame").locator("#t");
+    await expect(heading).toHaveText("label v1", { timeout: 30_000 });
+    const state = () =>
+      heading.evaluate((el) => ({ color: getComputedStyle(el).color, boot: (el.ownerDocument.defaultView as unknown as { __boot: number }).__boot }));
+    const initial = await state();
+    expect(initial.color).toBe("rgb(255, 0, 0)");
+
+    // esbuild-wasm did real work: types stripped, the npm dependency pre-bundled.
+    const served = await page.evaluate(async () => (await fetch("/__wcvm_preview__/5173/src/main.ts")).text());
+    expect(served).not.toContain(": string");
+    expect(served).toMatch(/from "\/node_modules\/\.vite\/deps\/mitt\.js\?v=/);
+
+    await page.evaluate(() => (window as unknown as WcWindow).wc.fs.writeFile("/app/src/style.css", "h1 { color: rgb(0, 0, 255); }\n"));
+    await expect.poll(async () => (await state()).color, { timeout: 15_000 }).toBe("rgb(0, 0, 255)");
+    expect((await state()).boot).toBe(initial.boot); // hot-updated, not reloaded
+
+    await page.evaluate(() =>
+      (window as unknown as WcWindow).wc.fs.writeFile(
+        "/app/src/label.ts",
+        "export const label: string = 'v2';\nif (import.meta.hot) import.meta.hot.accept((m) => { document.getElementById('t')!.textContent = 'label ' + m!.label; });\n",
+      ),
+    );
+    await expect(heading).toHaveText("label v2", { timeout: 15_000 });
+    expect((await state()).boot).toBe(initial.boot);
+    expect(await viteOutput()).toMatch(/hmr update \/src\/style\.css[\s\S]*hmr update \/src\/label\.ts/);
+
+    await page.evaluate(async () => {
+      const vite = (window as unknown as { __vite: { kill: () => void; exit: Promise<unknown> } }).__vite;
+      vite.kill();
+      await vite.exit;
+    });
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over

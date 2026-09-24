@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const viteProxy = process.env.HTTPS_PROXY ?? process.env.https_proxy;
+
 export default defineConfig({
   testDir: "./e2e",
   webServer: [
@@ -27,5 +29,9 @@ export default defineConfig({
   ],
   use: {
     baseURL: "http://localhost:5183/",
+    // The opt-in real-Vite test (WCVM_E2E_VITE=1, e2e/boot.spec.ts's "Vite dev server") installs
+    // from the real npm registry; on a machine that only reaches the internet through a proxy,
+    // Chromium needs to be told about it. Every other test only ever talks to localhost.
+    ...(process.env.WCVM_E2E_VITE && viteProxy ? { launchOptions: { proxy: { server: viteProxy, bypass: "localhost,127.0.0.1" } } } : {}),
   },
 });
