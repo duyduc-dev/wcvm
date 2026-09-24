@@ -592,6 +592,13 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   `<script>`, so a guest page whose own CSP forbids inline scripts never gets it; a compressed
   (`Content-Encoding`) HTML document isn't injected at all. A page opened with no same-origin wcvm
   page embedding it (or as its opener) falls back to the real `WebSocket`, which reaches nothing.
+- Preview absolute-path routing (`workers/preview/previewRouting.ts`): an absolute URL from a
+  previewed page is REDIRECTED into its port's prefix, so `response.url` is the prefixed URL and a
+  `fetch(url, { redirect: "manual" | "error" })` to one sees an opaque redirect/a network error. A
+  request body that's a `ReadableStream` can't follow the 307. A navigation is attributed to a
+  preview only by its referrer, so a page with `Referrer-Policy: no-referrer` navigating to one of
+  its own absolute paths lands on the host's server instead. Requests to another origin are never
+  touched.
 - `zlib` (`bindings/zlib.ts`, see "Current state"): Brotli (`BrotliCompress`/`BrotliDecompress`) and
   Zstd (`ZstdCompress`/`ZstdDecompress`) aren't implemented - the Compression Streams API supports
   neither format, so their handle classes are simply absent (`new zlib.BrotliCompress()` throws a
@@ -805,15 +812,12 @@ picking this back up.
   the real RFC 6455 client (`kernel/previewWebSocket.ts`, `kernel/webSocketFrames.ts`) over a
   virtual TCP connection to the guest's own `'upgrade'` handler. Guest-side `'upgrade'` already
   worked unmodified.
-- **Next: absolute-path subresources in a preview frame.** A document at
-  `/__wcvm_preview__/<port>/` that asks for `/@vite/client`, `/src/main.ts` or `fetch("/api")`
-  resolves against the host page's origin root, which the SW doesn't intercept
-  (`parsePreviewPath` only matches the prefix) - it hits the host's own server instead. Vite's
-  every module URL is absolute. Fix in the SW: a same-origin request from a preview CLIENT
-  (`clients.get(event.clientId)`'s URL is a preview URL; `event.request.referrer` for a
-  navigation, which has no clientId) that isn't already prefixed maps onto that client's port.
-  (Setting Vite's `base` to the prefix is a user-side workaround, not a fix.)
-- Then: getting Vite itself into the VFS with no npm (real npm is deferred - see Phase 7), and
+- Absolute-path subresources in a preview frame - **done**, see CLAUDE.md's "Status": the preview
+  SW redirects a previewed page's un-prefixed same-origin requests (`/@vite/client`, `fetch("/api")`,
+  a link to `/about`) into that page's own port prefix (`workers/preview/previewRouting.ts`), keyed
+  by the requesting client (recorded at its navigation; one async `clients.get()` for a client the
+  SW has never seen) or, for a navigation, its referrer.
+- **Next**: getting Vite itself into the VFS with no npm (real npm is deferred - see Phase 7), and
   Vite's own needs (esbuild-wasm or Rollup's wasm build in place of native binaries, chokidar over
   our `fs.watch`).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with

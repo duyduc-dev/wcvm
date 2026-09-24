@@ -1313,6 +1313,94 @@ test.describe("preview UI", () => {
   });
 });
 
+test.describe("preview absolute paths", () => {
+  // A previewed page's ABSOLUTE URLs - `<script src="/app.js">`, `fetch("/api/data")`, a link to
+  // "/second" - resolve against the host page's origin root, not the /__wcvm_preview__/<port>/
+  // prefix; the preview SW (workers/preview/previewRouting.ts) redirects each into the right
+  // port's prefix, based on which client (or, for a navigation, which referrer) asked. Every Vite
+  // module URL is absolute, so this is what a real dev server's page needs to load at all.
+  const SERVER = `
+    const http = require('http');
+    const files = {
+      '/': ['text/html', '<!doctype html><html><head><meta charset="utf-8"><script type="module" src="/app.js"></script></head><body><pre id="out"></pre><a id="next" href="/second?from=link">next</a></body></html>'],
+      '/app.js': ['text/javascript', 'import { dep } from "./dep.js"; import { abs } from "/nested/abs.js"; const data = await (await fetch("/api/data", { method: "POST", body: "ping" })).json(); document.getElementById("out").textContent = [dep, abs, data.echo, new URL(import.meta.url).pathname].join(" | ");'],
+      '/dep.js': ['text/javascript', 'export const dep = "relative import";'],
+      '/nested/abs.js': ['text/javascript', 'export const abs = "absolute import";'],
+      '/second': ['text/html', '<!doctype html><p id="second">second page</p>'],
+    };
+    http.createServer((req, res) => {
+      const path = req.url.split('?')[0];
+      console.log(req.method + ' ' + req.url);
+      if (path === '/api/data') {
+        let body = '';
+        req.on('data', (c) => (body += c));
+        req.on('end', () => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ echo: 'api got ' + body })); });
+        return;
+      }
+      const file = files[path];
+      if (!file) { res.statusCode = 404; res.end('no ' + path); return; }
+      res.setHeader('Content-Type', file[0]);
+      res.end(file[1]);
+    }).listen(6300, () => console.log('ready'));
+  `;
+
+  const openPreviewFrame = (page: import("@playwright/test").Page) =>
+    page.evaluate(async (source) => {
+      const wc = (window as unknown as WcWindow).wc;
+      await wc.preview.enable();
+      await wc.fs.writeFile("/abs-server.js", source);
+      const server = await wc.spawn("node", ["/abs-server.js"]);
+      const w = window as unknown as { __serverOut: string[] };
+      w.__serverOut = [];
+      const reader = server.stdout.getReader();
+      void (async () => {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          w.__serverOut.push(new TextDecoder().decode(value));
+        }
+      })();
+      while (!w.__serverOut.join("").includes("ready")) await new Promise((r) => setTimeout(r, 10));
+      const frame = document.createElement("iframe");
+      frame.id = "abs-frame";
+      frame.src = wc.preview.url(6300);
+      document.body.append(frame);
+    }, SERVER);
+
+  test("a previewed page's absolute-path modules, fetches and links all reach its own guest server", async ({ page }) => {
+    await openPreviewFrame(page);
+    const frame = page.frameLocator("#abs-frame");
+    await expect(frame.locator("#out")).toHaveText("relative import | absolute import | api got ping | /__wcvm_preview__/6300/app.js");
+
+    await frame.locator("#next").click();
+    await expect(frame.locator("#second")).toHaveText("second page");
+    const frameUrl = await page.evaluate(() => (document.getElementById("abs-frame") as HTMLIFrameElement).contentWindow!.location.href);
+    expect(new URL(frameUrl).pathname + new URL(frameUrl).search).toBe("/__wcvm_preview__/6300/second?from=link");
+
+    // Unique paths: the playground's own #preview-frame also loads any port that starts listening.
+    const log = await page.evaluate(() => (window as unknown as { __serverOut: string[] }).__serverOut.join(""));
+    expect([...new Set(log.split("\n").filter((line) => line && line !== "ready"))].sort()).toEqual(
+      ["GET /", "GET /app.js", "GET /dep.js", "GET /nested/abs.js", "GET /second?from=link", "POST /api/data"].sort(),
+    );
+  });
+
+  test("still routed after the browser stops the idle Service Worker and forgets which client is which", async ({ page }) => {
+    await openPreviewFrame(page);
+    await expect(page.frameLocator("#abs-frame").locator("#out")).toContainText("api got ping");
+    // What a real browser does to an idle Service Worker after ~30s: its in-memory client->port
+    // map is gone, so the frame's next absolute request takes the async clients.get() path.
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("ServiceWorker.enable");
+    await cdp.send("ServiceWorker.stopAllWorkers");
+    const inner = await (await page.$("#abs-frame"))!.contentFrame();
+    const result = await inner!.evaluate(async () => {
+      const response = await fetch("/api/data", { method: "POST", body: "after restart" });
+      return { json: await response.json(), url: new URL(response.url).pathname };
+    });
+    expect(result).toEqual({ json: { echo: "api got after restart" }, url: "/__wcvm_preview__/6300/api/data" });
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over
