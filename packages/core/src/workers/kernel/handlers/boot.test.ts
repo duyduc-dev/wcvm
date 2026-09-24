@@ -23,7 +23,7 @@ describe("boot handler", () => {
     const { stateManager, posted, done } = run(
       createBootHandler({
         createFsWorker: () => worker,
-        createProcessWorker: () => createFakeProcessWorker(),
+        createProcessWorker: async () => () => createFakeProcessWorker(),
         createFetcherWorker: () => createFakeFetcherWorker(),
       }),
     );
@@ -38,7 +38,7 @@ describe("boot handler", () => {
     const { posted, done } = run(
       createBootHandler({
         createFsWorker: () => worker,
-        createProcessWorker: () => createFakeProcessWorker(),
+        createProcessWorker: async () => () => createFakeProcessWorker(),
         createFetcherWorker: () => createFakeFetcherWorker(),
       }),
     );
@@ -51,7 +51,7 @@ describe("boot handler", () => {
     const { posted, done } = run(
       createBootHandler({
         createFsWorker: () => worker,
-        createProcessWorker: () => createFakeProcessWorker(),
+        createProcessWorker: async () => () => createFakeProcessWorker(),
         createFetcherWorker: () => createFakeFetcherWorker({ fail: "boom" }),
       }),
     );
@@ -64,7 +64,7 @@ describe("boot handler", () => {
     const { done } = run(
       createBootHandler({
         createFsWorker: () => worker,
-        createProcessWorker: () => createFakeProcessWorker(),
+        createProcessWorker: async () => () => createFakeProcessWorker(),
         createFetcherWorker: () => createFakeFetcherWorker(),
       }),
       { persist: { root: "my-app" } },

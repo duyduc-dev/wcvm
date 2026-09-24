@@ -5,7 +5,7 @@ import { RouteHandler } from "../router";
 
 interface IBootParams {
   createFsWorker: () => IFsWorkerLike;
-  createProcessWorker: (pid: number) => IProcessWorkerLike;
+  createProcessWorker: () => Promise<(pid: number) => IProcessWorkerLike>;
   createFetcherWorker: () => IFetcherWorkerLike;
 }
 

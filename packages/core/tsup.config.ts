@@ -15,7 +15,6 @@ export default defineConfig([
     entry: {
       "workers/kernel/worker": "src/workers/kernel/worker.ts",
       "workers/fs/worker": "src/workers/fs/worker.ts",
-      "workers/process/worker": "src/workers/process/worker.ts",
       "workers/fetcher/worker": "src/workers/fetcher/worker.ts",
       "workers/preview/PreviewServiceWorker": "src/workers/preview/PreviewServiceWorker.ts",
     },
@@ -31,5 +30,20 @@ export default defineConfig([
     // whose imports 404. Confirmed live: duckwc/dist/workers/fs/worker.js
     // importing "../../chunk-*.js" broke exactly this way once deployed.
     splitting: false,
+  },
+  {
+    entry: { "workers/process/worker": "src/workers/process/worker.ts" },
+    format: ["esm"],
+    sourcemap: true,
+    clean: false,
+    splitting: false,
+    // Shipped as .txt, not .js: workers/kernel/fsWorker.ts's createProcessWorker fetches this
+    // file's raw text once and spawns every process worker from a Blob URL built from it, rather
+    // than referencing it directly with `new Worker(new URL(...))` - so a dev server's own "this
+    // looks like a JS module" transform (Vite's import-analysis unconditionally injects its HMR
+    // client into any served module with a computed dynamic import, which this is the only one of
+    // these five bundles to have) never gets a chance to touch its source and corrupt the guest
+    // Node runtime's own timers. See fsWorker.ts's own comment for the full story.
+    outExtension: () => ({ js: ".txt" }),
   },
 ]);
