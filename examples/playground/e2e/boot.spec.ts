@@ -400,6 +400,22 @@ test.describe("node", () => {
     });
   });
 
+  test("a worker_threads MessagePort's EventTarget-style onmessage/addEventListener get a real MessageEvent", async ({ page }) => {
+    // Builds the event via internal/worker/io.js's createFastMessageEvent, from the undici
+    // stand-in (runtime/shims.ts) - a Node-style port.on("message") never needed an event object.
+    const r = await spawn(page, "node", ["-e", `
+      const { MessageChannel } = require("worker_threads");
+      const { port1, port2 } = new MessageChannel();
+      let seen = 0;
+      port1.addEventListener("message", (e) => console.log("listener", e.constructor.name, e.data));
+      port1.onmessage = (e) => { console.log("onmessage", e.data); if (++seen === 2) port1.close(() => console.log("closed")); };
+      port2.postMessage("one");
+      port2.postMessage({ two: 2 });
+    `]);
+    // ...and closing the port releases it, so the process exits on its own, like real Node.
+    expect(r).toEqual({ code: 0, out: "listener MessageEvent one\nonmessage one\nlistener MessageEvent { two: 2 }\nonmessage { two: 2 }\nclosed\n", err: "" });
+  });
+
   test("readline reads lines from a piped Readable in a real worker", async ({ page }) => {
     const r = await spawn(page, "node", [
       "-e",

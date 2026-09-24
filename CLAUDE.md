@@ -768,15 +768,55 @@ Done and verified in real Chromium:
   `createRequire(import.meta.url)`, `import.meta.resolve`, a dynamic import built from it, identity
   across reads). A full, clean `pnpm exec playwright test` run (107/107) and `vitest run` (836/836)
   confirm no regressions.
-- Tests: 836 Vitest + 107 Playwright (Chromium). See "Verifying".
+- Vite's dev server RUNS (Phase 8's seventh piece, 2026-09-24): an unmodified Vite 7.3, installed
+  from the real registry by `npm install` with `overrides` swapping in esbuild-wasm and
+  `@rollup/wasm-node`, starts inside wcvm in ~1s, listens on its virtual port, and serves `/`
+  (transformed index.html), `/main.js` and `/@vite/client` through the preview relay - checked in
+  real Chromium with a one-off proxied probe (no committed test yet: it needs the real registry).
+  What it took, found by running it and fixing each stop in turn:
+  - package.json `"imports"` (`#specifiers`, Node's PACKAGE_IMPORTS_RESOLVE) in BOTH resolvers
+    (`esm/resolve.ts`, `cjs.ts`), sharing exports' exact/longest-pattern matching and conditions;
+    an imports target may also name another package or a builtin. Vite's own
+    `#module-sync-enabled` resolves to `false.js` (no `module-sync` condition - this CJS loader
+    can't require ESM synchronously, which is exactly what that flag reports).
+  - `dns.promises` + `dns/promises` (the promise API's `{address, family}` shape), and an `http2`
+    shim (loads - bundled code requires it at init - but every entry point throws
+    `ERR_NO_CRYPTO`/`ERR_METHOD_NOT_IMPLEMENTED`; nghttp2 is C++).
+  - `crypto`: `getRandomValues`, `randomFillSync`/`randomFill` (now chunked past Web Crypto's
+    64 KiB per-call quota - `randomBytes` too), `timingSafeEqual` (its length error is C++-thrown
+    in real Node, so built to match), one-shot `crypto.hash()`, `webcrypto`/`subtle` (the platform's
+    own); the shim now uses the platform `crypto` captured at load, not the bare global. Checked
+    against real Node's own output.
+  - A builtin's ESM facade reads EVERY export eagerly (real Node's does too), so any throwing lazy
+    getter broke every `import { x } from` that module. Vendored the pure-JS ones (`util.parseArgs`,
+    `MIMEType`/`MIMEParams`, `util.diff`, `AsyncLocalStorage`, `buffer.File`), added an
+    `internal/deps/undici/undici` stand-in (the platform's own `WebSocket`/`CloseEvent`/
+    `MessageEvent` + `createFastMessageEvent` - undici itself is a 1MB+ bundled dependency), and made
+    the facade tolerate the rest (`util.setTraceSigInt`, `net.BlockList`/`SocketAddress` need C++):
+    such a name exports `undefined` instead of failing the whole import.
+  - Found along the way, two real `worker_threads` `MessagePort` bugs (`bindings/messaging.ts`),
+    now fixed and Chromium-tested: an EventTarget-style listener (`port.onmessage =`,
+    `addEventListener("message")`) crashed, since building its event needed undici's
+    `createFastMessageEvent`; and the platform's `close()` neither released the port's event-loop
+    ref nor reported `'close'` - a closed port with a listener attached kept the whole process
+    alive forever, and `port.close(cb)`'s `cb` never ran. Now `close()` releases the ref and
+    reports `'close'` through io.js's own `handle_onclose` hook, like real Node.
+  Still open (next): esbuild-wasm's service stops during Vite's dependency scan ("The service was
+  stopped"; Vite skips pre-bundling and carries on), and the page/HMR in a real preview iframe.
+  Verified: new cases in `esm/resolve.test.ts` (4), `runtime.test.ts` (1), `viteBuiltins.test.ts`
+  (2 - dns.promises; crypto against real Node's output), 1 new Playwright test (MessagePort
+  onmessage/addEventListener/close(cb) + clean exit). A full, clean `pnpm exec playwright test` run
+  (108/108) and `vitest run` (843/843) confirm no regressions.
+- Tests: 843 Vitest + 108 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-CJS `import()`, the 9 builtins Vite imports and a real `import.meta.url` are done; the next Vite
-blocker is found by running it again - see PLAN.md Phase 8),
+CJS `import()`, the builtins Vite imports and a real `import.meta.url` are done, and Vite's dev
+server now runs and serves pages; esbuild-wasm's service and in-iframe HMR are next - see PLAN.md
+Phase 8),
 Python/Bun, Studio UI.
 
 ## Architecture in one page

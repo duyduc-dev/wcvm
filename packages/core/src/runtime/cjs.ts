@@ -108,17 +108,25 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     return loadIndex(p);
   };
 
-  const resolveTarget = (target: any, pkgDir: string, match: string, isPattern: boolean, request: string): string | null | undefined => {
+  /** `resolveBare` is only passed for "imports" (`#x`), whose targets may name another package -
+   *  see esm/resolve.ts's resolveExportsTarget for the same rule. */
+  const resolveTarget = (
+    target: any,
+    pkgDir: string,
+    match: string,
+    isPattern: boolean,
+    request: string,
+    resolveBare?: (specifier: string) => string,
+  ): string | null | undefined => {
     if (typeof target === "string") {
-      if (!target.startsWith("./")) {
-        throw codedError("ERR_INVALID_PACKAGE_TARGET", `Invalid "exports" target "${target}" in ${pkgDir}/package.json`);
-      }
       const substituted = isPattern ? target.replaceAll("*", match) : target;
-      return path.resolve(pkgDir, substituted);
+      if (target.startsWith("./")) return path.resolve(pkgDir, substituted);
+      if (resolveBare && !target.startsWith("../") && !target.startsWith("/") && !/^[a-z][a-z0-9+.-]*:/i.test(target)) return resolveBare(substituted);
+      throw codedError("ERR_INVALID_PACKAGE_TARGET", `Invalid "${resolveBare ? "imports" : "exports"}" target "${target}" in ${pkgDir}/package.json`);
     }
     if (Array.isArray(target)) {
       for (const item of target) {
-        const resolved = resolveTarget(item, pkgDir, match, isPattern, request);
+        const resolved = resolveTarget(item, pkgDir, match, isPattern, request, resolveBare);
         if (resolved !== undefined) return resolved;
       }
       return undefined;
@@ -126,13 +134,47 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     if (target && typeof target === "object") {
       for (const [key, value] of Object.entries(target)) {
         if (conditionSet.has(key)) {
-          const resolved = resolveTarget(value, pkgDir, match, isPattern, request);
+          const resolved = resolveTarget(value, pkgDir, match, isPattern, request, resolveBare);
           if (resolved !== undefined) return resolved;
         }
       }
       return undefined;
     }
     return target === null ? null : undefined;
+  };
+
+  /** An exact key, else the longest-prefix "*" pattern that matches - shared by "exports" and "imports". */
+  const matchSubpathMap = (map: Record<string, any>, key: string): { target: any; match: string; isPattern: boolean } | undefined => {
+    if (Object.hasOwn(map, key) && !key.includes("*")) return { target: map[key], match: "", isPattern: false };
+    let best: { key: string; match: string } | null = null;
+    for (const candidate of Object.keys(map)) {
+      const star = candidate.indexOf("*");
+      if (star === -1) continue;
+      const prefix = candidate.slice(0, star);
+      const suffix = candidate.slice(star + 1);
+      if (key.startsWith(prefix) && key.length >= candidate.length && key.endsWith(suffix)) {
+        if (!best || prefix.length > best.key.indexOf("*")) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
+      }
+    }
+    return best ? { target: map[best.key], match: best.match, isPattern: true } : undefined;
+  };
+
+  /** `require("#x")`: the nearest package.json's "imports" field (Node's PACKAGE_IMPORTS_RESOLVE). */
+  const resolvePackageImports = (request: string, parent: Module | null, fromDir: string): string => {
+    const notDefined = (where: string) =>
+      codedError("ERR_PACKAGE_IMPORT_NOT_DEFINED", `Package import specifier "${request}" is not defined${where} imported from ${parent?.filename ?? fromDir}`);
+    if (request === "#" || request.startsWith("#/")) throw notDefined("");
+    for (let dir = fromDir; ; dir = path.dirname(dir)) {
+      if (isFile(`${dir === "/" ? "" : dir}/package.json`)) {
+        const imports = readPackage(dir)?.imports;
+        const found = imports && typeof imports === "object" && !Array.isArray(imports) ? matchSubpathMap(imports, request) : undefined;
+        const resolved = found ? resolveTarget(found.target, dir, found.match, found.isPattern, request, (bare) => resolve(bare, parent, dir)) : undefined;
+        if (!resolved) throw notDefined(` in package ${dir === "/" ? "" : dir}/package.json`);
+        if (resolved.startsWith("node:") || isFile(resolved)) return resolved.startsWith("node:") ? resolved : realpath(resolved);
+        throw notFound(request, parent);
+      }
+      if (dir === "/") throw notDefined("");
+    }
   };
 
   const resolveExports = (pkgDir: string, exportsField: any, subpath: string, request: string): string => {
@@ -151,29 +193,10 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
           : `Package subpath '${subpath}' is not defined by "exports" in ${pkgDir}/package.json`,
       );
 
-    if (Object.hasOwn(map, subpath) && !subpath.includes("*")) {
-      const resolved = resolveTarget(map[subpath], pkgDir, "", false, request);
-      if (!resolved) throw notExported();
-      return resolved;
-    }
-
-    let best: { key: string; match: string } | null = null;
-    for (const key of Object.keys(map)) {
-      const star = key.indexOf("*");
-      if (star === -1) continue;
-      const prefix = key.slice(0, star);
-      const suffix = key.slice(star + 1);
-      if (subpath.startsWith(prefix) && subpath.length >= key.length && subpath.endsWith(suffix)) {
-        if (!best || prefix.length > best.key.indexOf("*")) {
-          best = { key, match: subpath.slice(prefix.length, subpath.length - suffix.length) };
-        }
-      }
-    }
-    if (best) {
-      const resolved = resolveTarget(map[best.key], pkgDir, best.match, true, request);
-      if (resolved) return resolved;
-    }
-    throw notExported();
+    const found = matchSubpathMap(map, subpath);
+    const resolved = found ? resolveTarget(found.target, pkgDir, found.match, found.isPattern, request) : undefined;
+    if (!resolved) throw notExported();
+    return resolved;
   };
 
   const splitPackageRequest = (request: string): { name: string; subpath: string } => {
@@ -207,7 +230,8 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
   };
 
   /** Returns a filesystem path, or `node:<id>` for a builtin. */
-  const resolve = (request: string, parent: Module | null, fromDir: string): string => {
+  function resolve(request: string, parent: Module | null, fromDir: string): string {
+    if (request.startsWith("#")) return resolvePackageImports(request, parent, fromDir);
     if (request.startsWith("node:")) {
       if (builtins.canBeRequiredByUsers(request)) return request;
       throw codedError("ERR_UNKNOWN_BUILTIN_MODULE", `No such built-in module: ${request}`);
@@ -240,7 +264,7 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
       if (found) return realpath(found);
     }
     throw notFound(request, parent);
-  };
+  }
 
   const realpath = (p: string): string => {
     try {

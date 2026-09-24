@@ -78,7 +78,7 @@
 // message can possibly arrive (always at least one task/microtask later), the module has loaded.
 
 export interface IMessagingContext {
-  loop: { ref(): () => void };
+  loop: { ref(): () => void; post(fn: () => void): void };
   internalBinding: (name: string) => any;
 }
 
@@ -111,6 +111,30 @@ export const createMessagingBinding = (ctx: IMessagingContext) => {
     };
     MessagePort.prototype.hasRef = function (this: object) {
       return releases.get(this) != null;
+    };
+    // A real Node port closing releases its keep-alive, then reports 'close' (internal/worker/
+    // io.js's `handle_onclose` hook - what `port.close(cb)`'s cb and `port.on("close")` wait for).
+    // The platform's close() does neither, so a closed port with a listener still attached kept
+    // the whole process alive forever. io.js's own close() calls through to whatever this
+    // prototype's close is when it loads, which is always after this binding - so this is it.
+    const nativeClose = MessagePort.prototype.close as (this: object) => void;
+    const handleOnClose = ctx.internalBinding("symbols").handle_onclose as symbol;
+    const closed = new WeakSet<object>();
+    MessagePort.prototype.close = function (this: Record<symbol, unknown>) {
+      releases.get(this)?.();
+      releases.set(this, null);
+      nativeClose.call(this);
+      if (closed.has(this)) return;
+      closed.add(this);
+      // Held until 'close' has been reported - post() alone doesn't keep an idle loop alive.
+      const release = ctx.loop.ref();
+      ctx.loop.post(() => {
+        try {
+          (this[handleOnClose] as (() => void) | undefined)?.call(this);
+        } finally {
+          release();
+        }
+      });
     };
   }
 

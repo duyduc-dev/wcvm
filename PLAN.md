@@ -602,6 +602,13 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   has no punycode decoder to ask); `URLPattern` is the browser's own (Chromium has one).
 - `module` (`runtime/moduleBuiltin.ts`): no `register()`/`registerHooks()` customization hooks,
   `_extensions` handlers can't be replaced (calling one throws), no `runMain`.
+- `http2`: loads, but can't do anything - `createSecureServer` throws `ERR_NO_CRYPTO`, cleartext
+  `createServer`/`connect` throw `ERR_METHOD_NOT_IMPLEMENTED` (no nghttp2).
+- A builtin export whose lazy getter can't load here (`util.setTraceSigInt`, `net.BlockList`,
+  `net.SocketAddress`) is `undefined` as an ESM named import, and throws "not vendored yet" on use
+  through the module object.
+- `crypto` stays hashing + randomness only (see `crypto` in "Current state"): no ciphers, keys,
+  certificates or md4/md5.
 - `tls`/`https`: load, but can't do anything (`ERR_NO_CRYPTO`) - no TLS stack behind wcvm's
   virtual sockets. `inspector` can't even be required (`ERR_INSPECTOR_NOT_AVAILABLE`), like a Node
   built without it.
@@ -861,9 +868,15 @@ picking this back up.
   first real run (2026-09-24, Chromium) stops at once: `node:perf_hooks` isn't a builtin. Probed
   every `node:` builtin Vite 7's own code imports against a real wcvm process - 9 missing, all
   **done** now (see CLAUDE.md's "Status"), and so is `import.meta.url` as the module's real
-  `file://` URL (it was the `blob:` URL; Vite finds its own files through it). **Next: run Vite
-  again** and fix whatever it hits next (esbuild-wasm's own child-process service, chokidar over
-  our `fs.watch`, ...).
+  `file://` URL (it was the `blob:` URL; Vite finds its own files through it).
+- **Vite's dev server runs** (2026-09-24): after package.json `"imports"`, `dns.promises`, an
+  `http2` shim, the crypto members Vite uses, and tolerant builtin ESM facades (see CLAUDE.md's
+  "Status"), an unmodified Vite 7.3 starts in ~1s and serves `/`, `/main.js` and `/@vite/client`
+  through the preview relay. **Next:** (1) esbuild-wasm's service stops during Vite's dependency
+  scan ("The service was stopped" - Vite skips pre-bundling and carries on; needed for TS/JSX and
+  deps); (2) the page in a real preview iframe, its HMR WebSocket through the tunnel, and a file
+  edit reaching it (chokidar over our `fs.watch`); (3) a committed e2e test, which needs Vite's
+  packages without the real registry (a fixture tarball set, or a recorded registry).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 

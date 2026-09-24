@@ -6,6 +6,15 @@ interface IShimContext {
   internalBinding(name: string): any;
 }
 
+// The platform's own WHATWG classes, captured at module load - before `globalObject: self` can put
+// Node's own same-named globals over them (CLAUDE.md's "never call a global by its bare name").
+const platform = {
+  crypto: globalThis.crypto,
+  WebSocket: globalThis.WebSocket,
+  CloseEvent: globalThis.CloseEvent,
+  MessageEvent: globalThis.MessageEvent,
+};
+
 // Modules that only exist under a `node:` scheme (never loadable bare).
 const SCHEME_ONLY = ["sea", "sqlite", "test", "test/reporters"];
 
@@ -19,8 +28,8 @@ const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
  *    bindings/performance.ts, since `perf_hooks` needs a real PerformanceObserver.)
  *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified,
  *    or narrower result instead of fully implementing: `dns`/`cluster` because there's nothing
- *    real behind them to report; `tls`/`https`/`inspector` because there's no TLS stack or V8
- *    inspector to put behind them (they load, and fail with real Node's own error on use); `crypto` because real Node's own `crypto.js` needs a much bigger
+ *    real behind them to report; `tls`/`https`/`http2`/`inspector` because there's no TLS stack,
+ *    nghttp2 or V8 inspector to put behind them (they load, and fail with real Node's own error on use); `crypto` because real Node's own `crypto.js` needs a much bigger
  *    native-crypto binding surface (KeyObject/PEM, X.509, DiffieHellman, scrypt, argon2 - none of
  *    it mappable onto the Web Crypto API) than this sandbox's actual need (hashing) justifies -
  *    see their own comments below for why.
@@ -179,7 +188,26 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
       const all = typeof options === "object" && options !== null && (options as { all?: boolean }).all === true;
       process.nextTick(() => cb?.(null, all ? [{ address: ADDRESS, family: FAMILY }] : ADDRESS, all ? undefined : FAMILY));
     };
-    module.exports = { lookup, ADDRCONFIG: 0, ALL: 0, V4MAPPED: 0 };
+    // dns.promises / require("dns/promises"): the same fixed answer, in the promise API's own
+    // shape (`{ address, family }`, not the callback's separate arguments). Vite compares two
+    // lookups of "localhost" to spot an OS that reorders them - identical answers mean "no".
+    const promises = {
+      lookup: async (_hostname: string, options?: unknown) => {
+        const all = typeof options === "object" && options !== null && (options as { all?: boolean }).all === true;
+        return all ? [{ address: ADDRESS, family: FAMILY }] : { address: ADDRESS, family: FAMILY };
+      },
+      getDefaultResultOrder: () => "verbatim",
+      setDefaultResultOrder: () => {},
+    };
+    module.exports = {
+      lookup,
+      promises,
+      getDefaultResultOrder: () => "verbatim",
+      setDefaultResultOrder: () => {},
+      ADDRCONFIG: 0,
+      ALL: 0,
+      V4MAPPED: 0,
+    };
   };
 
   /**
@@ -292,20 +320,73 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     const createHash = (algorithm: string) => new Hash(algorithm);
 
     // crypto.getRandomValues() caps out at 65536 bytes per call (the Web Crypto spec's own
-    // limit, QuotaExceededError beyond it) - real npm/pacote only ever need small nonces/tokens,
-    // so this isn't chunked; revisit if a real caller ever needs more.
+    // limit, QuotaExceededError beyond it), so anything bigger is filled a slice at a time.
+    const QUOTA = 65536;
+    const fillRandom = (bytes: Uint8Array) => {
+      for (let offset = 0; offset < bytes.length; offset += QUOTA) platform.crypto.getRandomValues(bytes.subarray(offset, offset + QUOTA));
+    };
+    const viewOf = (buffer: ArrayBuffer | ArrayBufferView): Uint8Array =>
+      buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+    const { codes } = require("internal/errors");
+
     const randomBytes = (size: number, callback?: (error: Error | null, buffer?: unknown) => void) => {
       const bytes = new Uint8Array(size);
-      crypto.getRandomValues(bytes);
-      const result = require("buffer").Buffer.from(bytes);
+      fillRandom(bytes);
+      const result = require("buffer").Buffer.from(bytes.buffer);
       if (!callback) return result;
       process.nextTick(() => callback(null, result));
       return undefined;
     };
 
-    const randomUUID = (): string => crypto.randomUUID();
+    const randomFillSync = (buffer: ArrayBuffer | ArrayBufferView, offset = 0, size?: number) => {
+      const view = viewOf(buffer);
+      const length = size ?? view.length - offset;
+      if (offset < 0 || offset > view.length) throw new codes.ERR_OUT_OF_RANGE("offset", `>= 0 && <= ${view.length}`, offset);
+      if (length < 0 || offset + length > view.length) throw new codes.ERR_OUT_OF_RANGE("size + offset", `<= ${view.length}`, offset + length);
+      fillRandom(view.subarray(offset, offset + length));
+      return buffer;
+    };
 
-    module.exports = { createHash, Hash, randomBytes, randomUUID };
+    /** randomFill(buffer[, offset[, size]], callback) */
+    const randomFill = (buffer: ArrayBuffer | ArrayBufferView, ...rest: unknown[]) => {
+      const callback = rest.pop() as (error: Error | null, buffer?: unknown) => void;
+      randomFillSync(buffer, ...(rest as [number?, number?]));
+      process.nextTick(() => callback(null, buffer));
+    };
+
+    const timingSafeEqual = (a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean => {
+      const x = viewOf(a);
+      const y = viewOf(b);
+      // Thrown from C++ in real Node, so not in internal/errors' own table - built to match.
+      if (x.length !== y.length) {
+        throw Object.assign(new RangeError("Input buffers must have the same byte length"), { code: "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH" });
+      }
+      let difference = 0;
+      for (let i = 0; i < x.length; i++) difference |= x[i] ^ y[i];
+      return difference === 0;
+    };
+
+    /** Node 21.7+'s one-shot `crypto.hash(algorithm, data[, outputEncoding = "hex"])`. */
+    const hash = (algorithm: string, data: unknown, outputEncoding = "hex") => {
+      const digest = createHash(algorithm).update(data).digest();
+      return outputEncoding === "buffer" ? digest : digest.toString(outputEncoding);
+    };
+
+    module.exports = {
+      createHash,
+      Hash,
+      hash,
+      getHashes: () => Object.keys(WEB_CRYPTO_ALGORITHM),
+      randomBytes,
+      randomFill,
+      randomFillSync,
+      randomUUID: (): string => platform.crypto.randomUUID(),
+      getRandomValues: (array: Uint8Array) => platform.crypto.getRandomValues(array),
+      timingSafeEqual,
+      // The Web Crypto API itself - here, literally the platform's own.
+      webcrypto: platform.crypto,
+      subtle: platform.crypto.subtle,
+    };
   };
 
   /**
@@ -387,21 +468,74 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
   };
 
+  /**
+   * `http2` is real Node's nghttp2 binding (C++), with nothing here to put behind it. Like `tls`,
+   * it must still LOAD - bundled code requires it at module init and only uses it on an opt-in
+   * path (Vite's proxy: only for an `ssl` target) - so it does, with the constants callers read,
+   * and every entry point throws: ERR_NO_CRYPTO for the TLS ones (as a Node without OpenSSL would),
+   * ERR_METHOD_NOT_IMPLEMENTED for cleartext h2c.
+   */
+  const http2Shim: BuiltinFactory = (_exports, _require, module) => {
+    const { codes } = ctx.requireBuiltin("internal/errors");
+    const notImplemented = (name: string) => () => {
+      throw new codes.ERR_METHOD_NOT_IMPLEMENTED(`http2.${name}()`);
+    };
+    const noCrypto = () => {
+      throw new codes.ERR_NO_CRYPTO();
+    };
+    const pseudo = { HTTP2_HEADER_STATUS: ":status", HTTP2_HEADER_METHOD: ":method", HTTP2_HEADER_AUTHORITY: ":authority", HTTP2_HEADER_SCHEME: ":scheme", HTTP2_HEADER_PATH: ":path", HTTP2_HEADER_PROTOCOL: ":protocol" };
+    module.exports = {
+      constants: { ...pseudo, HTTP2_HEADER_CONTENT_TYPE: "content-type", HTTP2_HEADER_CONTENT_LENGTH: "content-length", HTTP2_METHOD_GET: "GET", HTTP2_METHOD_POST: "POST", NGHTTP2_NO_ERROR: 0, NGHTTP2_CANCEL: 8 },
+      sensitiveHeaders: Symbol.for("nodejs.http2.sensitiveHeaders"),
+      createServer: notImplemented("createServer"),
+      createSecureServer: noCrypto,
+      connect: notImplemented("connect"),
+      getDefaultSettings: () => ({}),
+      getPackedSettings: notImplemented("getPackedSettings"),
+      getUnpackedSettings: notImplemented("getUnpackedSettings"),
+      performServerHandshake: notImplemented("performServerHandshake"),
+    };
+  };
+
   /** Real Node built without the inspector (`--without-inspector`) throws this on require; there's
    *  no V8 inspector protocol reachable from inside a Worker here either. */
   const inspectorShim: BuiltinFactory = () => {
     throw new (ctx.requireBuiltin("internal/errors").codes.ERR_INSPECTOR_NOT_AVAILABLE)();
   };
 
+  /**
+   * `internal/deps/undici/undici` - Node's bundled fetch/WebSocket client (a 1MB+ dependency, not
+   * lib/ code). Vendored modules only ever reach for a few WHATWG classes from it, all of which the
+   * browser ships natively: `http.WebSocket`/`CloseEvent`/`MessageEvent` (lazy getters - but an ESM
+   * `import { ... } from "node:http"` reads every export, so they must not throw), and
+   * `createFastMessageEvent` (internal/worker/io.js builds a MessagePort's event with it whenever
+   * an EventTarget-style listener - `addEventListener("message")`, `port.onmessage =` - is used).
+   * Undici's own dispatcher/proxy API (`setGlobalDispatcher`, `EnvHttpProxyAgent`) has no
+   * counterpart and is simply absent.
+   */
+  const undiciShim: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = {
+      WebSocket: platform.WebSocket,
+      CloseEvent: platform.CloseEvent,
+      MessageEvent: platform.MessageEvent,
+      createFastMessageEvent: (type: string, init?: MessageEventInit) => new platform.MessageEvent(type, init),
+    };
+  };
+
   return {
+    "internal/deps/undici/undici": undiciShim,
     tls: tlsShim,
     https: httpsShim,
+    http2: http2Shim,
     inspector: inspectorShim,
     "inspector/promises": inspectorShim,
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,
     dns: dnsShim,
+    "dns/promises": (_exports, _require, module) => {
+      module.exports = ctx.requireBuiltin("dns").promises;
+    },
     cluster: clusterShim,
     crypto: cryptoShim,
     v8: v8Shim,

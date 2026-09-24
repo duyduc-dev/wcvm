@@ -134,6 +134,12 @@
     "internal/perf/timerify": "builtin",
     "internal/histogram": "builtin",
     "internal/perf/observe": "builtin",
-    "internal/perf/event_loop_delay": "builtin"
+    "internal/perf/event_loop_delay": "builtin",
+    "internal/util/parse_args/parse_args": "builtin",
+    "internal/util/parse_args/utils": "builtin",
+    "internal/mime": "builtin",
+    "internal/util/diff": "builtin",
+    "internal/async_local_storage/async_hooks": "builtin",
+    "internal/file": "builtin"
   }
 }

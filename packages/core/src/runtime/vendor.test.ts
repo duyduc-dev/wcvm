@@ -23,10 +23,13 @@ describe("vendored Node lib", () => {
     "internal/encoding",
     "internal/blob",
     "internal/bootstrap/realm",
+    "internal/deps/undici/undici",
     "dns",
+    "dns/promises",
     "cluster",
     "tls",
     "https",
+    "http2",
     "inspector",
     "inspector/promises",
   ];
