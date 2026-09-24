@@ -6,7 +6,7 @@ import { createKernelHost } from ".";
 
 const deps = (worker: ReturnType<typeof createFakeFsWorker>["worker"]) => ({
   createFsWorker: () => worker,
-  createProcessWorker: () => createFakeProcessWorker(),
+  createProcessWorker: async () => () => createFakeProcessWorker(),
   createFetcherWorker: () => createFakeFetcherWorker(),
   emit: () => {},
 });
@@ -45,7 +45,7 @@ describe("kernel host", () => {
     const fetcherWorker = createFakeFetcherWorker();
     const kernel = await createKernelHost({
       createFsWorker: () => worker,
-      createProcessWorker: () => createFakeProcessWorker(),
+      createProcessWorker: async () => () => createFakeProcessWorker(),
       createFetcherWorker: () => fetcherWorker,
       emit: () => {},
     });
@@ -59,7 +59,7 @@ describe("kernel host", () => {
     await expect(
       createKernelHost({
         createFsWorker: () => worker,
-        createProcessWorker: () => createFakeProcessWorker(),
+        createProcessWorker: async () => () => createFakeProcessWorker(),
         createFetcherWorker: () => createFakeFetcherWorker({ fail: "no such script" }),
         emit: () => {},
       }),
@@ -74,7 +74,7 @@ describe("kernel host", () => {
     const fetcherWorker = createFakeFetcherWorker();
     const kernel = await createKernelHost({
       createFsWorker: () => worker,
-      createProcessWorker: () => createFakeProcessWorker(),
+      createProcessWorker: async () => () => createFakeProcessWorker(),
       createFetcherWorker: () => fetcherWorker,
       emit: () => {},
     });
@@ -113,7 +113,7 @@ describe("kernel host", () => {
     const events: unknown[] = [];
     const kernel = await createKernelHost({
       createFsWorker: () => worker,
-      createProcessWorker: () => processWorker,
+      createProcessWorker: async () => () => processWorker,
       createFetcherWorker: () => createFakeFetcherWorker(),
       emit: (m) => events.push(m),
     });

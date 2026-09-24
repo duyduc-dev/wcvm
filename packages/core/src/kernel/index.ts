@@ -47,7 +47,7 @@ export interface IKernelHost {
 
 interface IKernelHostParams {
   createFsWorker: () => IFsWorkerLike;
-  createProcessWorker: (pid: number) => IProcessWorkerLike;
+  createProcessWorker: () => Promise<(pid: number) => IProcessWorkerLike>;
   createFetcherWorker: () => IFetcherWorkerLike;
   /** Sends events (`process:stdout`, `process:exit`, ...) to the host. */
   emit: (message: KernelMessage) => void;
@@ -236,8 +236,13 @@ const createKernelHost = async ({
     emit: (id, event) => emit({ type: "preview:ws", id, event }),
   });
 
+  // One-time, cached setup (the fetch happens once, inside createProcessWorker itself - see its
+  // own comment in fsWorker.ts) that resolves to a plain, synchronous per-pid factory, so
+  // processes.ts's own spawn() stays fully synchronous exactly as before.
+  const spawnProcessWorker = await createProcessWorker();
+
   const processes = createProcessTable({
-    createProcessWorker,
+    createProcessWorker: spawnProcessWorker,
     emit,
     attachFsClient,
     detachFsClient: (clientId) =>

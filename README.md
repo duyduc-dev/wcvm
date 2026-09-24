@@ -62,7 +62,9 @@ Cross-Origin-Embedder-Policy: require-corp
 ```
 
 `boot()` throws `ERR_NOT_ISOLATED` otherwise. See
-`examples/playground/vite.config.ts` for a Vite setup.
+`examples/playground/vite.config.ts` for a Vite setup. The Process Worker is loaded from a `Blob`
+URL, so a host page with a CSP that disallows `blob:` in `worker-src`/`script-src` will need to
+relax that for it specifically (every other worker is loaded by direct URL, unaffected).
 
 ## Development
 
@@ -70,12 +72,8 @@ Cross-Origin-Embedder-Policy: require-corp
 pnpm install
 pnpm --filter wcvm test
 pnpm build
-pnpm --filter playground preview
+pnpm --filter playground dev
 ```
-
-Serve the playground from a production build (`preview`), not `pnpm --filter playground dev`:
-Vite's dev server injects an HMR client into every `new Worker(url, {type:"module"})`, which is
-how every wcvm worker is created, corrupting the guest Node runtime's own timers.
 
 ## License
 
