@@ -20,6 +20,46 @@ export interface IProcessInit {
   netPort: MessagePort;
   /** Whether this process was spawned via `fork()` and should get an IPC channel (`process.send`/`.on('message')`). */
   ipc: boolean;
+  /** Set only when this process IS a worker_threads.Worker, not a top-level/child_process spawn -
+   *  see runtime/bindings/worker.ts. */
+  workerThread?: IWorkerThreadInit;
+  /** The shared, globally-coordinated threadId counter EVERY process gets (not just worker
+   *  threads themselves) - any process might itself call `new Worker(...)`, and threadId must be
+   *  mintable synchronously, without a kernel round trip (see kernel/index.ts's own comment on
+   *  this field for why). A SharedArrayBuffer needs no transfer-list entry: structured-cloning one
+   *  hands the receiving realm a reference to the SAME underlying memory, not a copy - the same
+   *  way every other per-process SAB here already travels. */
+  threadIdCounterSab: SharedArrayBuffer;
+}
+
+/**
+ * What a worker_threads.Worker's own new Process Worker needs to exist at all. Deliberately NOT
+ * here: filename/doEval/workerData/url. Real vendored internal/worker.js already sends the real
+ * LOAD_SCRIPT message - carrying exactly those - over `port` below BEFORE it ever calls
+ * startThread() (see bindings/worker.ts's own comment on why); a real MessagePort buffers a
+ * message sent before the other side is listening, so by the time this new process's own
+ * runWorkerThread() actually reads `port`, LOAD_SCRIPT is already there waiting. `port` itself is
+ * handed over at spawn time via IProcessInit, not as a later postMessage, since this sandbox's
+ * kernel already has to broker a real MessageChannel transfer to get the child process worker
+ * created at all.
+ */
+export interface IWorkerThreadInit {
+  /** worker_threads' own small, monotonic numbering - NOT the same as `pid` above (a real OS pid
+   *  and a worker_threads threadId are different namespaces in real Node too). */
+  threadId: number;
+  threadName: string;
+  isInternal: boolean;
+  /** Real Node's own resourceLimits Float64Array layout (kMaxYoungGenerationSizeMb, ...) - accepted
+   *  and reported back via `resourceLimits`, never enforced (see runtime/bindings/worker.ts). */
+  resourceLimits: number[];
+  /** This thread's OWN real, native MessagePort - the other half of the same MessageChannel the
+   *  parent-side WorkerHandle kept as its own `.messagePort` (runtime/bindings/worker.ts). Every
+   *  other message (the public postMessage/parentPort channel, workerData, stdio) rides on TOP of
+   *  this one real channel via already-vendored internal/worker.js/internal/worker/io.js code -
+   *  structured clone and port transfer are real platform primitives, so none of that needs a
+   *  wire protocol of its own here.
+   */
+  port: MessagePort;
 }
 
 /**
@@ -55,7 +95,12 @@ export type ChildEvent =
   /** A UDP datagram arrived on one of this process's own bound ports (kernel/netServer.ts's
    *  udpSend) - connectionless, so there's no equivalent of net:incoming/net:close: every message
    *  just arrives, addressed by port, exactly like a real one. */
-  | { type: "udp:message"; port: number; fromPort: number; chunk: Uint8Array };
+  | { type: "udp:message"; port: number; fromPort: number; chunk: Uint8Array }
+  /** Reply to this process's own workerThread:spawn (`ticket` is what it sent): the kernel has
+   *  minted the real pid and actually spawned the child - `threadId` is just echoed back (this
+   *  process already minted it itself, synchronously, before ever sending workerThread:spawn) -
+   *  see runtime/bindings/worker.ts's WorkerImpl. */
+  | { type: "workerThread:started"; ticket: number; childPid: number; threadId: number };
 
 /** Process worker -> kernel. */
 export type ProcessEvent =
@@ -84,4 +129,26 @@ export type ProcessEvent =
   /** dgram.Socket.close(): release a UDP port binding - see kernel/netServer.ts's udpUnbind(). */
   | { type: "udp:unbind"; port: number }
   /** A datagram this process is sending from its own `fromPort` to `toPort` - see udpSend(). */
-  | { type: "udp:send"; fromPort: number; toPort: number; chunk: Uint8Array };
+  | { type: "udp:send"; fromPort: number; toPort: number; chunk: Uint8Array }
+  /** `new Worker(...)`: spawn a real worker_threads child. Unlike child:spawn's childPid, `pid` is
+   *  minted by the KERNEL (see kernel/index.ts's WORKER_THREAD_PID_START) - it names a real,
+   *  kernel-tracked Process Worker slot, the same reason net.listen()'s port assignment is
+   *  kernel-side too. `threadId`, by contrast, is minted by THIS worker itself, synchronously, via
+   *  the shared threadIdCounterSab every process holds (IProcessInit's own field) - real vendored
+   *  internal/worker.js reads it immediately after constructing its own native handle, before the
+   *  kernel could ever reply, so it can't wait for one (see that SAB's own comment for the full
+   *  story). `ticket` is this process's own correlation id for the eventual workerThread:started
+   *  reply (minted locally, like net's own connect ticket). `port` is this new worker's own half
+   *  of a real MessageChannel this process already created locally (see runtime/bindings/worker.ts)
+   *  - transferred through the kernel into the new process worker's own IProcessInit.workerThread.port. */
+  | {
+      type: "workerThread:spawn";
+      ticket: number;
+      threadId: number;
+      threadName: string;
+      isInternal: boolean;
+      env: Record<string, string>;
+      cwd: string;
+      resourceLimits: number[];
+      port: MessagePort;
+    };

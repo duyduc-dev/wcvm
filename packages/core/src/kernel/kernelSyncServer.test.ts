@@ -61,6 +61,8 @@ const setupServer = () => {
     detachNetClient: () => {},
     netRelay: { unlisten: () => {}, connect: () => {}, data: () => {}, shutdown: () => {}, close: () => {}, releasePid: () => {} },
     udpRelay: { unbind: () => {}, send: () => {}, releasePid: () => {} },
+    mintWorkerThreadPid: () => 0,
+    threadIdCounterSab: new SharedArrayBuffer(4),
     emit: () => {},
   });
   const server = createKernelSyncServer({ processes: table, allocatePid: () => nextPid++ });

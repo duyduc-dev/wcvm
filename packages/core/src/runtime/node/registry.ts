@@ -32,6 +32,7 @@ import f_internal_console_global from "./lib/internal/console/global.js";
 import f_internal_constants from "./lib/internal/constants.js";
 import f_internal_deps_acorn_acorn_dist_acorn from "./lib/internal/deps/acorn/acorn/dist/acorn.js";
 import f_internal_dgram from "./lib/internal/dgram.js";
+import f_internal_error_serdes from "./lib/internal/error_serdes.js";
 import f_internal_errors from "./lib/internal/errors.js";
 import f_internal_errors_error_source from "./lib/internal/errors/error_source.js";
 import f_internal_event_target from "./lib/internal/event_target.js";
@@ -52,9 +53,11 @@ import f_internal_fs_utils from "./lib/internal/fs/utils.js";
 import f_internal_fs_watchers from "./lib/internal/fs/watchers.js";
 import f_internal_http from "./lib/internal/http.js";
 import f_internal_linkedlist from "./lib/internal/linkedlist.js";
+import f_internal_locks from "./lib/internal/locks.js";
 import f_internal_net from "./lib/internal/net.js";
 import f_internal_options from "./lib/internal/options.js";
 import f_internal_per_context_primordials from "./lib/internal/per_context/primordials.js";
+import f_internal_perf_event_loop_utilization from "./lib/internal/perf/event_loop_utilization.js";
 import f_internal_perf_utils from "./lib/internal/perf/utils.js";
 import f_internal_priority_queue from "./lib/internal/priority_queue.js";
 import f_internal_process_permission from "./lib/internal/process/permission.js";
@@ -97,7 +100,10 @@ import f_internal_util_types from "./lib/internal/util/types.js";
 import f_internal_v8_startup_snapshot from "./lib/internal/v8/startup_snapshot.js";
 import f_internal_validators from "./lib/internal/validators.js";
 import f_internal_webidl from "./lib/internal/webidl.js";
+import f_internal_worker from "./lib/internal/worker.js";
+import f_internal_worker_io from "./lib/internal/worker/io.js";
 import f_internal_worker_js_transferable from "./lib/internal/worker/js_transferable.js";
+import f_internal_worker_messaging from "./lib/internal/worker/messaging.js";
 import f_net from "./lib/net.js";
 import f_os from "./lib/os.js";
 import f_path from "./lib/path.js";
@@ -110,6 +116,7 @@ import f_timers from "./lib/timers.js";
 import f_timers_promises from "./lib/timers/promises.js";
 import f_util from "./lib/util.js";
 import f_util_types from "./lib/util/types.js";
+import f_worker_threads from "./lib/worker_threads.js";
 import f_zlib from "./lib/zlib.js";
 
 export const NODE_VERSION = "v24.18.0";
@@ -147,6 +154,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/constants": f_internal_constants,
   "internal/deps/acorn/acorn/dist/acorn": f_internal_deps_acorn_acorn_dist_acorn,
   "internal/dgram": f_internal_dgram,
+  "internal/error_serdes": f_internal_error_serdes,
   "internal/errors": f_internal_errors,
   "internal/errors/error_source": f_internal_errors_error_source,
   "internal/event_target": f_internal_event_target,
@@ -167,8 +175,10 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/fs/watchers": f_internal_fs_watchers,
   "internal/http": f_internal_http,
   "internal/linkedlist": f_internal_linkedlist,
+  "internal/locks": f_internal_locks,
   "internal/net": f_internal_net,
   "internal/options": f_internal_options,
+  "internal/perf/event_loop_utilization": f_internal_perf_event_loop_utilization,
   "internal/perf/utils": f_internal_perf_utils,
   "internal/priority_queue": f_internal_priority_queue,
   "internal/process/permission": f_internal_process_permission,
@@ -211,7 +221,10 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/v8/startup_snapshot": f_internal_v8_startup_snapshot,
   "internal/validators": f_internal_validators,
   "internal/webidl": f_internal_webidl,
+  "internal/worker": f_internal_worker,
+  "internal/worker/io": f_internal_worker_io,
   "internal/worker/js_transferable": f_internal_worker_js_transferable,
+  "internal/worker/messaging": f_internal_worker_messaging,
   "net": f_net,
   "os": f_os,
   "path": f_path,
@@ -224,6 +237,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "timers/promises": f_timers_promises,
   "util": f_util,
   "util/types": f_util_types,
+  "worker_threads": f_worker_threads,
   "zlib": f_zlib,
 };
 

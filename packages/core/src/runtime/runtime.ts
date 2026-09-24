@@ -9,6 +9,7 @@ import { createForkIpcPipe, type IChildProcessHost, type IForkIpcHost } from "./
 import type { IFsWatchHost } from "./bindings/fs";
 import type { INetHost } from "./bindings/net";
 import type { IUdpHost } from "./bindings/udp";
+import type { IWorkerContext, IWorkerThreadHost } from "./bindings/worker";
 import { createModuleSystem } from "./cjs";
 import { createEsmLoader } from "./esm/loader";
 import { createEsmResolver } from "./esm/resolve";
@@ -44,6 +45,16 @@ export interface IRuntimeHost {
   netSync?: ISyscallClient;
   /** UDP's async half (incoming datagrams); without it, dgram methods return ENOSYS/ENOTCONN. */
   udp?: IUdpHost;
+  /** worker_threads: spawns/kills a real, separate Process Worker for `new Worker(...)`; without
+   *  it, startThread() reports ERR_WORKER_NOT_RUNNING. */
+  workerThread?: IWorkerThreadHost;
+  /** Set only when THIS runtime instance IS itself a worker_threads.Worker, not a top-level/
+   *  child_process spawn - workers/process/worker.ts reads its own IProcessInit.workerThread to
+   *  build this. Its absence means isMainThread: true. */
+  workerSelf?: IWorkerContext["self"];
+  /** Mints a globally-unique worker_threads threadId synchronously; without it, `new Worker(...)`
+   *  construction throws (see bindings/worker.ts's own comment on why this can't be async). */
+  mintThreadId?: () => number;
 }
 
 export interface IRuntimeOptions {
@@ -101,8 +112,15 @@ const createRuntime = (options: IRuntimeOptions) => {
     net: host.net,
     netSync: host.netSync,
     udp: host.udp,
+    workerThread: host.workerThread,
+    isMainThread: host.workerSelf === undefined,
+    workerSelf: host.workerSelf,
+    mintThreadId: host.mintThreadId,
   };
   const internalBinding = createInternalBinding(bindingCtx);
+  // A binding may need to call another binding (messaging needs symbols' own no_message_symbol) -
+  // this closes that forward reference now that internalBinding itself exists.
+  bindingCtx.internalBinding = internalBinding;
   loader = createBuiltinLoader({ process, internalBinding, primordials });
   const { requireBuiltin } = loader;
 
@@ -385,6 +403,12 @@ const createRuntime = (options: IRuntimeOptions) => {
   return {
     process, loop, loader, globals, globalObject, modules, runMain, runEval, runRepl, stdout, stderr,
     reportUnhandledRejection, reportRejectionHandled,
+    // Exposed for workers/process/runWorkerThread.ts: a worker thread's own bootstrap needs
+    // internalBinding('messaging').initReceivedPort() to fix up a MessagePort that arrived over a
+    // real postMessage transfer from the parent's realm (publicPort/mainThreadPort in the real
+    // vendored LOAD_SCRIPT message) before handing it to guest code - see messaging.ts's PLATFORM
+    // GAP comment. Nothing else outside this file needs raw binding access.
+    internalBinding,
   };
 };
 

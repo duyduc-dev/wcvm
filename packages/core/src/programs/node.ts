@@ -60,6 +60,8 @@ const node: Program = async (ctx) => {
       net: ctx.net,
       netSync: ctx.netSync,
       udp: ctx.udp,
+      workerThread: ctx.workerThread,
+      mintThreadId: ctx.mintThreadId,
     },
   });
 

@@ -4,6 +4,7 @@ import type { IChildProcessHost, IForkIpcHost } from "../runtime/bindings/childP
 import type { IFsWatchHost } from "../runtime/bindings/fs";
 import type { INetHost } from "../runtime/bindings/net";
 import type { IUdpHost } from "../runtime/bindings/udp";
+import type { IWorkerThreadHost } from "../runtime/bindings/worker";
 import type { IStdinHost } from "../runtime/runtime";
 
 export interface IProgramContext {
@@ -35,6 +36,12 @@ export interface IProgramContext {
   netSync?: ISyscallClient;
   /** UDP's async half (incoming datagrams); undefined outside a real process worker. */
   udp?: IUdpHost;
+  /** Backs `node`'s worker_threads.Worker; undefined outside a real process worker. */
+  workerThread?: IWorkerThreadHost;
+  /** Mints a globally-unique worker_threads threadId synchronously (no kernel round trip - see
+   *  workers/process/messages.ts's IProcessInit.threadIdCounterSab); undefined outside a real
+   *  process worker. */
+  mintThreadId?: () => number;
 }
 
 /** Resolves to the process exit status. */

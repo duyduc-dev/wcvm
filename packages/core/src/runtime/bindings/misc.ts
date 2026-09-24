@@ -67,11 +67,6 @@ export const createConfigBinding = () => ({
   isDebugBuild: false,
 });
 
-
-export const createMessagingBinding = () => ({
-  DOMException: (globalThis as { DOMException?: unknown }).DOMException,
-});
-
 export interface IOsContext {
   env: () => Record<string, string | undefined>;
 }

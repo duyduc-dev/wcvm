@@ -456,7 +456,142 @@ Done and verified in real Chromium:
     hang) - the actual cross-Process-Worker postMessage relay can't be exercised in the
     single-threaded Vitest suite. A full, clean `pnpm exec playwright test` run (91/91) and
     `vitest run` (574/574) confirm no regressions.
-- Tests: 574 Vitest + 91 Playwright (Chromium). See "Verifying".
+- `worker_threads` (real Node code, `internal/worker.js`/`internal/worker/io.js`/`internal/worker/
+  messaging.js`/`internal/locks.js`, plus real vendored `internal/perf/event_loop_utilization` and
+  `internal/error_serdes`): a `new Worker(...)` is another real, separate Process Worker
+  (`kernel/processes.ts`'s existing `spawn()`, the same subtree-kill/`parentPid` machinery
+  `child_process` already gets), reached over a REAL, native `MessageChannel`
+  (`bindings/worker.ts`'s `WorkerHandle` mints it locally, synchronously, at `new Worker()`
+  construction time - `.messagePort` is available immediately, matching real Node's own contract).
+  `pid` is kernel-minted (own range, `WORKER_THREAD_PID_START = 4_000_000_000`) since it names a
+  real Process Worker slot the kernel tracks, same as any other spawn; `threadId` is a genuinely
+  separate small monotonic counter starting at 1 (0 reserved for the main thread) - but unlike
+  `pid`, it CANNOT be kernel-minted (async, a round trip) because real vendored `internal/worker.js`
+  reads `this.threadId` synchronously, immediately after constructing its own native handle, before
+  ever calling `startThread()`. Solved with a SharedArrayBuffer-backed atomic counter
+  (`IProcessInit.threadIdCounterSab`, handed to every spawned process, not just worker threads
+  themselves, since any process might spawn its own nested one) and a plain `Atomics.add` -
+  the same shape real Node's own `internal/worker.js` already uses for its own `cwdCounter`.
+  `filename`/`doEval`/`workerData` are deliberately absent from the wire protocol between
+  `bindings/worker.ts` and the kernel: real vendored `internal/worker.js` already sends the real
+  LOAD_SCRIPT message carrying them over `.messagePort` *before* it ever calls `startThread()` -
+  real `MessagePort` buffering means the not-yet-alive child still receives it once it starts
+  listening, so nothing here needs to duplicate that wire format. `runtime/bindings/worker.ts`'s
+  `getEnvMessagePort()`, `internalBinding('locks')` (`bindings/locks.ts`, wrapping the real, native
+  `navigator.locks` Web Locks API directly - Node's own `Lock`/`LockManager` are themselves modeled
+  on the same spec) and `internalBinding('util').constructSharedArrayBuffer` round out the binding
+  surface real vendored code needs. `workers/process/runWorkerThread.ts` is this project's own
+  hand-written bootstrap for a worker thread's process (no `internal/main/worker_thread.js` to
+  vendor - Node's own bootstrap entry scripts are tightly coupled to its C++ startup order, the same
+  reason `runtime.ts` already hand-writes `runMain`/`runEval`/`runRepl` instead of vendoring theirs).
+  Not implemented (no browser primitive exists at all): `cpuUsage()`, `startCpuProfile()`/
+  `stopCpuProfile()`, `startHeapProfile()`/`stopHeapProfile()`, `getHeapSnapshot()` (V8 Inspector/
+  profiler access) - report a clean, honest rejection instead of pretending; `getHeapStatistics()`
+  is a best-effort approximation from the non-standard `performance.memory`, not real V8 heap data.
+  `resourceLimits` are accepted and reported back but never enforced - no way to configure a
+  Worker's own V8 heap limits from plain JS either. An uncaught exception inside a worker thread
+  ends it with an ordinary nonzero exit code, not real Node's own `'error'` event on the parent:
+  that needs `internal/error_serdes.js`'s `serializeError()`/`deserializeError()`, which need real
+  `v8.serialize()`/`v8.deserialize()` - deliberately left `notImplemented` (`runtime/shims.ts`'s
+  `v8Shim`), the same scope decision `fork()`'s own "advanced" IPC serialization mode already made.
+  No real stdio piping via `options.stdout`/`options.stderr` (`internal/worker/io.js`'s own
+  `ReadableWorkerStdio`/`WritableWorkerStdio` aren't wired up) - a worker thread's own stdout/stderr
+  instead flows straight through the SAME `child:stdout`/`child:stderr` → kernel → parent-process
+  path a real `child_process`'s output already uses, which happens to land in the right place
+  anyway: real Node's own DEFAULT (`options.stdout`/`stderr`: `false`) already pipes a worker's
+  stdout/stderr straight to the parent's own, so an unpiped worker thread's output ends up
+  observably correct without needing the full `ReadableWorkerStdio` machinery - only the OPT-IN
+  "capture it as a readable stream on `w.stdout`/`w.stderr` instead" mode is missing.
+  - **A genuine, three-layer platform gap, found and fixed in this order (real Chromium, not
+    Node/Vitest - see "Hard-won gotchas" for why worker_threads can't be exercised under Vitest at
+    all)**: real Node's native `MessagePort` C++ binding (1) calls `port[onInitSymbol]()`
+    automatically during construction, which `internal/worker/io.js` relies on to set up
+    `this[kEvents]` etc.; (2) provides `.ref()`/`.unref()`/`.hasRef()` (event-loop keep-alive); and
+    (3) is written so real Node's native message delivery calls a specific, well-known hook
+    (`port[Symbol.for('nodejs.internal.kHybridDispatch')](data, type)`) that
+    `internal/event_target.js`'s own `EventTarget`/`NodeEventTarget` - a COMPLETE, independent,
+    hand-written reimplementation, not `extends` the real platform `EventTarget` at all - exposes
+    for exactly this purpose. A real platform `MessagePort` (browser or otherwise) has NONE of the
+    three: (1) crashed `new Worker(...)` immediately (`.on()` reading `this[kEvents]` off
+    `undefined`); (2) crashed one step later (`setupPortReferencing()`'s own `port.unref()` calling
+    a method that didn't exist); (3), once (1) and (2) were fixed, caused no crash at all - just
+    total silence: a worker posted a message, exited cleanly, and the parent's own
+    `.on('message', ...)` handler simply never ran, since `.addEventListener()`/`.on()` calls
+    after the swap only ever write to `NodeEventTarget`'s own private, JS-only listener store,
+    which the browser's real, native message dispatch has no way to know exists or read from.
+    Fixed by, in `runtime/bindings/messaging.ts`: wrapping `MessageChannel`'s own constructor to
+    call `oninit()` on both resulting ports; installing real `ref()`/`unref()`/`hasRef()` directly
+    on the global `MessagePort.prototype`, backed by `EventLoop.ref()` exactly like this file's own
+    `broadcastChannel()` helper already does per-handle; and registering a REAL, native
+    `addEventListener('message'/'messageerror', ...)` (captured at this factory's own top, before
+    `internal/worker/io.js` - which requires this binding first thing - has had any chance to swap
+    the prototype) that manually calls `port[kHybridDispatch](data, type)` on every real incoming
+    message, letting `internal/worker/io.js`'s own `[kCreateEvent]` override build the proper event
+    object and `NodeEventTarget`'s own dispatch invoke whatever real listeners guest/vendored code
+    registered. A port that arrives via a REAL transfer (crossing into a different realm) needs
+    this done AGAIN there - `oninit()`'s effects are plain per-object JS state that doesn't survive
+    a transfer - so `initReceivedPort()` is exposed for the few known bootstrap sites
+    (`runWorkerThread.ts`'s own `publicPort`/`mainThreadPort`) to call explicitly; for the
+    unbounded, unknowable set of OTHER ports that can arrive later (e.g. vendored
+    `internal/worker/messaging.js`'s own `REGISTER_MAIN_THREAD_PORT` handling relaying a THIRD
+    worker's own port through a second one - no call site of ours ever sees that one arrive), the
+    native bridge listener itself recursively re-initializes every port in `event.ports` on any
+    message it sees, which is safe because it makes every such port self-bridging too - this
+    covers the whole transitive closure automatically, confirmed by a worker-thread-spawns-
+    worker-thread test that only started passing once this recursive step was added.
+  - **A second, unrelated real bug, found via `w.on('exit', (code) => process.exit(1))`**: real
+    vendored `internal/worker.js`'s `Worker` class `extends EventEmitter` (plain, old-style, NOT
+    `NodeEventTarget`) - `this.emit('exit', code)` has none of `[kHybridDispatch]`'s own
+    try/catch-and-route-to-`emitUncaughtException` behavior, so `process.exit()`'s thrown
+    `ProcessExit` sentinel, called synchronously from inside a guest `'exit'`/`'online'`/`'error'`
+    listener, propagated all the way back up through `WorkerRouter.dispatch()` to whatever raw,
+    native event actually triggered the dispatch (a `child:exit` `self.onmessage` message, entirely
+    outside this runtime's own `EventLoop.callback()`-wrapped call stack) - escaping as a genuine
+    uncaught exception at the WHOLE PROCESS's own top level instead of just setting the exit code.
+    Symptom: the KERNEL WORKER itself appeared to crash (the exception bubbled: Process Worker →
+    Kernel Worker's own `onerror` not calling `preventDefault()` → the host page, arriving as a
+    bare `"null"` `pageerror` three layers removed from where it actually happened) - the exact
+    same root cause as this project's own pre-existing "`ProcessExit` from inside a `readline`
+    `'line'`/`'close'` listener" gotcha, just a different call site. Fixed by deferring
+    `WorkerRouter`'s own event dispatch through `EventLoop.post()` (`loop.post(() => this.dispatch
+    (event))`) - the same "schedule JS work from outside a loop callback" mechanism an fs
+    completion already uses - so a synchronous `process.exit()` inside any worker-thread event
+    listener unwinds through a call stack `EventLoop.callback()` properly wraps and routes to
+    `runtime.ts`'s own `handleUncaught`.
+  - **A third, smaller bug**: a worker thread's own `console.log` output never reached anywhere at
+    all (silently dropped) - `child:stdout`/`child:stderr` always routed to the real `child_process`
+    `ChildRouter`, which doesn't recognize a worker thread's own kernel-minted pid as one of its
+    own tracked children. Fixed in `workers/process/worker.ts` by checking the same
+    `workerThreadChildPids` set `child:exit` routing already uses, and forwarding straight through
+    as if it were this process's own stdout/stderr when it's a worker thread's.
+  - Also found, and fixed the same way as the analogous `startThread()`-with-no-host path already
+    had: `bindings/worker.ts`'s own `ERR_WORKER_NOT_RUNNING` fallback used to pass a reason string
+    to a real vendored error class (`errors[customErr](customErrReason)`) that takes ZERO
+    constructor arguments - real vendored `internal/errors.js`'s own error-class machinery asserts
+    the passed argument count against the message template's declared arity and throws
+    `ERR_INTERNAL_ASSERTION` on a mismatch, which (via the same escaping-uncaught-exception path
+    above) also crashed the whole realm instead of ever reaching the intended `'error'` event.
+  - `worker_threads` genuinely cannot be exercised under Vitest/Node at all, only real Chromium
+    (see "Hard-won gotchas"): real Node's own internal `node:internal/per_context/messageport`
+    wiring - active in every plain Node process, Vitest included, regardless of whether the script
+    under test ever touches `worker_threads` itself - conflicts with this sandbox's own
+    `MessagePort.prototype` mutations and the real, native `worker_threads.Worker` construction
+    path outright crashes with an unrelated internal error the moment `new Worker(...)` is
+    constructed. `kernel/processes.test.ts`'s own `"worker_threads routing"` describe block still
+    covers the KERNEL-side wire protocol (pid minting, threadId echoing, the shared
+    `threadIdCounterSab` reaching every spawn, the never-handed-off port being closed on a failed
+    spawn) with plain object fakes, no real `MessagePort` involved.
+  - Verified: `kernel/processes.test.ts`'s `"worker_threads routing"` describe block (4 Vitest). 6
+    new Playwright tests in real Chromium (message exchange over a real MessageChannel; `workerData`
+    round-tripping; `new Worker(file)` from the VFS; `w.terminate()` actually stopping a still-
+    running worker; an uncaught exception ending the worker with exit 1 and its stderr correctly
+    piped to the parent's own; a worker thread spawning its own nested worker thread) - none of
+    this (real `MessagePort`, real cross-Process-Worker structured clone/transfer, the whole
+    three-layer platform gap above) can be exercised outside Chromium. A full, clean
+    `pnpm exec playwright test` run (97/97, `--repeat-each=3` on the new tests specifically to rule
+    out flakiness from the async, multi-hop event dispatch involved) and `vitest run` (578/578)
+    confirm no regressions.
+- Tests: 578 Vitest + 97 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
@@ -717,6 +852,48 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   treats success and failure as mutually exclusive outcomes for one `write()`, and doing both left
   a `zlib.gunzip()` callback seeing neither a clean error nor a clean result. Fixed with a
   two-armed `.then(onSuccess, onFailure)` so only one path ever executes.
+- A real platform `MessagePort`/`MessageChannel` (browser or Node's own global ones) has NONE of
+  three things real Node's native C++ `MessagePort` binding provides for free: it never calls
+  `port[onInitSymbol]()` during construction (`internal/worker/io.js`'s own `oninit()`, which sets
+  up the `NodeEventTarget` state `.on()` needs, so it must be called manually - see `worker_threads`
+  in "Status"); it has no `.ref()`/`.unref()`/`.hasRef()` at all (event-loop keep-alive, same
+  concept a timer already has - install them directly on the global prototype); and, the subtlest
+  one, its real native message delivery has no way to reach `internal/event_target.js`'s own
+  `NodeEventTarget` (a COMPLETE, independent, hand-written reimplementation, not `extends` the real
+  platform `EventTarget` at all) - `.on()`/`.addEventListener()` calls after `internal/worker/io.js`'s
+  own prototype swap just write to a private, JS-only listener store nothing native ever reads, so
+  a message can be sent, received, and STILL never reach a registered listener, with no crash or
+  error anywhere to point at the cause. Real Node's own native binding cooperates with
+  `NodeEventTarget` by calling a specific, well-known hook on every incoming message
+  (`port[Symbol.for('nodejs.internal.kHybridDispatch')](data, type)`) - bridge it yourself with a
+  REAL, native `addEventListener()` (captured before anything swaps the prototype) that calls this
+  same hook manually. A port that crosses a REAL transfer needs ALL of this done again, in the
+  receiving realm - `oninit()`'s effects don't survive a transfer - and since you can't always
+  predict every site a transferred port might arrive at (vendored code can itself relay one deeper
+  into its own protocol, invisibly), make the bridge itself recursively re-initialize every port
+  riding along in any message it already sees (`event.ports`), not just the ones you know to expect.
+- `worker_threads` cannot be exercised under Vitest/Node at all - real Node's own internal
+  `node:internal/per_context/messageport` wiring is active in every plain Node process regardless
+  of whether the script under test ever touches `worker_threads` itself, and conflicts outright
+  with this sandbox's own `MessagePort.prototype` mutations the moment `new Worker(...)` is
+  constructed. Test the wire protocol (kernel routing, pid/threadId minting) with plain object
+  fakes under Vitest as usual; anything touching a real `MessagePort` is Chromium-only, more so
+  than the project's general "workers/SAB/`eval`" rule already implies.
+- Real Node's vendored `internal/worker.js` `Worker` class `extends EventEmitter` (plain,
+  old-style - NOT `NodeEventTarget`), so `this.emit('exit'/'error'/'online', ...)` has none of
+  `NodeEventTarget`'s own try/catch-and-route-to-`emitUncaughtException` protection. A synchronous
+  `process.exit()` inside a guest listener for one of those events throws `ProcessExit` straight
+  through whatever raw, native event actually triggered the dispatch (e.g. a `child:exit`
+  `self.onmessage` message) - a call stack entirely outside this runtime's own
+  `EventLoop.callback()` wrapping - escaping as a genuine uncaught exception at the whole
+  PROCESS's own top level instead of just setting the exit code (and, since neither
+  `kernel/processes.ts`'s nor `bridgeHandler.ts`'s own `onerror` listeners call
+  `preventDefault()`, bubbling three layers up to a bare, unhelpful `"null"` `pageerror` on the
+  host page). Same root cause as the pre-existing `readline` `'line'`/`'close'` listener gotcha
+  above, different call site: defer any dispatch that could reach guest code with
+  `EventLoop.post()` (`loop.post(() => dispatch(event))`) - the same "schedule JS work from
+  outside a loop callback" mechanism an fs completion callback already uses - so the throw unwinds
+  through a call stack that's actually wrapped and routed to `runtime.ts`'s own `handleUncaught`.
 
 ## Conventions
 
@@ -739,6 +916,6 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
 
 - `.github/workflows/deploy-docs.yml` builds `apps/docs`, which does not exist in this tree (it will
   fail on push). `PUBLISHING.md` is outdated (still says `duckwc`).
-- The process worker bundle is ~1.9 MB (acorn added real weight for ESM parsing, and vendored
-  `zlib.js` some more) and every process parses it, even `echo`; split `node` into its own worker
-  entry if startup cost matters.
+- The process worker bundle is ~1.94 MB (acorn added real weight for ESM parsing, `zlib.js` and
+  `worker_threads`'s own vendored modules some more) and every process parses it, even `echo`;
+  split `node` into its own worker entry if startup cost matters.

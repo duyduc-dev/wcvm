@@ -110,6 +110,9 @@ const createUtilBinding = (ctx: IUtilContext) => ({
   privateSymbols: symbolTable(),
   shouldAbortOnUncaughtToggle: new Uint32Array(1),
   WeakReference,
+  // A real, native SharedArrayBuffer - this sandbox's whole sync-syscall bridge is already built
+  // on real ones, so there's nothing to construct beyond the platform constructor itself.
+  constructSharedArrayBuffer: (byteLength: number) => new SharedArrayBuffer(byteLength),
   getPromiseDetails: () => [K_PENDING, undefined],
   getProxyDetails: () => undefined,
   getCallerLocation: () => undefined,
