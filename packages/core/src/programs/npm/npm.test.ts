@@ -202,6 +202,40 @@ describe("npm install", () => {
     expect(r.stderr).toMatch(message);
   });
 
+  it("flat overrides replace every transitive dependency on a name - the way to swap in a wasm build", async () => {
+    const t = setup(
+      {
+        vite: { versions: { "7.1.0": { dependencies: { esbuild: "^0.25.0", rollup: "^4.0.0" } } } },
+        plugin: { versions: { "1.0.0": { dependencies: { esbuild: "^0.24.0" } } } },
+        esbuild: { versions: { "0.25.1": { optionalDependencies: {} } } },
+        "esbuild-wasm": { versions: { "0.25.1": {} } },
+        rollup: { versions: { "4.2.0": {} } },
+        "@rollup/wasm-node": { versions: { "4.2.0": {} } },
+      },
+      {
+        "/app/package.json": pkg(
+          { vite: "^7.0.0", plugin: "1.0.0" },
+          {
+            devDependencies: { "wasm-rollup": "npm:@rollup/wasm-node@^4.0.0" },
+            overrides: { esbuild: "npm:esbuild-wasm@^0.25.0", rollup: "$wasm-rollup", "vite@7": "7.0.0", plugin: { esbuild: "1" } },
+          },
+        ),
+      },
+    );
+    const r = await t.run(["install"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe(
+      'npm warn ignoring override "vite@7": only the flat "name": "spec" form is supported\n' +
+        'npm warn ignoring override "plugin": only the flat "name": "spec" form is supported\n',
+    );
+    // One esbuild-wasm serves both vite's ^0.25 and plugin's ^0.24 - the override applies to every edge.
+    expect(t.json("/app/node_modules/esbuild/package.json")).toMatchObject({ name: "esbuild-wasm", version: "0.25.1" });
+    expect(t.json("/app/node_modules/rollup/package.json")).toMatchObject({ name: "@rollup/wasm-node", version: "4.2.0" });
+    expect(t.fs.exists("/app/node_modules/vite/node_modules")).toBe(false);
+    expect(t.fs.exists("/app/node_modules/plugin/node_modules")).toBe(false);
+    expect(t.requests.some((url) => url.endsWith("/esbuild") || url.endsWith("/rollup"))).toBe(false);
+  });
+
   it("reports install scripts it didn't run", async () => {
     const t = setup({ native: { versions: { "1.0.0": { hasInstallScript: true } } } }, { "/app/package.json": pkg({ native: "1" }) });
     const r = await t.run(["install"]);

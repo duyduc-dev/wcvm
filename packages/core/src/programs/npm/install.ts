@@ -229,8 +229,33 @@ const prune = (fs: IFsClient, node: INode) => {
   }
 };
 
+/**
+ * package.json `overrides`, npm's flat form only: `"name": "spec"` replaces every TRANSITIVE
+ * dependency on `name` (the project's own direct dependencies keep what they say), and `"$name"`
+ * means "whatever the project's own dependency on `name` says". The way to swap a native package
+ * for its wasm build everywhere in the tree - `"esbuild": "npm:esbuild-wasm@^0.25.0"`,
+ * `"rollup": "npm:@rollup/wasm-node@^4"` - which an alias at the root alone can't do: a dependency
+ * on `esbuild` doesn't accept a copy whose real name is `esbuild-wasm`, so it would get the native
+ * one nested instead (real npm behaves the same). Nested (`"vite": { "esbuild": ... }`) and
+ * versioned-key (`"esbuild@0.25"`) forms are warned about and ignored.
+ */
+const readOverrides = (pkg: Record<string, any>, warn: (message: string) => void): Map<string, string> => {
+  const overrides = new Map<string, string>();
+  const own = { ...pkg.devDependencies, ...pkg.optionalDependencies, ...pkg.dependencies } as Record<string, string>;
+  for (const [key, value] of Object.entries((pkg.overrides ?? {}) as Record<string, unknown>)) {
+    if (typeof value !== "string" || key.indexOf("@", key.startsWith("@") ? 1 : 0) !== -1) {
+      warn(`ignoring override "${key}": only the flat "name": "spec" form is supported`);
+      continue;
+    }
+    const spec = value.startsWith("$") ? own[value.slice(1)] : value;
+    if (spec === undefined) warn(`ignoring override "${key}": ${value} is not one of this project's own dependencies`);
+    else overrides.set(key, spec);
+  }
+  return overrides;
+};
+
 /** Breadth-first resolution of the whole tree (see the header comment for the layout rules). */
-const resolveTree = async (root: INode, rootRequests: IRequest[], registry: IRegistryClient, warn: (message: string) => void): Promise<INode[]> => {
+const resolveTree = async (root: INode, rootRequests: IRequest[], registry: IRegistryClient, warn: (message: string) => void, overrides: Map<string, string>): Promise<INode[]> => {
   // Packuments are requested as soon as a name is seen, so the network works ahead of the
   // (sequential, hence deterministic) placement below; a failure is reported where it's awaited.
   const prefetch = (request: IRequest) => {
@@ -242,6 +267,7 @@ const resolveTree = async (root: INode, rootRequests: IRequest[], registry: IReg
   };
   rootRequests.forEach(prefetch);
 
+  const overridden = (requests: IRequest[]) => requests.map((r) => (overrides.has(r.name) ? { ...r, spec: overrides.get(r.name)! } : r));
   const queue = [...rootRequests];
   const all: INode[] = [];
   while (queue.length) {
@@ -266,7 +292,7 @@ const resolveTree = async (root: INode, rootRequests: IRequest[], registry: IReg
       const node: INode = { name, manifest, parent: host, children: new Map(), dir: join(host.dir, "node_modules", name), optional };
       host.children.set(name, node);
       all.push(node);
-      const next = requestsOf(node, manifest);
+      const next = overridden(requestsOf(node, manifest));
       next.forEach(prefetch);
       queue.push(...next);
     } catch (error) {
@@ -354,7 +380,7 @@ export const install = async ({ fs, cwd, registry, add, saveDev, warn }: IInstal
     ...requestsOf(root, { ...pkg, dependencies: { ...pkg.devDependencies, ...pkg.dependencies } }).filter((r) => !addedNames.has(r.name)),
   ];
 
-  const all = await resolveTree(root, rootRequests, registry, warn);
+  const all = await resolveTree(root, rootRequests, registry, warn, readOverrides(pkg, warn));
   const { extracted, installed } = await writeTree(fs, root, all, registry, warn);
   if (added.length) {
     saveAdded(pkg, root, added, saveDev);
