@@ -660,6 +660,33 @@ test.describe("node", () => {
       expect(r).toEqual({ code: 0, out: "1\n", err: "" });
     });
 
+    test("import() from a CommonJS module reaches ESM, builtins and node_modules, resolving from that module's own file", async ({ page }) => {
+      await writeFiles(page, {
+        "/app/lib/loader.js": `module.exports = async () => {
+          const esm = await import("./esm.mjs");
+          const path = await import("node:path");
+          const pkg = await import("pkg");
+          return [esm.x, esm.default, path.basename("/a/b.txt"), pkg.default.name];
+        };`,
+        "/app/lib/esm.mjs": "export const x = 'esm-x';\nexport default 'esm-default';\n",
+        "/app/node_modules/pkg/package.json": '{"name":"pkg","main":"index.js"}',
+        "/app/node_modules/pkg/index.js": "module.exports = { name: 'pkg-cjs' };",
+        "/app/main.js": "require('./lib/loader.js')().then((v) => console.log(v.join(' ')));",
+      });
+      const r = await spawn(page, "node", ["main.js"], "/app");
+      expect(r).toEqual({ code: 0, out: "esm-x esm-default b.txt pkg-cjs\n", err: "" });
+    });
+
+    test("import() from node -e resolves from the cwd, and a failing one rejects instead of vanishing", async ({ page }) => {
+      await writeFiles(page, { "/app/esm.mjs": "export const answer = 42;\n" });
+      const r = await spawn(page, "node", ["-e", `
+        import("./esm.mjs").then((m) => console.log("answer", m.answer));
+        import("./missing.mjs").catch((e) => console.log("rejected", e.code));
+      `], "/app");
+      expect(r.code).toBe(0);
+      expect(r.out.split("\n").filter(Boolean).sort()).toEqual(["answer 42", "rejected ERR_MODULE_NOT_FOUND"]);
+    });
+
     test("importing a CJS file from ESM: default is module.exports, named exports are its own keys", async ({ page }) => {
       await writeFiles(page, {
         "/lib.cjs": "module.exports = { a: 1, b: 2 };\n",
@@ -1421,12 +1448,10 @@ test.describe("npm install", () => {
     const used = await spawn(page, "node", ["-e", `
       console.log(require("greet")("world"));
       console.log(require("colors-lite").tag);
+      import("esm-only").then((m) => console.log("esm", m.answer));
     `], "/app");
     // greet's own ^2 of colors-lite is nested under it; the app's ^1 stays at the top.
-    expect(used).toEqual({ code: 0, out: "[hello world] colors@2\ncolors@1\n", err: "" });
-
-    await page.evaluate(() => (window as unknown as WcWindow).wc.fs.writeFile("/app/main.mjs", 'import { answer } from "esm-only"; console.log("esm", answer);'));
-    expect(await spawn(page, "node", ["main.mjs"], "/app")).toEqual({ code: 0, out: "esm 42\n", err: "" });
+    expect(used).toEqual({ code: 0, out: "[hello world] colors@2\ncolors@1\nesm 42\n", err: "" });
 
     const bin = await spawn(page, "node", ["node_modules/.bin/greet", "bin"], "/app");
     expect(bin).toEqual({ code: 0, out: "[hello bin] colors@2\n", err: "" });

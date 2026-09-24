@@ -8,7 +8,12 @@
 export type AnyNode = Record<string, unknown> & { type: string; start: number; end: number };
 
 export interface IAcorn {
-  Parser: { parse(input: string, options: { sourceType: "module"; ecmaVersion: "latest" }): AnyNode };
+  Parser: {
+    parse(
+      input: string,
+      options: { sourceType: "module" | "script"; ecmaVersion: "latest"; allowReturnOutsideFunction?: boolean; allowHashBang?: boolean },
+    ): AnyNode;
+  };
 }
 
 export class EsmSyntaxError extends Error {
@@ -21,6 +26,16 @@ export class EsmSyntaxError extends Error {
 export const parseModule = (acorn: IAcorn, source: string, filename: string): AnyNode => {
   try {
     return acorn.Parser.parse(source, { sourceType: "module", ecmaVersion: "latest" });
+  } catch (error) {
+    throw new EsmSyntaxError(`${filename}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+/** A CommonJS module's (or `node -e`'s) source: a script, where a top-level `return` is legal
+ *  (the CJS wrapper makes it a function body) and a leading `#!` line is allowed. */
+export const parseScript = (acorn: IAcorn, source: string, filename: string): AnyNode => {
+  try {
+    return acorn.Parser.parse(source, { sourceType: "script", ecmaVersion: "latest", allowReturnOutsideFunction: true, allowHashBang: true });
   } catch (error) {
     throw new EsmSyntaxError(`${filename}: ${error instanceof Error ? error.message : String(error)}`);
   }

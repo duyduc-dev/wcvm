@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestLoader } from "../testing";
-import { dynamicImportCalls, EsmSyntaxError, parseModule, staticImportSpecifiers } from "./ast";
+import { dynamicImportCalls, EsmSyntaxError, parseModule, parseScript, staticImportSpecifiers } from "./ast";
+import { DYNAMIC_IMPORT_BRIDGE, rewriteModule } from "./rewrite";
 
 const acorn = createTestLoader().require("internal/deps/acorn/acorn/dist/acorn");
 const parse = (source: string) => parseModule(acorn, source, "/test.mjs");
@@ -72,3 +73,24 @@ describe("dynamicImportCalls", () => {
     expect(dynamicImportCalls(parse(`import a from './x.js';`))).toEqual([]);
   });
 });
+
+describe("parseScript (CommonJS / node -e source)", () => {
+  it("accepts what the CJS wrapper makes legal: a top-level return and a #! line", () => {
+    expect(parseScript(acorn, "#!/usr/bin/env node\nif (x) return;\nmodule.exports = 1;", "/cli.js").type).toBe("Program");
+  });
+
+  it("rejects module-only syntax, with the filename", () => {
+    expect(() => parseScript(acorn, "import x from 'y';", "/a.js")).toThrow(/a\.js/);
+  });
+
+  it("finds a script's import() calls, which rewrite to the same bridge an ES module's use", () => {
+    const source = `const load = () => import("./esm.mjs");\nimport(name).then(use);\n// import("in a comment") is not a call\n`;
+    const program = parseScript(acorn, source, "/pkg/index.js");
+    expect(dynamicImportCalls(program)).toHaveLength(2);
+    const rewritten = rewriteModule(source, program, () => "unused", "/pkg/index.js");
+    expect(rewritten).toBe(
+      `const load = () => ${DYNAMIC_IMPORT_BRIDGE}("./esm.mjs", "/pkg/index.js");\n${DYNAMIC_IMPORT_BRIDGE}(name, "/pkg/index.js").then(use);\n// import("in a comment") is not a call\n`,
+    );
+  });
+});
+

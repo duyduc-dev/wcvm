@@ -17,7 +17,7 @@
 
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
-import { EsmSyntaxError, parseModule, type IAcorn } from "./ast";
+import { EsmSyntaxError, parseModule, parseScript, type IAcorn } from "./ast";
 import { createEsmResolver, EsmResolveError, type EsmFormat, type IEsmResolveContext } from "./resolve";
 import { DYNAMIC_IMPORT_BRIDGE, rewriteModule } from "./rewrite";
 
@@ -137,7 +137,32 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
     });
   };
 
-  return { importEntry, formatOfPath: resolver.formatOfPath };
+  /**
+   * A CommonJS module's (or `node -e`'s) own `import(...)` calls, rewritten to the same bridge an
+   * ES module's use - left alone, they'd reach the browser's native import(), which can't resolve
+   * a bare specifier or a VFS path at all (and fails silently: nothing refs the event loop while it
+   * rejects). `selfPath` is what a relative specifier resolves against: the module's own file, or
+   * `<cwd>/[eval]`. Source acorn can't parse is returned untouched, for eval to report (or run).
+   */
+  const rewriteScript = (source: string, selfPath: string): string => {
+    let program;
+    try {
+      program = parseScript(ctx.acorn, source, selfPath);
+    } catch {
+      return source;
+    }
+    installBridge();
+    return rewriteModule(
+      source,
+      program,
+      () => {
+        throw new Error("a script has no static imports");
+      },
+      selfPath,
+    );
+  };
+
+  return { importEntry, rewriteScript, formatOfPath: resolver.formatOfPath };
 };
 
 export { EsmResolveError, EsmSyntaxError };

@@ -17,6 +17,9 @@ export interface ICjsParams {
   globals: Record<string, unknown>;
   /** Extra condition names besides node/require/default. */
   conditions?: string[];
+  /** Rewrites a module's `import(...)` calls so they resolve from `selfPath` (runtime/esm/
+   *  loader.ts's rewriteScript); only ever called for source that might contain one. */
+  rewriteDynamicImports?: (source: string, selfPath: string) => string;
 }
 
 class Module {
@@ -43,7 +46,11 @@ const codedError = (code: string, message: string, extra: object = {}) =>
 
 const MODULE_EXTENSIONS = [".js", ".json"];
 
-const createModuleSystem = ({ fs, path, builtins, process, globals, conditions = [] }: ICjsParams) => {
+// A cheap pre-check, so the parser only ever runs for source that might contain an import():
+// false positives (in a string or comment) just cost a parse that finds nothing to rewrite.
+const MIGHT_IMPORT = /\bimport\s*\(/;
+
+const createModuleSystem = ({ fs, path, builtins, process, globals, conditions = [], rewriteDynamicImports }: ICjsParams) => {
   const cache: Record<string, Module> = Object.create(null);
   const conditionSet = new Set(["node", "require", "module-sync", "default", ...conditions]);
   const decoder = new TextDecoder();
@@ -248,8 +255,9 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
   const globalNames = Object.keys(globals);
   const globalValues = globalNames.map((name) => globals[name]);
 
-  const compile = (source: string, filename: string) => {
-    const body = source.startsWith("#!") ? `//${source}` : source;
+  const compile = (source: string, filename: string, selfPath = filename) => {
+    const rewritten = rewriteDynamicImports && MIGHT_IMPORT.test(source) ? rewriteDynamicImports(source, selfPath) : source;
+    const body = rewritten.startsWith("#!") ? `//${rewritten}` : rewritten;
     // The trailing sourceURL keeps stack traces pointing at the real filename.
     const wrapper = `(function (exports, require, module, __filename, __dirname, ${globalNames.join(", ")}) {${body}\n})\n//# sourceURL=${filename}`;
     return (0, eval)(wrapper) as (...args: unknown[]) => void;
@@ -333,7 +341,7 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
       module.paths = nodeModulesPaths(dir);
       module.require = (id) => load(id, module);
       mainModule = module;
-      compile(source, "[eval]").call(
+      compile(source, "[eval]", filename).call(
         module.exports,
         module.exports,
         makeRequire(module),

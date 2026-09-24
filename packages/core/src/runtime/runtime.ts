@@ -262,6 +262,9 @@ const createRuntime = (options: IRuntimeOptions) => {
     builtins: loader,
     process,
     globals: moduleGlobals,
+    // Only reached for source that might contain an import() - see cjs.ts - so a script that
+    // never uses one still never pays to load acorn.
+    rewriteDynamicImports: (source, selfPath) => getEsmLoader().rewriteScript(source, selfPath),
   });
 
   // ---- lifecycle ---------------------------------------------------------------
