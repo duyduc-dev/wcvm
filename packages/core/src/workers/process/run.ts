@@ -5,6 +5,7 @@ import type { IChildProcessHost, IForkIpcHost } from "../../runtime/bindings/chi
 import type { IFsWatchHost } from "../../runtime/bindings/fs";
 import type { INetHost } from "../../runtime/bindings/net";
 import type { IUdpHost } from "../../runtime/bindings/udp";
+import type { IWorkerThreadHost } from "../../runtime/bindings/worker";
 import type { IStdinHost } from "../../runtime/runtime";
 
 export type StdStream = "stdout" | "stderr";
@@ -36,6 +37,10 @@ export interface IRunParams {
   netSync?: ISyscallClient;
   /** See IProgramContext.udp. */
   udp?: IUdpHost;
+  /** See IProgramContext.workerThread. */
+  workerThread?: IWorkerThreadHost;
+  /** See IProgramContext.mintThreadId. */
+  mintThreadId?: () => number;
 }
 
 const EXIT_COMMAND_NOT_FOUND = 127;
@@ -84,6 +89,8 @@ const runProcess = async (params: IRunParams): Promise<number> => {
       net: params.net,
       netSync: params.netSync,
       udp: params.udp,
+      workerThread: params.workerThread,
+      mintThreadId: params.mintThreadId,
       stdout: (data) => write("stdout", toBytes(data)),
     });
   } catch (error) {

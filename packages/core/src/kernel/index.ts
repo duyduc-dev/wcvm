@@ -70,6 +70,11 @@ const FETCHER_FS_CLIENT_ID = -1;
 // processes.ts would catch a collision regardless.
 const SYNC_PID_START = 3_000_000_000;
 
+// Pids for worker_threads.Worker children: a plain counter too, in its own range well clear of
+// every other scheme above (child_process's, execSync/spawnSync's) - same "workers.has(pid)
+// would catch a real collision regardless" reasoning.
+const WORKER_THREAD_PID_START = 4_000_000_000;
+
 const createKernelHost = async ({
   createFsWorker,
   createProcessWorker,
@@ -170,6 +175,28 @@ const createKernelHost = async ({
     allocatePid: () => nextSyncPid++,
   });
 
+  // worker_threads' own pid numbering for its Process Worker (kernel-minted, same "workers.has()
+  // would catch a real collision regardless" reasoning as SYNC_PID_START above).
+  let nextWorkerThreadPid = WORKER_THREAD_PID_START;
+  const mintWorkerThreadPid = () => nextWorkerThreadPid++;
+
+  // worker_threads' own small, monotonic threadId numbering - a genuinely separate namespace from
+  // pid (real Node's own threadId and OS pid are different things too), starting at 1 (0 is
+  // reserved for the main thread - see bindings/worker.ts's isMainThread/threadId). Unlike pid,
+  // this must be available SYNCHRONOUSLY, the instant `new Worker()` is constructed - real
+  // vendored internal/worker.js reads `this.threadId` immediately after constructing its own
+  // native handle (before ever calling startThread()), so a kernel round trip (like pid's) is too
+  // late. A single SharedArrayBuffer-backed atomic counter, handed to every process at spawn time
+  // (workers/process/messages.ts's IProcessInit.threadIdCounterSab), lets bindings/worker.ts's
+  // WorkerHandle mint one with a plain Atomics.add - no IPC needed, globally unique across the
+  // whole process tree regardless of which process is spawning - the same shape real Node's own
+  // internal/worker.js already uses for `cwdCounter`. Confirmed via real Chromium: without this,
+  // `this.threadId` reads the placeholder value at construction time, registering
+  // internal/worker/messaging.js's own mainThreadPort under the wrong key, so destroyMainThreadPort()
+  // later throws "Cannot read properties of undefined (reading 'close')" the moment the worker exits.
+  const threadIdCounterSab = new SharedArrayBuffer(4);
+  new Uint32Array(threadIdCounterSab)[0] = 1;
+
   // `processes` isn't assigned until below either - same forward-reference trick as
   // kernelSyncServer above: `notify` is only ever called later, once a real net.Server.listen()
   // elsewhere accepts a connection or some data/close event actually fires. PREVIEW_PID is never
@@ -229,6 +256,8 @@ const createKernelHost = async ({
       send: (fromPid, fromPort, toPort, chunk) => netServer.udpSend(fromPid, fromPort, toPort, chunk),
       releasePid: (pid) => netServer.udpReleasePid(pid),
     },
+    mintWorkerThreadPid,
+    threadIdCounterSab,
   });
 
   return {

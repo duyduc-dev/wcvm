@@ -111,6 +111,13 @@
     "_http_outgoing": "builtin",
     "internal/freelist": "builtin",
     "_http_incoming": "builtin",
-    "zlib": "builtin"
+    "zlib": "builtin",
+    "worker_threads": "builtin",
+    "internal/worker": "builtin",
+    "internal/perf/event_loop_utilization": "builtin",
+    "internal/worker/io": "builtin",
+    "internal/worker/messaging": "builtin",
+    "internal/error_serdes": "builtin",
+    "internal/locks": "builtin"
   }
 }

@@ -1,5 +1,5 @@
 import type { KernelMessage } from "../bridges/models";
-import type { ChildEvent, IProcessInit, ProcessEvent } from "../workers/process/messages";
+import type { ChildEvent, IProcessInit, IWorkerThreadInit, ProcessEvent } from "../workers/process/messages";
 import type { NetKernelEvent, UdpKernelEvent } from "./netServer";
 
 /** The subset of `Worker` the kernel needs, so tests can substitute one. */
@@ -36,6 +36,13 @@ export interface IProcessTableParams {
     send(fromPid: number, fromPort: number, toPort: number, chunk: Uint8Array): void;
     releasePid(pid: number): void;
   };
+  /** Mints the real, kernel-coordinated pid for a new worker_threads.Worker's own Process Worker
+   *  (threadId is minted synchronously by the CALLER instead - see IProcessInit.threadIdCounterSab's
+   *  own comment for why pid and threadId can't both work the same way). */
+  mintWorkerThreadPid: () => number;
+  /** The shared, globally-coordinated threadId counter every spawned process gets a reference to
+   *  (see its own comment in kernel/index.ts) - just forwarded into every IProcessInit here. */
+  threadIdCounterSab: SharedArrayBuffer;
   /** Sends an event to the host (`process:stdout`, `process:exit`, ...). */
   emit: (message: KernelMessage) => void;
 }
@@ -60,6 +67,10 @@ export interface ISpawnSpec {
   /** Set for a `fork()`ed child: it gets a second, bidirectional ipc channel (see spawn()'s
    *  `IProcessInit.ipc` and workers/process/worker.ts's own `ipc` host object). */
   ipc?: boolean;
+  /** Set when this spawn IS a worker_threads.Worker, not a top-level/child_process spawn - see
+   *  workers/process/messages.ts's IWorkerThreadInit. `command`/`args` above are ignored for one
+   *  of these (the process worker runs runWorkerThread() instead of resolving a builtin command). */
+  workerThread?: IWorkerThreadInit;
 }
 
 export type Signal = "SIGTERM" | "SIGKILL";
@@ -121,6 +132,8 @@ const createProcessTable = ({
   detachNetClient,
   netRelay,
   udpRelay,
+  mintWorkerThreadPid,
+  threadIdCounterSab,
   emit,
 }: IProcessTableParams): IProcessTable => {
   const workers = new Map<number, { worker: IProcessWorkerLike; parentPid?: number; sync?: ISyncEntry }>();
@@ -243,6 +256,7 @@ const createProcessTable = ({
       syncClient = attachSyncClient(pid);
       netClient = attachNetClient(pid);
     } catch (cause) {
+      spec.workerThread?.port.close(); // never handed off - would otherwise leak an open port
       reportFailure(`Failed to start process: ${(cause as Error).message}`);
       return;
     }
@@ -305,6 +319,29 @@ const createProcessTable = ({
         case "udp:send":
           udpRelay.send(pid, data.fromPort, data.toPort, data.chunk);
           break;
+        case "workerThread:spawn": {
+          // threadId comes from the CALLER (minted synchronously there, via the shared
+          // threadIdCounterSab every process already holds) - only pid is kernel-minted here.
+          const childPid = mintWorkerThreadPid();
+          const { threadId } = data;
+          spawn({
+            processId: childPid,
+            command: "",
+            args: [],
+            cwd: data.cwd,
+            env: data.env,
+            parentPid: pid,
+            workerThread: {
+              threadId,
+              threadName: data.threadName,
+              isInternal: data.isInternal,
+              resourceLimits: data.resourceLimits,
+              port: data.port,
+            },
+          });
+          worker.postMessage({ type: "workerThread:started", ticket: data.ticket, childPid, threadId });
+          break;
+        }
       }
     };
     worker.onerror = (event) => {
@@ -313,6 +350,8 @@ const createProcessTable = ({
       });
     };
 
+    const transfer = [client.port, syncClient.port, netClient.port];
+    if (spec.workerThread) transfer.push(spec.workerThread.port);
     worker.postMessage(
       {
         type: "init",
@@ -328,8 +367,10 @@ const createProcessTable = ({
         netSab: netClient.sab,
         netPort: netClient.port,
         ipc: spec.ipc ?? false,
+        workerThread: spec.workerThread,
+        threadIdCounterSab,
       },
-      [client.port, syncClient.port, netClient.port],
+      transfer,
     );
   };
 

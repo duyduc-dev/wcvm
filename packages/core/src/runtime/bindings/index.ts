@@ -8,7 +8,9 @@ import { createConstantsBinding } from "./constants";
 import { createCryptoBinding } from "./crypto";
 import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsWatchHost } from "./fs";
 import { createHttpParserBinding } from "./http";
+import { createLocksBinding } from "./locks";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
+import { createMessagingBinding } from "./messaging";
 import {
   createAsyncContextFrameBinding,
   createCaresWrapBinding,
@@ -16,7 +18,6 @@ import {
   createCredentialsBinding,
   createDiagnosticsChannelBinding,
   createErrorsBinding,
-  createMessagingBinding,
   createMksnapshotBinding,
   createOptionsBinding,
   createOsBinding,
@@ -32,11 +33,17 @@ import { createStringDecoderBinding } from "./stringDecoder";
 import { createTypesBinding } from "./types";
 import { createUdpWrapBinding, type IUdpHost } from "./udp";
 import { createSymbolsBinding, createUtilBinding } from "./util";
+import { createWorkerBinding, type IWorkerContext, type IWorkerThreadHost } from "./worker";
 import { createZlibBinding } from "./zlib";
 
 interface IBindingContext {
   /** For bindings that call back into Node's own modules (defineLazyProperties). */
   requireBuiltin(id: string): any;
+  /** For bindings that call back into another OWN binding (e.g. messaging needs symbols' own
+   *  no_message_symbol) - a forward reference, set right after createInternalBinding(ctx) itself
+   *  returns (see runtime.ts), the same "assign the self-reference once construction is done"
+   *  trick kernel/index.ts already uses for processes/kernelSyncServer. */
+  internalBinding?(name: string): any;
   loop: EventLoop;
   /** The process object, for bindings that read its environment. */
   process?: any;
@@ -57,6 +64,17 @@ interface IBindingContext {
   netSync?: ISyscallClient;
   /** UDP's async half (incoming datagrams); without it, dgram methods return ENOSYS/ENOTCONN. */
   udp?: IUdpHost;
+  /** worker_threads: spawns/kills a real, separate Process Worker for `new Worker(...)`; without
+   *  it, worker_threads.Worker's startThread() reports ERR_WORKER_NOT_RUNNING. */
+  workerThread?: IWorkerThreadHost;
+  /** True at the top of an ordinary `node script.js` process; false inside a worker_threads.Worker. */
+  isMainThread?: boolean;
+  /** Set only inside a worker_threads.Worker (isMainThread === false) - see
+   *  workers/process/messages.ts's IWorkerThreadInit, which runtime.ts reads to build this. */
+  workerSelf?: IWorkerContext["self"];
+  /** Mints a globally-unique worker_threads threadId synchronously; without it, `new Worker(...)`
+   *  construction throws - see bindings/worker.ts's own comment on why this can't be async. */
+  mintThreadId?: () => number;
 }
 
 type BindingFactory = (ctx: IBindingContext) => object;
@@ -75,7 +93,8 @@ const factories: Record<string, BindingFactory> = {
   fs_dir: (ctx) => createFsDirBinding(createFsBindingFor(ctx)),
   fs_event_wrap: (ctx) => createFsEventWrapBinding(ctx),
   http_parser: () => createHttpParserBinding(),
-  messaging: () => createMessagingBinding(),
+  locks: () => createLocksBinding(),
+  messaging: (ctx) => createMessagingBinding({ loop: ctx.loop, internalBinding: (name) => ctx.internalBinding!(name) }),
   mksnapshot: () => createMksnapshotBinding(),
   options: () => createOptionsBinding(),
   credentials: (ctx) => createCredentialsBinding({ env: () => ctx.process?.env ?? {} }),
@@ -98,6 +117,17 @@ const factories: Record<string, BindingFactory> = {
   udp_wrap: (ctx) => createUdpWrapBinding({ loop: ctx.loop, udp: ctx.udp, udpSync: ctx.netSync, requireBuiltin: ctx.requireBuiltin }),
   util: (ctx) => createUtilBinding(ctx),
   uv: () => createUvBinding(),
+  worker: (ctx) =>
+    createWorkerBinding({
+      loop: ctx.loop,
+      workerThread: ctx.workerThread,
+      messageChannel: ctx.internalBinding!("messaging").MessageChannel,
+      isMainThread: ctx.isMainThread ?? true,
+      cwd: () => ctx.process?.cwd?.() ?? "/",
+      env: () => ctx.process?.env ?? {},
+      self: ctx.workerSelf,
+      mintThreadId: ctx.mintThreadId,
+    }),
   zlib: (ctx) => createZlibBinding(ctx),
 };
 

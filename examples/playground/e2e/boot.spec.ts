@@ -1353,6 +1353,116 @@ test.describe("zlib", () => {
   });
 });
 
+test.describe("worker_threads", () => {
+  const writeFiles = (page: import("@playwright/test").Page, files: Record<string, string>) =>
+    page.evaluate(async (files) => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      for (const [path, contents] of Object.entries(files)) {
+        await fs.mkdir(path.slice(0, path.lastIndexOf("/")) || "/", { recursive: true });
+        await fs.writeFile(path, contents);
+      }
+    }, files);
+
+  test("a real, separate Process Worker exchanges messages with its parent over a real MessageChannel", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker, isMainThread } = require('worker_threads');
+      console.log('isMainThread', isMainThread);
+      const w = new Worker("require('worker_threads').parentPort.postMessage('pong');", { eval: true });
+      w.on('online', () => console.log('online'));
+      w.on('message', (msg) => { console.log('got', msg); process.exit(0); });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(1); });
+    `]);
+    expect(r).toEqual({ code: 0, out: "isMainThread true\nonline\ngot pong\n", err: "" });
+  });
+
+  test("workerData round-trips from the parent to the child", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker } = require('worker_threads');
+      const w = new Worker(
+        "const { parentPort, workerData } = require('worker_threads'); parentPort.postMessage(workerData.n * 2);",
+        { eval: true, workerData: { n: 21 } },
+      );
+      w.on('message', (msg) => { console.log('doubled', msg); process.exit(0); });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(1); });
+    `]);
+    expect(r).toEqual({ code: 0, out: "doubled 42\n", err: "" });
+  });
+
+  test("new Worker(file) resolves and runs a real script from the VFS", async ({ page }) => {
+    await writeFiles(page, {
+      "/proj/worker.js": `
+        const { parentPort } = require('worker_threads');
+        parentPort.postMessage('hello from a file');
+      `,
+    });
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker } = require('worker_threads');
+      const w = new Worker('/proj/worker.js');
+      w.on('message', (msg) => { console.log(msg); process.exit(0); });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(1); });
+    `]);
+    expect(r).toEqual({ code: 0, out: "hello from a file\n", err: "" });
+  });
+
+  test("w.terminate() stops a still-running worker and its own promise resolves once it has", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker } = require('worker_threads');
+      const w = new Worker("setInterval(() => {}, 1000);", { eval: true });
+      w.on('online', async () => {
+        const exitCode = await w.terminate();
+        console.log('terminated', exitCode);
+        process.exit(0);
+      });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(1); });
+    `]);
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^terminated \d+\n$/);
+  });
+
+  // Known difference from real Node: an uncaught exception inside a worker thread there
+  // surfaces as an 'error' event on the parent (the native binding serializes it via
+  // internal/error_serdes.js's serializeError() and posts an ERROR_MESSAGE). Here it surfaces as
+  // an ordinary nonzero exit instead - internal/main/worker_thread.js's own uncaught-exception ->
+  // ERROR_MESSAGE reporting isn't vendored (this project hand-writes the worker thread bootstrap
+  // instead, see runWorkerThread.ts's own header comment), and wiring it up would need real
+  // v8.serialize()/deserialize() - deliberately left unimplemented (runtime/shims.ts's v8Shim),
+  // the same scope decision fork()'s own "advanced" IPC serialization mode already made.
+  test("an uncaught exception inside the worker ends it with exit code 1, not a hang", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker } = require('worker_threads');
+      const w = new Worker("throw new Error('boom');", { eval: true });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(2); });
+      w.on('exit', (code) => { console.log('exit', code); process.exit(0); });
+    `]);
+    // Matches real Node's own default (options.stderr: false pipes the worker's stderr straight
+    // to the parent's own) - the worker's own uncaught-exception report lands on the TOP-LEVEL
+    // process's stderr here too, via workers/process/worker.ts's own child:stderr routing.
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("exit 1\n");
+    expect(r.err).toContain("Error: boom");
+  });
+
+  test("a worker thread can itself spawn a nested worker thread", async ({ page }) => {
+    await writeFiles(page, {
+      "/proj/inner.js": `
+        require('worker_threads').parentPort.postMessage('from inner');
+      `,
+      "/proj/outer.js": `
+        const { Worker, parentPort } = require('worker_threads');
+        const inner = new Worker('/proj/inner.js');
+        inner.on('message', (msg) => parentPort.postMessage(msg));
+      `,
+    });
+    const r = await spawn(page, "node", ["-e", `
+      const { Worker } = require('worker_threads');
+      const w = new Worker('/proj/outer.js');
+      w.on('message', (msg) => { console.log('outer got', msg); process.exit(0); });
+      w.on('error', (e) => { console.log('error', e.message); process.exit(1); });
+    `]);
+    expect(r).toEqual({ code: 0, out: "outer got from inner\n", err: "" });
+  });
+});
+
 test.describe("crypto", () => {
   test("createHash().update().digest() blocks through the real kernel-mediated SubtleCrypto.digest() path", async ({ page }) => {
     const r = await spawn(page, "node", ["-e", `

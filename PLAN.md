@@ -34,7 +34,7 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   kernel-level plumbing (see below).
 - `node script.js [args]` / `node -e code` run Node's real vendored `lib/` (v24.18.0):
   `path events buffer util stream timers console fs os assert readline child_process net dgram
-  http`
+  http zlib crypto worker_threads`
   + the internals they need, on our own `internalBinding` layer, with a libuv-shaped event loop,
   a real `process`, and a CommonJS loader (node_modules, package.json `main`/`exports`, JSON,
   cycles).
@@ -702,6 +702,11 @@ module: `Thing.test.ts`).
   no path to a real network from inside wcvm) is now confirmed, not just suspected, and real npm
   is DEFERRED as a result - see "Real npm: feasibility findings" below before picking this back
   up.**
+- `worker_threads` (`new Worker()`, not originally scoped as part of this phase, added ad hoc after
+  UDP/`dgram`) - done, see CLAUDE.md's "Status" for the full writeup: `bindings/worker.ts`,
+  `bindings/messaging.ts`, `bindings/locks.ts`, `workers/process/runWorkerThread.ts`,
+  `IProcessInit.threadIdCounterSab`. Real platform gaps found and fixed there are significant
+  enough to be worth reading before touching `MessagePort`/`MessageChannel` again for anything.
 
 #### Real npm: feasibility findings (2026-09-23, no code written yet; `zlib`/`crypto` findings resolved - see "Current state")
 

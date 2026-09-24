@@ -111,6 +111,13 @@
     "_http_outgoing": "0b48810dfa356de9cf82604443317e0f3bcf07e7d724ff80132cdca57d94c0c4",
     "internal/freelist": "86011a0ec68a26f52a139cde807c3de703c240d5f721558b92d647562ee92af2",
     "_http_incoming": "24c177fb6151c5b0131cb1658d1c9f0107b8137630b15be20401fb0f76a605c3",
-    "zlib": "ed5e64bcd4f727fa3f3036fa430de530c3465007a09271f87c98fba475dcb9df"
+    "zlib": "ed5e64bcd4f727fa3f3036fa430de530c3465007a09271f87c98fba475dcb9df",
+    "worker_threads": "2fe530c26372cd992d8fd8c2215bbd3a58f2b30baf6f0b4baaf4d7d6ca540a5a",
+    "internal/worker": "178b2ce2add8f25e68253a9dad2b762228813b13a376ce5be50830734bef57c1",
+    "internal/perf/event_loop_utilization": "41103605f43fd31b497c0bcf188350d078069084a6a403d950d9f7e44d57213b",
+    "internal/worker/io": "b4c084d5fc9329b90467a5554f95a2e32dd4434785d82cb20849ef2268419f8a",
+    "internal/worker/messaging": "65fea9368be820a66dc7d14573d0efcd9c0d77ce968a32cc510a853b68744519",
+    "internal/error_serdes": "ddea3fc5a79eefd670fa1f0810efc86fa1169e3efcd8661ca26edd7666233849",
+    "internal/locks": "a14a6a26b00f8a26dcf33469f12c020947626a0b84cb4bee3e16f44a3fbe0b68"
   }
 }
