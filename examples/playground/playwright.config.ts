@@ -22,9 +22,15 @@ export default defineConfig({
     },
     {
       // A fake npm registry on its own origin, for `npm install` (e2e/fixtureRegistry.ts).
+      // Runs straight from TS source via Node's own type stripping - flag it explicitly since
+      // that's still opt-in (not yet the default) on some Node 22.x builds.
       command: "node --import ../../packages/core/src/testing/registerTsResolve.mjs e2e/fixtureRegistry.ts",
       url: "http://localhost:5184/-/ping",
       reuseExistingServer: false,
+      env: {
+        ...process.env,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, "--experimental-strip-types"].filter(Boolean).join(" "),
+      },
     },
   ],
   use: {
