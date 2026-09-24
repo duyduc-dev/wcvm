@@ -378,6 +378,28 @@ test.describe("node", () => {
     expect(r.err).toContain("boom");
   });
 
+  test("the builtins Vite imports load and work in a real worker: url, module, perf_hooks, tty, tls/https", async ({ page }) => {
+    await writeFiles(page, { "/app/lib/dep.js": "module.exports = 'dep via createRequire';" });
+    const r = await spawn(page, "node", ["-e", `
+      const url = require("node:url");
+      console.log(new url.URLPattern({ pathname: "/books/:id" }).exec("https://x.com/books/42").pathname.groups.id, url.domainToASCII("español.com"));
+      console.log(require("node:module").createRequire("file:///app/lib/entry.mjs")("./dep.js"));
+      const { performance, createHistogram, monitorEventLoopDelay } = require("node:perf_hooks");
+      const h = createHistogram(); [1, 2, 3, 4, 100].forEach((v) => h.record(v));
+      console.log(h.percentile(50), h.mean, typeof performance.now());
+      console.log(require("node:tty").isatty(1), require("node:querystring").stringify({ a: [1, 2] }), require("node:process") === process);
+      try { require("node:https").createServer(); } catch (e) { console.log(e.code); }
+      const eld = monitorEventLoopDelay({ resolution: 10 });
+      eld.enable();
+      setTimeout(() => { eld.disable(); console.log("eld", eld.count > 0, eld.min >= 1e6); }, 100);
+    `], "/app");
+    expect(r).toEqual({
+      code: 0,
+      out: "42 xn--espaol-zwa.com\ndep via createRequire\n3 22 number\nfalse a=1&a=2 true\nERR_NO_CRYPTO\neld true true\n",
+      err: "",
+    });
+  });
+
   test("readline reads lines from a piped Readable in a real worker", async ({ page }) => {
     const r = await spawn(page, "node", [
       "-e",

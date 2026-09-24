@@ -168,27 +168,6 @@ export const createTraceEventsBinding = () => ({
   available: false,
 });
 
-// milestones[] are nanoseconds on a monotonic clock (-1 = not reached);
-// `now()` is milliseconds since the time origin. TIME_ORIGIN is the monotonic
-// reading at start, TIME_ORIGIN_TIMESTAMP the wall clock (microseconds).
-export const createPerformanceBinding = () => {
-  const NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN = 0;
-  const NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN_TIMESTAMP = 1;
-  const originMs = performance.now();
-  const milestones = new Float64Array(8).fill(-1);
-  milestones[NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN] = originMs * 1e6;
-  milestones[NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN_TIMESTAMP] =
-    (performance.timeOrigin + originMs) * 1e3;
-  return {
-    constants: {
-      NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN,
-      NODE_PERFORMANCE_MILESTONE_TIME_ORIGIN_TIMESTAMP,
-    },
-    milestones,
-    now: () => performance.now() - originMs,
-  };
-};
-
 // V8's continuation-preserved embedder data has no JS equivalent; a plain slot
 // is enough while `--async-context-frame` is off, since nothing then reads it.
 export const createAsyncContextFrameBinding = () => {

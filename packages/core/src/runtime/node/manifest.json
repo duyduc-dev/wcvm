@@ -118,6 +118,22 @@
     "internal/worker/io": "builtin",
     "internal/worker/messaging": "builtin",
     "internal/error_serdes": "builtin",
-    "internal/locks": "builtin"
+    "internal/locks": "builtin",
+    "process": "builtin",
+    "querystring": "builtin",
+    "internal/querystring": "builtin",
+    "url": "builtin",
+    "tty": "builtin",
+    "internal/tty": "builtin",
+    "perf_hooks": "builtin",
+    "internal/perf/performance_entry": "builtin",
+    "internal/perf/resource_timing": "builtin",
+    "internal/perf/usertiming": "builtin",
+    "internal/perf/nodetiming": "builtin",
+    "internal/perf/performance": "builtin",
+    "internal/perf/timerify": "builtin",
+    "internal/histogram": "builtin",
+    "internal/perf/observe": "builtin",
+    "internal/perf/event_loop_delay": "builtin"
   }
 }

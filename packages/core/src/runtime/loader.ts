@@ -19,6 +19,8 @@ interface IBuiltinLoader {
   /** True for ids user code may `require()`: public, and actually vendored. */
   canBeRequiredByUsers(id: string): boolean;
   has(id: string): boolean;
+  /** Every id user code may require - `module.builtinModules`. */
+  publicIds(): string[];
 }
 
 const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
@@ -81,6 +83,7 @@ const createBuiltinLoader = ({
       const name = stripScheme(id);
       return !name.startsWith("internal/") && has(name);
     },
+    publicIds: () => Object.keys(table).filter((id) => !id.startsWith("internal/") && !id.startsWith("_")).sort(),
   };
 };
 

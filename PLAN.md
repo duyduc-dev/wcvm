@@ -34,7 +34,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   kernel-level plumbing (see below).
 - `node script.js [args]` / `node -e code` run Node's real vendored `lib/` (v24.18.0):
   `path events buffer util stream timers console fs os assert readline child_process net dgram
-  http zlib crypto worker_threads`
+  http zlib crypto worker_threads url querystring tty perf_hooks process` (plus hand-written
+  `module`, `tls`/`https` and `inspector` - see Phase 8)
   + the internals they need, on our own `internalBinding` layer, with a libuv-shaped event loop,
   a real `process`, and a CommonJS loader (node_modules, package.json `main`/`exports`, JSON,
   cycles).
@@ -593,6 +594,18 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   `<script>`, so a guest page whose own CSP forbids inline scripts never gets it; a compressed
   (`Content-Encoding`) HTML document isn't injected at all. A page opened with no same-origin wcvm
   page embedding it (or as its opener) falls back to the real `WebSocket`, which reaches nothing.
+- `perf_hooks` (`bindings/performance.ts`): histograms keep EXACT values rather than HdrHistogram's
+  3-significant-figure buckets (same percentile rules, so small histograms match real Node exactly;
+  big ones are more precise than Node's, not less). No GC/http2/net/dns performance entries are ever
+  produced (nothing native to observe); `nodeTiming`'s startup milestones all read as the process's
+  own start, and `eventLoopUtilization()`/`loopIdleTime` report no idle time.
+- `url`: `url.format(urlObject, { unicode: true })` keeps an IDN host in punycode (the platform URL
+  has no punycode decoder to ask); `URLPattern` is the browser's own (Chromium has one).
+- `module` (`runtime/moduleBuiltin.ts`): no `register()`/`registerHooks()` customization hooks,
+  `_extensions` handlers can't be replaced (calling one throws), no `runMain`.
+- `tls`/`https`: load, but can't do anything (`ERR_NO_CRYPTO`) - no TLS stack behind wcvm's
+  virtual sockets. `inspector` can't even be required (`ERR_INSPECTOR_NOT_AVAILABLE`), like a Node
+  built without it.
 - `npm` (`programs/npm/`): only `npm install` (from package.json, or named packages, saved the way
   real npm saves them). No lockfile (read or written), no install/lifecycle scripts (reported, never
   run - esbuild's postinstall included), no git/file/link/workspace/tarball-URL specs
@@ -847,11 +860,12 @@ picking this back up.
   for wasm ones via `overrides` (`"esbuild": "npm:esbuild-wasm@^0.25.0"`, `"rollup":
   "npm:@rollup/wasm-node@^4"` - done, flat form), 11 packages from the real registry in ~5s. A
   first real run (2026-09-24, Chromium) stops at once: `node:perf_hooks` isn't a builtin. Probed
-  every `node:` builtin Vite 7's own code imports against a real wcvm process - missing: `module`
-  (createRequire - needs our own cjs.ts, not Node's loader), `perf_hooks`, `url` (the public
-  module; `internal/url` is shimmed), `https`, `tls`, `inspector`, `tty`, `querystring`,
-  `process`. After those: whatever Vite hits next (esbuild-wasm's own child-process service,
-  chokidar over our `fs.watch`, ...).
+  every `node:` builtin Vite 7's own code imports against a real wcvm process - 9 missing, all
+  **done** now (see CLAUDE.md's "Status"). **Next: `import.meta.url` as the module's real `file://`
+  URL** - it's the module's `blob:` URL today (a documented known difference), and Vite finds its
+  own files with `fileURLToPath(new URL("../..", import.meta.url))` and `createRequire(import.meta
+  .url)`. After that: whatever Vite hits next (esbuild-wasm's own child-process service, chokidar
+  over our `fs.watch`, ...).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 
