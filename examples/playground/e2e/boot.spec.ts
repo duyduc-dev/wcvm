@@ -1786,35 +1786,40 @@ test.describe("OPFS persistence", () => {
   });
 });
 
-test.describe("example: Node HTTP server", () => {
-  // The playground's own #example section (src/exampleServer.ts): spawns a real
-  // http.createServer() and leans on the already-wired preview pane (wc.preview.onListen()) to
-  // show it live - end-to-end coverage of process spawn + real http + the preview relay working
-  // together, none of which can be faked outside real Chromium.
-  test("running the example spawns a real server, shown live in the preview pane, with a working form and JSON endpoint", async ({ page }) => {
+test.describe("example: Vite + React + TypeScript", () => {
+  // The playground's own #example section (src/reactExample.ts): a real react-ts project, installed
+  // from npm by wcvm's own `npm install`, served by Vite's real CLI into the preview pane, with an
+  // App.tsx editor whose edits hot-update the running app.
+  test("the example section is the React + TS app, with App.tsx ready to edit", async ({ page }) => {
+    await expect(page.locator("#example-label")).toContainText("Vite + React + TypeScript");
+    await expect(page.locator("#example-run")).toHaveText("run React example");
+    await expect(page.locator("#example-editor")).toHaveValue(/useState\(0\)[\s\S]*count is \{count\}/);
+    await expect(page.locator("#example-status")).toHaveText("Not running.");
+  });
+
+  // OPT-IN, like the "Vite dev server" test: it installs React and Vite from the real registry.
+  test("runs it end to end: install, Vite, the app in the preview, and an edit hot-reloading with state kept", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs React + Vite from registry.npmjs.org)");
+    test.setTimeout(240_000);
     await page.click("#example-run");
-    await expect(page.locator("#example-status")).toHaveText(/Running on virtual port 3000/);
-    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/3000/");
+    await expect(page.locator("#example-status")).toHaveText(/Vite is running on virtual port 5173/, { timeout: 180_000 });
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5173/");
 
     const frame = page.frameLocator("#preview-frame");
-    await expect(frame.locator("h2")).toHaveText("Hello from a real Node.js server");
+    const count = frame.locator("#count");
+    await expect(count).toHaveText("count is 0", { timeout: 60_000 });
+    await count.click();
+    await count.click();
+    await expect(count).toHaveText("count is 2");
 
-    // A real form submission (GET /add?text=...), handled and 302-redirected by the guest
-    // server itself, followed by the real browser like any other redirect.
-    await frame.locator('input[name="text"]').fill("hello from playwright");
-    await frame.locator("form button").click();
-    await expect(frame.locator("li")).toHaveText("hello from playwright");
+    // Typing in the editor writes src/App.tsx; Vite hot-updates the component - React Fast
+    // Refresh keeps its state, so the count is still 2 under the new heading.
+    const edited = (await page.locator("#example-editor").inputValue()).replace("<h1>Vite + React + TypeScript</h1>", "<h1>Edited live</h1>");
+    await page.locator("#example-editor").fill(edited);
+    await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
+    await expect(count).toHaveText("count is 2");
 
-    // The same real server's JSON endpoint, fetched from the host page.
-    const time = await page.evaluate(async () => {
-      const res = await fetch("/__wcvm_preview__/3000/api/time");
-      return { status: res.status, contentType: res.headers.get("content-type"), body: await res.json() };
-    });
-    expect(time.status).toBe(200);
-    expect(time.contentType).toBe("application/json");
-    expect(typeof time.body.time).toBe("string");
-
-    await page.click("#example-run"); // now labeled "stop example server"
+    await page.click("#example-run"); // now "stop React example"
     await expect(page.locator("#example-status")).toHaveText("Stopped.");
   });
 });

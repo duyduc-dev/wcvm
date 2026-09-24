@@ -883,8 +883,12 @@ picking this back up.
   from the real registry - the user's call, to keep the repo lean: every building block has its own
   small offline test, and an always-on version needed a 5.4 MB committed registry slice (tried,
   then dropped and squashed out of history).
-- Left in this phase: templates (starter projects to pick from), and anything a bigger real app
-  hits (a framework plugin - React/Vue - is the obvious next thing to try).
+- React + TypeScript (`@vitejs/plugin-react`) runs with Fast Refresh - **done** (needed `file:` URL
+  imports and pure-JS hashing, see CLAUDE.md's "Status"), and is now the playground's one-click
+  example, with a live App.tsx editor.
+- Left in this phase: more templates (Vue, Svelte, plain Node/Express) and `npm run` - the
+  example starts Vite with `node node_modules/vite/bin/vite.js` because `npm run dev` doesn't
+  exist yet.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 

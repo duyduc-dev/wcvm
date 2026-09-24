@@ -1,6 +1,6 @@
 import { boot } from "wcvm";
-import { attachExampleServer } from "./exampleServer";
 import { attachPreview } from "./preview";
+import { attachReactExample } from "./reactExample";
 import { attachTerminal } from "./terminal";
 
 const wc = boot();
@@ -45,9 +45,9 @@ try {
 
   const exampleRun = document.querySelector<HTMLButtonElement>("#example-run");
   const exampleStatus = document.querySelector<HTMLElement>("#example-status");
-  const exampleSource = document.querySelector<HTMLElement>("#example-source");
-  if (exampleRun && exampleStatus && exampleSource) {
-    attachExampleServer(wc, { runButton: exampleRun, status: exampleStatus, source: exampleSource });
+  const exampleEditor = document.querySelector<HTMLTextAreaElement>("#example-editor");
+  if (exampleRun && exampleStatus && exampleEditor) {
+    attachReactExample(wc, { runButton: exampleRun, status: exampleStatus, editor: exampleEditor });
   }
 } catch (error) {
   if (app) app.textContent = `wcvm failed: ${(error as Error).message}`;

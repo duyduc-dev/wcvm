@@ -879,7 +879,17 @@ Done and verified in real Chromium:
   Verified: `bindings/hash.test.ts` (15), `esm/resolve.test.ts`'s file: URL cases (3), reworked
   `bindings/crypto.test.ts`; `vitest run` (865/865) and a full `pnpm exec playwright test` run
   (109 passed, 1 opt-in skipped); the React app checked for real in Chromium (one-off probe).
-- Tests: 865 Vitest + 110 Playwright (Chromium; 1 of them opt-in - see the Vite entry). See "Verifying".
+- The playground's example is now a Vite + React + TypeScript app (it used to be a hand-written
+  Node `http` server; `src/exampleServer.ts` is gone): `src/reactExample.ts` writes a real
+  `react-ts` project to `/react-app` (App.tsx taken from the page's editor), runs wcvm's `npm
+  install` against the real registry (~10 s the first time), starts Vite's real CLI, and the
+  preview pane picks the dev server up via `onListen()`. The `#example-editor` textarea IS the
+  running app's `src/App.tsx` - typing writes it (debounced) and Vite hot-updates the component,
+  its state intact. Tests: an always-on one for the page wiring, and an OPT-IN one
+  (`WCVM_E2E_VITE=1`, real registry) for the whole flow through the real UI - install, the
+  counter in the preview, clicks, an editor edit hot-reloading with the count kept (~16 s).
+- Tests: 865 Vitest + 111 Playwright (Chromium; 2 of them opt-in, needing the real npm registry:
+  `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and

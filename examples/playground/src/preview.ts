@@ -19,7 +19,7 @@ export const attachPreview = (
 
   // Registered unconditionally, not just after this button's own click: onListen() doesn't need
   // enable() to have been called first (it's pure kernel-side bookkeeping - see apis/Preview.ts),
-  // and another caller (e.g. src/exampleServer.ts) may be the one that actually calls enable() -
+  // and another caller (e.g. src/reactExample.ts) may be the one that actually calls enable() -
   // the iframe (and this status text) should reflect a real server coming up either way.
   wc.preview.onListen(({ port, listening }) => {
     if (listening) {
