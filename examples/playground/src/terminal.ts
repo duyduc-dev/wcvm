@@ -86,5 +86,9 @@ export const attachTerminal = async (wc: IWcvm, container: HTMLElement, program:
       closed = true;
       proc.kill();
     },
+    /** Writes text straight into this terminal, interleaved with whatever the session itself is
+     *  doing - for output from somewhere else entirely (the React example's own npm/vite
+     *  processes), not from this session's own process. */
+    write: (text: string) => term.write(text),
   };
 };

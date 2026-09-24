@@ -22,11 +22,14 @@ try {
   await wc.ready;
   if (app) app.textContent = "wcvm ready";
 
+  // Referenced by the React example below too, so its own npm/vite output can be mirrored into
+  // whichever session is live right now - reassigned on every restart/program switch.
+  let session: Awaited<ReturnType<typeof attachTerminal>> | undefined;
+
   const terminalEl = document.querySelector<HTMLElement>("#terminal");
   const select = document.querySelector<HTMLSelectElement>("#program");
   const restart = document.querySelector<HTMLButtonElement>("#restart");
   if (terminalEl && select && restart) {
-    let session: Awaited<ReturnType<typeof attachTerminal>> | undefined;
     const start = async () => {
       session?.stop();
       session = await attachTerminal(wc, terminalEl, select.value);
@@ -47,7 +50,12 @@ try {
   const exampleStatus = document.querySelector<HTMLElement>("#example-status");
   const exampleEditor = document.querySelector<HTMLTextAreaElement>("#example-editor");
   if (exampleRun && exampleStatus && exampleEditor) {
-    attachReactExample(wc, { runButton: exampleRun, status: exampleStatus, editor: exampleEditor });
+    attachReactExample(wc, {
+      runButton: exampleRun,
+      status: exampleStatus,
+      editor: exampleEditor,
+      writeToTerminal: (text) => session?.write(text),
+    });
   }
 } catch (error) {
   if (app) app.textContent = `wcvm failed: ${(error as Error).message}`;
