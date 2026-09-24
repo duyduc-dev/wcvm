@@ -102,7 +102,7 @@ describe("the node command", () => {
       "/w/main.js": `console.log(process.argv.slice(2).join("+"), process.pid, process.env.HOME, process.cwd())`,
     }, "/w");
     expect(r).toEqual({ code: 0, out: "a+b 7 /home/u /w\n", err: "" });
-  });
+  }, 20_000); // boots a whole Node runtime: ~2s alone, occasionally past 5s under full-suite load
 
   it("node -e runs source text and require resolves from the cwd", async () => {
     const r = await runNode(["-e", "console.log(require('./x'), __filename)"], { "/w/x.js": "module.exports = 'x!'" }, "/w");

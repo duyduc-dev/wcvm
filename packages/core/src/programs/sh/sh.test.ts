@@ -123,7 +123,7 @@ describe("sh -c", () => {
   it("runs node as an ordinary command, sequenced and piped like any other", async () => {
     const r = await t.sh(`node -e "console.log(1 + 1)" && echo done | cat`);
     expect(r).toMatchObject({ status: 0, out: "2\ndone\n" });
-  });
+  }, 20_000); // boots a whole Node runtime: ~2s alone, occasionally past 5s under full-suite load
 });
 
 describe("sh <file>", () => {

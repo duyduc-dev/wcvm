@@ -6,7 +6,7 @@ import { createBufferBinding } from "./buffer";
 import { createPipeWrapBinding, createProcessWrapBinding, createSpawnSyncBinding, createStreamWrapBinding, type IChildProcessHost } from "./childProcess";
 import { createConstantsBinding } from "./constants";
 import { createCryptoBinding } from "./crypto";
-import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsWatchHost } from "./fs";
+import { createFsBinding, createFsDirBinding, createFsEventWrapBinding, type IFsBindingContext, type IFsWatchHost } from "./fs";
 import { createHttpParserBinding } from "./http";
 import { createLocksBinding } from "./locks";
 import { createAsyncWrapBinding, createTaskQueueBinding, createTimersBinding } from "./loop";
@@ -52,6 +52,8 @@ interface IBindingContext {
   fs?: IFsClient;
   /** Where fd 1 / fd 2 writes go. */
   writeStdio?: (fd: 1 | 2, chunk: Uint8Array) => void;
+  /** Where fd 0 reads come from - see bindings/fs.ts's IFsBindingContext.readStdin. */
+  readStdin?: IFsBindingContext["readStdin"];
   /** Spawns/kills child_process children via the kernel; without it, pipe_wrap/process_wrap are unavailable. */
   childProcess?: IChildProcessHost;
   /** Blocks on the kernel until a child exits, with its buffered output; without it, spawn_sync throws ENOSYS. */
@@ -151,6 +153,7 @@ const createFsBindingFor = (ctx: IBindingContext) => {
       loop: ctx.loop,
       requireBuiltin: ctx.requireBuiltin,
       writeStdio: ctx.writeStdio ?? (() => {}),
+      readStdin: ctx.readStdin,
     });
     fsBindings.set(ctx, binding);
   }

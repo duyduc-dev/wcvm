@@ -94,7 +94,7 @@ describe("fetcherRuntime", () => {
     await vi.waitFor(() => expect(posted).toHaveLength(1));
 
     expect(fs.readFile("/big.bin")).toEqual(big);
-  });
+  }, 20_000); // pushes >1 MiB through the syscall window: ~2s alone, occasionally past 5s under load
 
   it("runs at most MAX_CONCURRENT fetches at once, starting the next once one finishes", async () => {
     const { fs, posted, post } = setup();

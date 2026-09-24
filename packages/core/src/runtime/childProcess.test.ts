@@ -70,9 +70,41 @@ describe("child_process over a fake kernel host", () => {
       fake.host,
     );
 
-    expect(fake.spawns).toEqual([{ childPid: fake.spawns[0].childPid, command: "echo", args: ["hi"], cwd: undefined, env: {} }]);
+    // No cwd option: the child starts in the parent's own current directory, like real Node.
+    expect(fake.spawns).toEqual([{ childPid: fake.spawns[0].childPid, command: "echo", args: ["hi"], cwd: "/app", env: {} }]);
     expect(JSON.parse(r.stdout)).toEqual({ code: 0, signal: null, out: "out\n", err: "err\n", pid: "number" });
     expect(r.code).toBe(0);
+  });
+
+  it("child.unref() lets the parent exit while the child is still running, like esbuild's own service", async () => {
+    const fake = createFakeHost(); // never reports an exit: the child runs "forever"
+    const r = await run(
+      `
+      const child = require("child_process").spawn("node", ["service.js"], { stdio: ["pipe", "pipe", "inherit"] });
+      child.unref();
+      child.stdin.unref?.();
+      child.stdout.unref?.();
+      console.log("parent done");
+      `,
+      fake.host,
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "parent done\n" }));
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it("child.ref() after unref() keeps the parent alive again, until the child exits", async () => {
+    const fake = createFakeHost();
+    fake.onSpawn((childPid) => setTimeout(() => fake.emit({ type: "exit", childPid, exitCode: 3 }), 30));
+    const r = await run(
+      `
+      const child = require("child_process").spawn("node", ["job.js"]);
+      child.unref();
+      child.ref();
+      child.on("exit", (code) => console.log("child exited", code));
+      `,
+      fake.host,
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "child exited 3\n" }));
   });
 
   it("routes command/args/cwd/env through to the host, argv0 stripped", async () => {

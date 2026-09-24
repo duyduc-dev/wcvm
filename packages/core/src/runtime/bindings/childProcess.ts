@@ -41,7 +41,7 @@ export interface IChildProcessHost {
 
 export interface IChildProcessContext {
   loop: { post(fn: () => void): void; ref(): () => void };
-  process?: { pid?: number };
+  process?: { pid?: number; cwd?: () => string };
   childProcess?: IChildProcessHost;
 }
 
@@ -288,7 +288,11 @@ class Process {
       }
     });
 
-    this.router.host.spawn(childPid, options.file, (options.args ?? []).slice(1), options.cwd, envFromPairs(options.envPairs), ipc);
+    // No `cwd` option means the parent's own current directory - real libuv passes a NULL cwd,
+    // and the child simply inherits the OS process's. Here nothing is inherited implicitly, so it
+    // has to be said (a child used to start at "/" instead, so `spawn("node", ["x.js"])` failed).
+    const cwd = options.cwd ?? this.router.parentCwd();
+    this.router.host.spawn(childPid, options.file, (options.args ?? []).slice(1), cwd, envFromPairs(options.envPairs), ipc);
     return 0;
   }
 
@@ -300,8 +304,15 @@ class Process {
   }
 
   close(): void {}
-  ref(): void {}
-  unref(): void {}
+  /** A live child keeps its parent alive (uv_process_t is ref'd) - until `child.unref()`, which
+   *  esbuild's JS API does to its own long-lived service process so an idle one never holds a
+   *  script open. */
+  ref(): void {
+    this.router.setProcessRef(this.pid, true);
+  }
+  unref(): void {
+    this.router.setProcessRef(this.pid, false);
+  }
 }
 
 /** Shared per running script: pid minting, and the one subscription to child events. */
@@ -309,15 +320,17 @@ class ChildRouter {
   readonly host: IChildProcessHost;
   readonly state: Int32Array;
   private readonly ownPid: number;
+  readonly parentCwd: () => string | undefined;
   private readonly loop: IChildProcessContext["loop"];
   private counter = 0;
-  private readonly processes = new Map<number, { proc: Process; release: () => void }>();
+  private readonly processes = new Map<number, { proc: Process; release: (() => void) | null }>();
   private readonly pipes = new Map<string, Pipe>();
 
   constructor(ctx: IChildProcessContext) {
     if (!ctx.childProcess) throw uvException("ENOSYS", "spawn");
     this.host = ctx.childProcess;
     this.ownPid = ctx.process?.pid ?? 0;
+    this.parentCwd = () => ctx.process?.cwd?.();
     this.loop = ctx.loop;
     // Shared with tcp_wrap (runtime/bindings/net.ts): stream_wrap's streamBaseState is ONE array
     // per realm regardless of handle type - a separate one here would silently disconnect this
@@ -333,6 +346,17 @@ class ChildRouter {
 
   registerProcess(pid: number, proc: Process): void {
     this.processes.set(pid, { proc, release: this.loop.ref() });
+  }
+
+  /** Process.ref()/unref(): whether this still-running child keeps the loop alive. */
+  setProcessRef(pid: number, refed: boolean): void {
+    const entry = this.processes.get(pid);
+    if (!entry) return; // not spawned yet, or already exited
+    if (refed) entry.release ??= this.loop.ref();
+    else {
+      entry.release?.();
+      entry.release = null;
+    }
   }
 
   registerPipe(pid: number, fd: number, pipe: Pipe): void {
@@ -356,7 +380,7 @@ class ChildRouter {
 
     const entry = this.processes.get(event.childPid);
     this.processes.delete(event.childPid);
-    entry?.release();
+    entry?.release?.();
     if (event.signal) entry?.proc.onexit?.(0, event.signal);
     else entry?.proc.onexit?.(event.exitCode, null);
   }
@@ -473,14 +497,15 @@ interface ISpawnSyncOptions {
   stdio: Array<{ type: string; input?: Uint8Array }>;
 }
 
-export const createSpawnSyncBinding = (ctx: { spawnSync?: ISyscallClient; requireBuiltin: (id: string) => any }) => ({
+export const createSpawnSyncBinding = (ctx: { spawnSync?: ISyscallClient; requireBuiltin: (id: string) => any; process?: { cwd?: () => string } }) => ({
   spawn: (options: ISpawnSyncOptions) => {
     if (!ctx.spawnSync) throw uvException("ENOSYS", "spawnSync");
 
     const request = encodeRequest([
       encodeString(options.file),
       encodeString(JSON.stringify((options.args ?? []).slice(1))),
-      encodeString(typeof options.cwd === "string" ? options.cwd : ""),
+      // No `cwd`: the parent's own, as for async spawn() above.
+      encodeString(typeof options.cwd === "string" ? options.cwd : (ctx.process?.cwd?.() ?? "")),
       encodeString(JSON.stringify(envFromPairs(options.envPairs))),
       options.stdio[0]?.input ?? new Uint8Array(0),
       u32ToBytes(options.timeout ?? 0),

@@ -73,7 +73,7 @@ const createFakeSpawnSync = (handler: (request: IFakeSpawnSyncRequest) => IFakeS
 });
 
 const run = (source: string, spawnSync: ISyscallClient) =>
-  runScript({ "/app/main.js": source }, "/app/main.js", { cwd: "/app", spawnSync, childProcess: noopChildProcessHost });
+  runScript({ "/app/main.js": source, "/tmp/.keep": "" }, "/app/main.js", { cwd: "/app", spawnSync, childProcess: noopChildProcessHost });
 
 describe("child_process.spawnSync / execSync over a fake kernel", () => {
   it("spawnSync returns pid, status, and the child's buffered output", async () => {
@@ -109,6 +109,16 @@ describe("child_process.spawnSync / execSync over a fake kernel", () => {
     );
 
     expect(requests).toEqual([{ command: "echo", args: ["a", "b"], cwd: "/tmp", env: { FOO: "bar" }, input: new Uint8Array(0), timeoutMs: 0 }]);
+  });
+
+  it("with no cwd option, the child runs in the parent's own current directory", async () => {
+    const requests: IFakeSpawnSyncRequest[] = [];
+    const fake = createFakeSpawnSync((request) => {
+      requests.push(request);
+      return { status: 0 };
+    });
+    await run(`process.chdir("/tmp"); require("child_process").execSync("echo hi");`, fake);
+    expect(requests.map((r) => r.cwd)).toEqual(["/tmp"]);
   });
 
   it("delivers the `input` option as the child's stdin", async () => {

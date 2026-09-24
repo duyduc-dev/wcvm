@@ -872,11 +872,12 @@ picking this back up.
 - **Vite's dev server runs** (2026-09-24): after package.json `"imports"`, `dns.promises`, an
   `http2` shim, the crypto members Vite uses, and tolerant builtin ESM facades (see CLAUDE.md's
   "Status"), an unmodified Vite 7.3 starts in ~1s and serves `/`, `/main.js` and `/@vite/client`
-  through the preview relay. **Next:** (1) esbuild-wasm's service stops during Vite's dependency
-  scan ("The service was stopped" - Vite skips pre-bundling and carries on; needed for TS/JSX and
-  deps); (2) the page in a real preview iframe, its HMR WebSocket through the tunnel, and a file
-  edit reaching it (chokidar over our `fs.watch`); (3) a committed e2e test, which needs Vite's
-  packages without the real registry (a fixture tarball set, or a recorded registry).
+  through the preview relay. esbuild-wasm now works too (fd 0 reads, `child.unref()` and an
+  inherited child `cwd` were the fixes - see CLAUDE.md's "Status"): Vite transforms TypeScript and
+  pre-bundles npm dependencies. **Next:** (1) the page in a real preview iframe, its HMR WebSocket
+  through the tunnel, and a file edit reaching it (chokidar over our `fs.watch`); (2) a committed
+  e2e test, which needs Vite's packages without the real registry (a fixture tarball set, or a
+  recorded registry).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 
