@@ -697,14 +697,36 @@ Done and verified in real Chromium:
   skipped native optional, a bin, then `require`/ESM `import`/running the bin through `node`, and an
   up-to-date second run; a missing package failing with `E404`. A full, clean `pnpm exec playwright
   test` run (103/103) and `vitest run` (821/821) confirm no regressions.
-- Tests: 821 Vitest + 103 Playwright (Chromium). See "Verifying".
+- `import()` from CommonJS and `node -e` code (Phase 8's fourth piece; a pre-existing runtime gap
+  the `npm install` e2e test found): only real ES modules used to get their `import()` calls
+  rewritten to the runtime's dynamic-import bridge (`runtime/esm/rewrite.ts`) - an `import()` in a
+  CJS module or `-e` source reached the browser's NATIVE `import()`, which can't resolve a bare
+  specifier or VFS path, and the idle event loop exited before the rejection surfaced, so it failed
+  SILENTLY. `cjs.ts`'s `compile()` now hands source to an optional `rewriteDynamicImports` hook
+  (runtime.ts wires it to `esm/loader.ts`'s new `rewriteScript`, which parses the source as a
+  SCRIPT - `esm/ast.ts`'s `parseScript`: top-level `return` and `#!` allowed, like the CJS wrapper
+  makes legal - and reuses `rewriteModule` + the same bridge ESM uses, installing it if needed).
+  Only source matching a cheap `/\bimport\s*\(/` pre-check is ever parsed, so a script that never
+  calls `import()` still never loads acorn; unparseable source is passed through untouched for eval
+  to report. A module resolves relative to its own file; `-e` code relative to `<cwd>/[eval]`, like
+  real Node. Verified: `runtime/cjsDynamicImport.test.ts` (4 Vitest, the CJS side with a recording
+  bridge - the bridge itself only exists as a true global inside a real Worker, so it can't run in
+  Vitest) and `esm/ast.test.ts`'s `parseScript` cases (3); 2 new Playwright tests in real Chromium
+  (a CJS module `import()`ing a relative `.mjs`, a `node:` builtin and a node_modules package; `-e`
+  resolving from the cwd, with a missing module now REJECTING with `ERR_MODULE_NOT_FOUND`), plus
+  the npm e2e test's original `import("esm-only")` from `-e`, which failed silently before. A full,
+  clean `pnpm exec playwright test` run (105/105) and `vitest run` (828/828) confirm no regressions
+  (one full Vitest run hit 3 unrelated 5 s timeouts under load, incl. the untouched fetcher; they
+  passed alone and in two further full runs).
+- Tests: 828 Vitest + 105 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-are done; dynamic `import()` from CommonJS is next - see PLAN.md Phase 8), Python/Bun, Studio UI.
+and CJS `import()` are done; actually running Vite's dev server is next - see PLAN.md Phase 8),
+Python/Bun, Studio UI.
 
 ## Architecture in one page
 

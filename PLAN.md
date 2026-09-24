@@ -838,14 +838,14 @@ picking this back up.
   CLAUDE.md's "Status"; chosen over a prebuilt snapshot). Checked for real in Chromium against
   registry.npmjs.org: `npm install vite@7` resolves vite 7.3.6 plus 9 dependencies in ~6s, skipping
   the native `@esbuild/*`/`@rollup/*` optional builds.
-- **Next: dynamic `import()` from CommonJS code** (a pre-existing runtime gap, found by the npm e2e
-  test): only real ES modules get their `import()` calls rewritten to the runtime's bridge
-  (`runtime/esm/rewrite.ts`) - an `import()` in a CJS module or `node -e` reaches the browser's
-  native `import()`, which can't resolve a bare specifier or VFS path, and the idle event loop
-  exits before the rejection surfaces, so it fails SILENTLY. Plenty of CJS tooling loads ESM this
-  way (config loaders, CLIs).
-- Then: Vite's own needs (esbuild-wasm or Rollup's wasm build in place of native binaries, chokidar over
-  our `fs.watch`).
+- Dynamic `import()` from CommonJS/`node -e` code - **done**, see CLAUDE.md's "Status": it used to
+  reach the browser's native `import()` and fail silently; `cjs.ts` now rewrites it to the same
+  runtime bridge ES modules use (`esm/loader.ts`'s `rewriteScript`), parsing only source that might
+  contain one.
+- **Next: actually run Vite's dev server.** Its packages install (`npm install vite@7`); what's
+  untested is Vite itself on this runtime - esbuild's native binary can't run here (esbuild-wasm, or
+  an `npm:` alias to it, in its place), Rollup's native build likewise (`@rollup/wasm-node`), and
+  chokidar has to work over our `fs.watch`.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 
