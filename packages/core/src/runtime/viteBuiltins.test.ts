@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IChildProcessHost } from "./bindings/childProcess";
+import { createFakeCryptoDigestSync } from "../testing/fakeCryptoDigestSync";
 import { runScript } from "./harness";
 
 // The builtins Vite imports that this runtime used to lack. `url`, `querystring`, `tty`,
@@ -14,7 +15,12 @@ const noopChildProcessHost: IChildProcessHost = {
 };
 
 const run = (source: string, files: Record<string, string> = {}) =>
-  runScript({ ...files, "/app/main.js": source }, "/app/main.js", { cwd: "/app", childProcess: noopChildProcessHost });
+  runScript({ ...files, "/app/main.js": source }, "/app/main.js", {
+    cwd: "/app",
+    childProcess: noopChildProcessHost,
+    // crypto's hashes block on the kernel's digest servicer; a fake backed by Node's own crypto.
+    spawnSync: createFakeCryptoDigestSync(),
+  });
 
 // Run under real Node 24 once, output pinned below: this runtime must print exactly the same.
 const DIFFERENTIAL_SCRIPT = String.raw`const url = require("url");
@@ -111,13 +117,50 @@ describe("builtins Vite needs", () => {
     const r = await run(`
       const https = require("https");
       const tls = require("tls");
+      const http2 = require("http2");
       const agent = new https.Agent({ keepAlive: true });
       console.log(agent.defaultPort, agent.protocol, https.globalAgent instanceof https.Agent, tls.getCiphers().length, tls.rootCertificates.length);
-      for (const attempt of [() => https.createServer(), () => https.get("https://example.com"), () => tls.connect(443), () => new tls.TLSSocket()]) {
+      for (const attempt of [() => https.createServer(), () => https.get("https://example.com"), () => tls.connect(443), () => new tls.TLSSocket(), () => http2.createSecureServer()]) {
         try { attempt(); console.log("no error"); } catch (e) { console.log(e.code); }
       }
     `);
-    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "443 https: true 0 0\n" + "ERR_NO_CRYPTO\n".repeat(4) }));
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "443 https: true 0 0\n" + "ERR_NO_CRYPTO\n".repeat(5) }));
+  });
+
+  it("dns.promises and dns/promises answer lookups in the promise API's own shape", async () => {
+    const r = await run(`
+      const dns = require("dns");
+      (async () => {
+        console.log(JSON.stringify(await dns.promises.lookup("localhost")), JSON.stringify(await require("dns/promises").lookup("x", { all: true })));
+        console.log(dns.getDefaultResultOrder(), require("dns/promises") === dns.promises);
+      })();
+    `);
+    expect(r.stdout).toBe('{"address":"127.0.0.1","family":4} [{"address":"127.0.0.1","family":4}]\nverbatim true\n');
+  });
+
+  it("crypto: the members Vite uses match real Node's answers", async () => {
+    // Expected output: this exact script run under real Node 24.
+    const r = await run(`
+      const c = require("crypto");
+      console.log(c.hash("sha1", "abc"), c.hash("sha256", Buffer.from("abc"), "base64"), c.hash("sha1", "abc", "buffer").length);
+      console.log(c.timingSafeEqual(Buffer.from("ab"), Buffer.from("ab")), c.timingSafeEqual(new Uint8Array([1]), new Uint8Array([2])));
+      try { c.timingSafeEqual(Buffer.from("a"), Buffer.from("ab")); } catch (e) { console.log(e.code); }
+      const big = c.randomFillSync(new Uint8Array(100000)); console.log(big.length, new Set(big).size > 200);
+      const part = c.randomFillSync(Buffer.alloc(10), 8); console.log(part.subarray(0, 8).every((b) => b === 0));
+      console.log(c.getRandomValues(new Uint32Array(4)).length, c.randomBytes(70000).length, c.webcrypto === globalThis.crypto, typeof c.subtle.digest);
+      try { c.randomFillSync(Buffer.alloc(4), 5); } catch (e) { console.log(e.code); }
+      c.randomFill(Buffer.alloc(8), 2, (err, buf) => console.log("filled", err, buf.length));
+    `);
+    expect(r.stdout).toBe(
+      "a9993e364706816aba3e25717850c26c9cd0d89d ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0= 20\n" +
+        "true false\n" +
+        "ERR_CRYPTO_TIMING_SAFE_EQUAL_LENGTH\n" +
+        "100000 true\n" +
+        "true\n" +
+        "4 70000 true function\n" +
+        "ERR_OUT_OF_RANGE\n" +
+        "filled null 8\n",
+    );
   });
 
   it("inspector fails to load like a Node built without it", async () => {

@@ -39,12 +39,19 @@ export interface IEsmLoaderContext extends IEsmResolveContext {
   globalObject: Record<string, unknown>;
 }
 
+/**
+ * One `export const` per enumerable own key, for named-import parity with real Node's facade -
+ * which reads every export eagerly, lazy getters included. A getter that THROWS here (a lazily
+ * required internal this sandbox doesn't have - e.g. `util.setTraceSigInt`) exports `undefined`
+ * instead of failing every `import { anythingElse } from "node:util"` along with it; the module's
+ * default export still throws the real error if that property is ever actually used.
+ */
 const namedReexports = (bridgeExpr: string, value: unknown): string => {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return "";
-  return Object.keys(value)
-    .filter((key) => IDENTIFIER.test(key) && key !== "default")
-    .map((key) => `export const ${key} = ${bridgeExpr}[${JSON.stringify(key)}];`)
-    .join("\n");
+  const keys = Object.keys(value).filter((key) => IDENTIFIER.test(key) && key !== "default");
+  if (keys.length === 0) return "";
+  const read = `const __read = (key) => { try { return ${bridgeExpr}[key]; } catch { return undefined; } };`;
+  return [read, ...keys.map((key) => `export const ${key} = __read(${JSON.stringify(key)});`)].join("\n");
 };
 
 export const createEsmLoader = (ctx: IEsmLoaderContext) => {

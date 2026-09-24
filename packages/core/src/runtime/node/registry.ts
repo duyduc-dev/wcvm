@@ -24,6 +24,7 @@ import f_internal_assert_myers_diff from "./lib/internal/assert/myers_diff.js";
 import f_internal_assert_utils from "./lib/internal/assert/utils.js";
 import f_internal_async_context_frame from "./lib/internal/async_context_frame.js";
 import f_internal_async_hooks from "./lib/internal/async_hooks.js";
+import f_internal_async_local_storage_async_hooks from "./lib/internal/async_local_storage/async_hooks.js";
 import f_internal_buffer from "./lib/internal/buffer.js";
 import f_internal_child_process from "./lib/internal/child_process.js";
 import f_internal_child_process_serialization from "./lib/internal/child_process/serialization.js";
@@ -37,6 +38,7 @@ import f_internal_errors from "./lib/internal/errors.js";
 import f_internal_errors_error_source from "./lib/internal/errors/error_source.js";
 import f_internal_event_target from "./lib/internal/event_target.js";
 import f_internal_events_abort_listener from "./lib/internal/events/abort_listener.js";
+import f_internal_file from "./lib/internal/file.js";
 import f_internal_fixed_queue from "./lib/internal/fixed_queue.js";
 import f_internal_freelist from "./lib/internal/freelist.js";
 import f_internal_fs_cp_cp from "./lib/internal/fs/cp/cp.js";
@@ -55,6 +57,7 @@ import f_internal_histogram from "./lib/internal/histogram.js";
 import f_internal_http from "./lib/internal/http.js";
 import f_internal_linkedlist from "./lib/internal/linkedlist.js";
 import f_internal_locks from "./lib/internal/locks.js";
+import f_internal_mime from "./lib/internal/mime.js";
 import f_internal_net from "./lib/internal/net.js";
 import f_internal_options from "./lib/internal/options.js";
 import f_internal_per_context_primordials from "./lib/internal/per_context/primordials.js";
@@ -106,7 +109,10 @@ import f_internal_util from "./lib/internal/util.js";
 import f_internal_util_colors from "./lib/internal/util/colors.js";
 import f_internal_util_comparisons from "./lib/internal/util/comparisons.js";
 import f_internal_util_debuglog from "./lib/internal/util/debuglog.js";
+import f_internal_util_diff from "./lib/internal/util/diff.js";
 import f_internal_util_inspect from "./lib/internal/util/inspect.js";
+import f_internal_util_parse_args_parse_args from "./lib/internal/util/parse_args/parse_args.js";
+import f_internal_util_parse_args_utils from "./lib/internal/util/parse_args/utils.js";
 import f_internal_util_types from "./lib/internal/util/types.js";
 import f_internal_v8_startup_snapshot from "./lib/internal/v8/startup_snapshot.js";
 import f_internal_validators from "./lib/internal/validators.js";
@@ -162,6 +168,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/assert/utils": f_internal_assert_utils,
   "internal/async_context_frame": f_internal_async_context_frame,
   "internal/async_hooks": f_internal_async_hooks,
+  "internal/async_local_storage/async_hooks": f_internal_async_local_storage_async_hooks,
   "internal/buffer": f_internal_buffer,
   "internal/child_process": f_internal_child_process,
   "internal/child_process/serialization": f_internal_child_process_serialization,
@@ -175,6 +182,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/errors/error_source": f_internal_errors_error_source,
   "internal/event_target": f_internal_event_target,
   "internal/events/abort_listener": f_internal_events_abort_listener,
+  "internal/file": f_internal_file,
   "internal/fixed_queue": f_internal_fixed_queue,
   "internal/freelist": f_internal_freelist,
   "internal/fs/cp/cp": f_internal_fs_cp_cp,
@@ -193,6 +201,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/http": f_internal_http,
   "internal/linkedlist": f_internal_linkedlist,
   "internal/locks": f_internal_locks,
+  "internal/mime": f_internal_mime,
   "internal/net": f_internal_net,
   "internal/options": f_internal_options,
   "internal/perf/event_loop_delay": f_internal_perf_event_loop_delay,
@@ -243,7 +252,10 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/util/colors": f_internal_util_colors,
   "internal/util/comparisons": f_internal_util_comparisons,
   "internal/util/debuglog": f_internal_util_debuglog,
+  "internal/util/diff": f_internal_util_diff,
   "internal/util/inspect": f_internal_util_inspect,
+  "internal/util/parse_args/parse_args": f_internal_util_parse_args_parse_args,
+  "internal/util/parse_args/utils": f_internal_util_parse_args_utils,
   "internal/util/types": f_internal_util_types,
   "internal/v8/startup_snapshot": f_internal_v8_startup_snapshot,
   "internal/validators": f_internal_validators,

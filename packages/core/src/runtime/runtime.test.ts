@@ -150,6 +150,25 @@ describe("modules", () => {
     expect(r).not.toBeNull();
   });
 
+  it('resolves require("#x") through the nearest package.json "imports", with require conditions', async () => {
+    const r = await runScript(
+      {
+        "/app/package.json": JSON.stringify({
+          imports: { "#config": { require: "./lib/config.cjs", default: "./lib/config.mjs" }, "#util/*": "./lib/util/*.js", "#dep": "dep" },
+        }),
+        "/app/lib/config.cjs": "module.exports = 'config for require';",
+        "/app/lib/util/strings.js": "module.exports = 'strings';",
+        "/app/node_modules/dep/index.js": "module.exports = 'dep';",
+        "/app/src/main.js": `
+          console.log(require("#config"), require("#util/strings"), require("#dep"));
+          try { require("#missing"); } catch (e) { console.log(e.code); }
+        `,
+      },
+      "/app/src/main.js",
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "config for require strings dep\nERR_PACKAGE_IMPORT_NOT_DEFINED\n" }));
+  });
+
   it("reports a missing module with the require stack and MODULE_NOT_FOUND", async () => {
     const r = await run(`require("./nope")`);
     expect(r.code).toBe(1);

@@ -115,4 +115,57 @@ describe("bare package specifiers", () => {
     fs.writeFile("/a/node_modules/pkg/main.js", "");
     expect(resolver.resolveEsmSpecifier("pkg", "/a/b")).toMatchObject({ key: "/a/node_modules/pkg/main.js" });
   });
+
+  describe('package.json "imports" (#specifiers)', () => {
+    const files = {
+      "/app/node_modules/vite/package.json": JSON.stringify({
+        name: "vite",
+        type: "module",
+        imports: {
+          // Vite's own: only true where require(esm) exists, which it doesn't here.
+          "#module-sync-enabled": { "module-sync": "./misc/true.js", default: "./misc/false.js" },
+          "#internal/*": "./dist/internal/*.js",
+          "#dep": "dep-pkg",
+          "#fs": "fs",
+          "#bad": "../outside.js",
+        },
+      }),
+      "/app/node_modules/vite/misc/true.js": "",
+      "/app/node_modules/vite/misc/false.js": "",
+      "/app/node_modules/vite/dist/internal/util.js": "",
+      "/app/node_modules/vite/dist/node/chunks/config.js": "",
+      "/app/node_modules/dep-pkg/package.json": JSON.stringify({ name: "dep-pkg", main: "main.cjs" }),
+      "/app/node_modules/dep-pkg/main.cjs": "",
+    };
+    const from = "/app/node_modules/vite/dist/node/chunks";
+    const setup = (tree: Record<string, string>) => {
+      for (const [file, contents] of Object.entries(tree)) {
+        fs.mkdir(path.dirname(file), { recursive: true });
+        fs.writeFile(file, contents);
+      }
+      return resolver;
+    };
+
+    it("maps an exact key through its conditions, from anywhere inside the package", () => {
+      expect(setup(files).resolveEsmSpecifier("#module-sync-enabled", from)).toEqual({ format: "esm", key: "/app/node_modules/vite/misc/false.js" });
+    });
+
+    it("maps a * pattern", () => {
+      expect(setup(files).resolveEsmSpecifier("#internal/util", from)).toEqual({ format: "esm", key: "/app/node_modules/vite/dist/internal/util.js" });
+    });
+
+    it("lets a target name another package, or a builtin - unlike an \"exports\" target", () => {
+      const r = setup(files);
+      expect(r.resolveEsmSpecifier("#dep", from)).toEqual({ format: "cjs", key: "/app/node_modules/dep-pkg/main.cjs" });
+      expect(r.resolveEsmSpecifier("#fs", from)).toEqual({ format: "builtin", key: "fs" });
+    });
+
+    it("rejects an undefined import and a target escaping the package, with Node's codes", () => {
+      const r = setup(files);
+      expect(() => r.resolveEsmSpecifier("#nope", from)).toThrow(expect.objectContaining({ code: "ERR_PACKAGE_IMPORT_NOT_DEFINED" }));
+      expect(() => r.resolveEsmSpecifier("#bad", from)).toThrow(expect.objectContaining({ code: "ERR_INVALID_PACKAGE_TARGET" }));
+      expect(() => r.resolveEsmSpecifier("#/x", from)).toThrow(expect.objectContaining({ code: "ERR_PACKAGE_IMPORT_NOT_DEFINED" }));
+    });
+  });
 });
+

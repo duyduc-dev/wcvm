@@ -102,15 +102,28 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
     return nearestPackageType(path) === "module" ? "esm" : "cjs";
   };
 
-  /** Same shape/precedence rules as cjs.ts's own (string | conditions | subpath map | "*" pattern), for the "import" condition set. */
-  const resolveExportsTarget = (target: unknown, pkgDir: string, match: string, isPattern: boolean): string | null | undefined => {
+  /**
+   * Same shape/precedence rules as cjs.ts's own (string | conditions | subpath map | "*" pattern),
+   * for the "import" condition set. `resolveBare` is only passed for "imports" (`#x`): unlike an
+   * "exports" target, an imports target may name another package (`"#dep": "some-pkg"`), which
+   * resolves like any bare specifier - to a path, or `node:<id>` for a builtin.
+   */
+  const resolveExportsTarget = (
+    target: unknown,
+    pkgDir: string,
+    match: string,
+    isPattern: boolean,
+    resolveBare?: (specifier: string) => string,
+  ): string | null | undefined => {
     if (typeof target === "string") {
-      if (!target.startsWith("./")) throw new EsmResolveError("ERR_INVALID_PACKAGE_TARGET", `Invalid "exports" target "${target}" in ${pkgDir}/package.json`);
-      return ctx.path.resolve(pkgDir, isPattern ? target.replaceAll("*", match) : target);
+      const substituted = isPattern ? target.replaceAll("*", match) : target;
+      if (target.startsWith("./")) return ctx.path.resolve(pkgDir, substituted);
+      if (resolveBare && !target.startsWith("../") && !target.startsWith("/") && !/^[a-z][a-z0-9+.-]*:/i.test(target)) return resolveBare(substituted);
+      throw new EsmResolveError("ERR_INVALID_PACKAGE_TARGET", `Invalid "${resolveBare ? "imports" : "exports"}" target "${target}" in ${pkgDir}/package.json`);
     }
     if (Array.isArray(target)) {
       for (const item of target) {
-        const resolved = resolveExportsTarget(item, pkgDir, match, isPattern);
+        const resolved = resolveExportsTarget(item, pkgDir, match, isPattern, resolveBare);
         if (resolved !== undefined) return resolved;
       }
       return undefined;
@@ -118,13 +131,55 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
     if (target && typeof target === "object") {
       for (const [key, value] of Object.entries(target)) {
         if (CONDITIONS.has(key)) {
-          const resolved = resolveExportsTarget(value, pkgDir, match, isPattern);
+          const resolved = resolveExportsTarget(value, pkgDir, match, isPattern, resolveBare);
           if (resolved !== undefined) return resolved;
         }
       }
       return undefined;
     }
     return target === null ? null : undefined;
+  };
+
+  /** An exact key, else the longest-prefix "*" pattern that matches - shared by "exports" and "imports". */
+  const matchSubpathMap = (map: Record<string, unknown>, key: string): { target: unknown; match: string; isPattern: boolean } | undefined => {
+    if (Object.hasOwn(map, key) && !key.includes("*")) return { target: map[key], match: "", isPattern: false };
+    let best: { key: string; match: string } | null = null;
+    for (const candidate of Object.keys(map)) {
+      const star = candidate.indexOf("*");
+      if (star === -1) continue;
+      const prefix = candidate.slice(0, star);
+      const suffix = candidate.slice(star + 1);
+      if (key.startsWith(prefix) && key.length >= candidate.length && key.endsWith(suffix)) {
+        if (!best || prefix.length > best.key.indexOf("*")) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
+      }
+    }
+    return best ? { target: map[best.key], match: best.match, isPattern: true } : undefined;
+  };
+
+  /** `#x`: the nearest package.json's "imports" field (Node's PACKAGE_IMPORTS_RESOLVE). */
+  const resolvePackageImports = (specifier: string, referrerDir: string): IResolvedModule => {
+    const notDefined = (where: string) =>
+      new EsmResolveError("ERR_PACKAGE_IMPORT_NOT_DEFINED", `Package import specifier "${specifier}" is not defined${where} imported from ${referrerDir}`);
+    if (specifier === "#" || specifier.startsWith("#/")) throw notDefined("");
+    for (let dir = referrerDir; ; dir = ctx.path.dirname(dir)) {
+      const pkgPath = `${dir === "/" ? "" : dir}/package.json`;
+      const pkg = readJson(pkgPath);
+      if (pkg !== undefined) {
+        const imports = (pkg as { imports?: unknown }).imports;
+        const found = imports && typeof imports === "object" && !Array.isArray(imports) ? matchSubpathMap(imports as Record<string, unknown>, specifier) : undefined;
+        const resolved = found
+          ? resolveExportsTarget(found.target, dir, found.match, found.isPattern, (bare) => {
+              const target = resolveEsmSpecifier(bare, dir);
+              return target.format === "builtin" ? `node:${target.key}` : target.key;
+            })
+          : undefined;
+        if (!resolved) throw notDefined(` in package ${pkgPath}`);
+        if (resolved.startsWith("node:")) return { format: "builtin", key: resolved.slice(5) };
+        if (!isFile(resolved)) throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find module '${resolved}' imported from ${referrerDir}`);
+        return { format: formatOf(resolved), key: resolved };
+      }
+      if (dir === "/") throw notDefined("");
+    }
   };
 
   const resolveExports = (pkgDir: string, exportsField: unknown, subpath: string): string => {
@@ -138,27 +193,10 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
         subpath === "." ? `No "exports" main defined in ${pkgDir}/package.json` : `Package subpath '${subpath}' is not defined by "exports" in ${pkgDir}/package.json`,
       );
 
-    if (Object.hasOwn(map, subpath) && !subpath.includes("*")) {
-      const resolved = resolveExportsTarget(map[subpath], pkgDir, "", false);
-      if (!resolved) throw notExported();
-      return resolved;
-    }
-
-    let best: { key: string; match: string } | null = null;
-    for (const key of Object.keys(map)) {
-      const star = key.indexOf("*");
-      if (star === -1) continue;
-      const prefix = key.slice(0, star);
-      const suffix = key.slice(star + 1);
-      if (subpath.startsWith(prefix) && subpath.length >= key.length && subpath.endsWith(suffix)) {
-        if (!best || prefix.length > best.key.indexOf("*")) best = { key, match: subpath.slice(prefix.length, subpath.length - suffix.length) };
-      }
-    }
-    if (best) {
-      const resolved = resolveExportsTarget(map[best.key], pkgDir, best.match, true);
-      if (resolved) return resolved;
-    }
-    throw notExported();
+    const found = matchSubpathMap(map, subpath);
+    const resolved = found ? resolveExportsTarget(found.target, pkgDir, found.match, found.isPattern) : undefined;
+    if (!resolved) throw notExported();
+    return resolved;
   };
 
   const splitPackageRequest = (specifier: string): { name: string; subpath: string } => {
@@ -194,7 +232,8 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
     throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find package '${name}' imported from ${fromDir}`);
   };
 
-  const resolveEsmSpecifier = (specifier: string, referrerDir: string): IResolvedModule => {
+  function resolveEsmSpecifier(specifier: string, referrerDir: string): IResolvedModule {
+    if (specifier.startsWith("#")) return resolvePackageImports(specifier, referrerDir);
     const bare = specifier.startsWith("node:") ? specifier.slice(5) : specifier;
     if (specifier.startsWith("node:") || (!isRelative(specifier) && ctx.builtins.canBeRequiredByUsers(bare))) {
       if (!ctx.builtins.canBeRequiredByUsers(bare)) throw new EsmResolveError("ERR_UNKNOWN_BUILTIN_MODULE", `No such built-in module: ${specifier}`);
@@ -214,7 +253,7 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
 
     const resolved = resolveBarePackage(specifier, referrerDir);
     return { format: formatOf(resolved), key: resolved };
-  };
+  }
 
   return { resolveEsmSpecifier, formatOfPath: formatOf };
 };
