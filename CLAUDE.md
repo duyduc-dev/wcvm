@@ -51,7 +51,8 @@ Done and verified in real Chromium:
   builtin or plain CJS file imported from ESM gets a synthetic default+named-export wrapper; a
   genuinely circular static import throws `ERR_CIRCULAR_ESM_NOT_SUPPORTED` (a dynamic `import()`
   breaks the cycle instead). See PLAN.md "Current state" and "Known differences"
-  (`import.meta.url` is the module's blob URL, not its real path).
+  (`import.meta` is rewritten to the module's REAL `file://` URL/filename/dirname/resolve - see
+  the `import.meta` Status entry below).
 - `node` with no script/`-e` is an interactive REPL (`runtime/repl.ts`): built on the vendored,
   TTY-independent `readline`, not Node's real `repl` module (that needs raw-mode TTY/tab-completion
   machinery `tty_wrap` deliberately stubs out). Variables persist across lines via indirect
@@ -749,15 +750,33 @@ Done and verified in real Chromium:
   mark/measure, PerformanceObserver), 1 Playwright test in real Chromium (native URLPattern/
   performance/timers inside a real worker). A full, clean `pnpm exec playwright test` run (106/106)
   and `vitest run` (834/834) confirm no regressions.
-- Tests: 834 Vitest + 106 Playwright (Chromium). See "Verifying".
+- `import.meta` as the module's REAL `file://` URL (Phase 8's sixth piece; used to be a documented
+  known difference - it was the module's `blob:` URL). Vite locates its own files with
+  `fileURLToPath(new URL("../..", import.meta.url))`, reads its package.json relative to it, and
+  opens with `createRequire(import.meta.url)` - none of which can work against a blob URL.
+  `esm/rewrite.ts` now also rewrites every `import.meta` (`esm/ast.ts`'s `importMetaProperties`,
+  acorn `MetaProperty` nodes) to `__wcvm_import_meta__("<path>")`, a bridge (`esm/loader.ts`'s
+  `importMeta`) returning ONE cached object per module - like Node's, so what code stores on it
+  sticks - with `url` (`pathToFileURL`), `filename`, `dirname` and `resolve()` (resolving exactly
+  like the module's own imports: `file://` URLs, `node:` for builtins). To make room, the dynamic
+  `import()` rewrite now replaces only the `import(` prefix and the closing `)` instead of the
+  whole call - otherwise an `import.meta` INSIDE an `import()` argument (`import(new URL("./x",
+  import.meta.url).href)`) would be two overlapping edits; output is byte-identical for every
+  existing case (the old rewrite tests pass unchanged). Verified: `esm/rewrite.test.ts`'s 2 new
+  cases (incl. the nested one) and 1 Playwright test in real Chromium (url/filename/dirname,
+  `readFileSync(new URL("../package.json", import.meta.url))`, `fileURLToPath`,
+  `createRequire(import.meta.url)`, `import.meta.resolve`, a dynamic import built from it, identity
+  across reads). A full, clean `pnpm exec playwright test` run (107/107) and `vitest run` (836/836)
+  confirm no regressions.
+- Tests: 836 Vitest + 107 Playwright (Chromium). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
 findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-CJS `import()` and the 9 builtins Vite imports are done; a real `file://` `import.meta.url` is
-next - see PLAN.md Phase 8),
+CJS `import()`, the 9 builtins Vite imports and a real `import.meta.url` are done; the next Vite
+blocker is found by running it again - see PLAN.md Phase 8),
 Python/Bun, Studio UI.
 
 ## Architecture in one page

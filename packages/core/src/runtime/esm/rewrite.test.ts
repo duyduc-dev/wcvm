@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestLoader } from "../testing";
 import { parseModule } from "./ast";
-import { DYNAMIC_IMPORT_BRIDGE, rewriteModule } from "./rewrite";
+import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 
 const acorn = createTestLoader().require("internal/deps/acorn/acorn/dist/acorn");
 const rewrite = (source: string, resolveStatic: (s: string) => string = (s) => `blob:${s}`, selfUrl = "/self.mjs") =>
@@ -41,4 +41,20 @@ describe("rewriteModule", () => {
   it("leaves a module with no imports at all unchanged", () => {
     expect(rewrite(`console.log(1);`)).toBe(`console.log(1);`);
   });
+
+  it("rewrites every import.meta to the module's own meta object", () => {
+    const source = `const here = import.meta.url;\nconst dir = import.meta.dirname, { url } = import.meta;\n`;
+    expect(rewrite(source, undefined, "/src/entry.mjs")).toBe(
+      `const here = ${IMPORT_META_BRIDGE}("/src/entry.mjs").url;\n` +
+        `const dir = ${IMPORT_META_BRIDGE}("/src/entry.mjs").dirname, { url } = ${IMPORT_META_BRIDGE}("/src/entry.mjs");\n`,
+    );
+  });
+
+  it("rewrites an import.meta INSIDE a dynamic import's argument too, without the two edits colliding", () => {
+    const source = `await import(new URL("./x.mjs", import.meta.url).href, { with: {} });`;
+    expect(rewrite(source, undefined, "/src/entry.mjs")).toBe(
+      `await ${DYNAMIC_IMPORT_BRIDGE}(new URL("./x.mjs", ${IMPORT_META_BRIDGE}("/src/entry.mjs").url).href, "/src/entry.mjs");`,
+    );
+  });
 });
+

@@ -12,14 +12,17 @@
 // bindings; dynamic import() has no such limit (it resolves lazily, so it
 // works as the standard way to break a cycle) - see PLAN.md.
 //
-// import.meta.url is the module's Blob URL, not its real path (a known,
-// deliberate difference - see PLAN.md "Known differences").
+// `import.meta` is rewritten (rewrite.ts) to a per-module object carrying the
+// module's REAL `file://` URL, filename, dirname and a resolve() - the
+// browser's own would describe the Blob, which code like Vite's
+// `fileURLToPath(new URL("../..", import.meta.url))` or
+// `createRequire(import.meta.url)` can't do anything with.
 
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
 import { EsmSyntaxError, parseModule, parseScript, type IAcorn } from "./ast";
 import { createEsmResolver, EsmResolveError, type EsmFormat, type IEsmResolveContext } from "./resolve";
-import { DYNAMIC_IMPORT_BRIDGE, rewriteModule } from "./rewrite";
+import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 
 const REQUIRE_BUILTIN_BRIDGE = "__wcvm_require_builtin__";
 const REQUIRE_CJS_BRIDGE = "__wcvm_require_cjs__";
@@ -68,9 +71,32 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
           return Promise.reject(error);
         }
       },
+      [IMPORT_META_BRIDGE]: (path: string) => importMeta(path),
       [REQUIRE_BUILTIN_BRIDGE]: (id: string) => ctx.builtins.requireBuiltin(id),
       [REQUIRE_CJS_BRIDGE]: (path: string) => ctx.requireCjs(path),
     });
+  };
+
+  const metas = new Map<string, Record<string, unknown>>();
+  /** A module's `import.meta`, like Node's own: one object per module, so what code stores on it
+   *  sticks. `resolve()` answers the way the module's own imports would resolve. */
+  const importMeta = (path: string) => {
+    let meta = metas.get(path);
+    if (!meta) {
+      const { pathToFileURL } = ctx.builtins.requireBuiltin("url");
+      const dirname = ctx.path.dirname(path);
+      meta = {
+        url: pathToFileURL(path).href,
+        filename: path,
+        dirname,
+        resolve: (specifier: string) => {
+          const resolved = resolver.resolveEsmSpecifier(specifier, dirname);
+          return resolved.format === "builtin" ? `node:${resolved.key}` : pathToFileURL(resolved.key).href;
+        },
+      };
+      metas.set(path, meta);
+    }
+    return meta;
   };
 
   /** Returns `key`'s Blob URL, creating it (and every static dependency it needs first) if not already cached. */

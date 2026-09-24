@@ -74,8 +74,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   B which statically imports A) throw `ERR_CIRCULAR_ESM_NOT_SUPPORTED` instead of silently
   breaking live bindings: a Blob's content is fixed at creation, unlike a real fetchable URL a
   server could answer lazily, so creating A's blob needs B's URL and vice versa - a dynamic
-  `import()` breaks the cycle instead, same as it does in real bundled/served ESM. See "Known
-  differences" for `import.meta.url`.
+  `import()` breaks the cycle instead, same as it does in real bundled/served ESM. `import.meta`
+  is rewritten too, to the module's real `file://` URL/filename/dirname/resolve (not the blob's).
 - `node` with no script and no `-e` is an interactive REPL (`runtime/repl.ts`), and so is `sh`
   with no `-c`/script (see above). Real Node's own `repl` module isn't vendored - it needs
   raw-mode TTY, ANSI cursor control and tab-completion machinery `tty_wrap` deliberately stubs
@@ -513,9 +513,8 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   literal source text a `v8::Message` would carry, so `sourceLine` is always `""` - the real
   tokenizer runs on an empty string, correctly yields zero tokens, and the enrichment degrades to
   a plain message. `assert(x)` still throws `AssertionError` either way.
-- ESM's `import.meta.url` is the module's `blob:` URL (what it was actually `import()`ed from),
-  not its real VFS path as a `file://` URL - a Blob has no path of its own to report
-  (`runtime/esm/loader.ts`).
+- (No longer a difference: ESM's `import.meta.url` used to be the module's `blob:` URL - it's
+  rewritten to the real `file://` URL now, see CLAUDE.md's "Status".)
 - The REPL doesn't vendor Node's real `repl` module (raw-mode TTY/ANSI/tab-completion needs
   `tty_wrap` deliberately stubs out - see "Lessons learned"). It's TTY-independent, built on
   `readline`, with indirect `eval()` giving cross-line persistence for `var`/function
@@ -861,11 +860,10 @@ picking this back up.
   "npm:@rollup/wasm-node@^4"` - done, flat form), 11 packages from the real registry in ~5s. A
   first real run (2026-09-24, Chromium) stops at once: `node:perf_hooks` isn't a builtin. Probed
   every `node:` builtin Vite 7's own code imports against a real wcvm process - 9 missing, all
-  **done** now (see CLAUDE.md's "Status"). **Next: `import.meta.url` as the module's real `file://`
-  URL** - it's the module's `blob:` URL today (a documented known difference), and Vite finds its
-  own files with `fileURLToPath(new URL("../..", import.meta.url))` and `createRequire(import.meta
-  .url)`. After that: whatever Vite hits next (esbuild-wasm's own child-process service, chokidar
-  over our `fs.watch`, ...).
+  **done** now (see CLAUDE.md's "Status"), and so is `import.meta.url` as the module's real
+  `file://` URL (it was the `blob:` URL; Vite finds its own files through it). **Next: run Vite
+  again** and fix whatever it hits next (esbuild-wasm's own child-process service, chokidar over
+  our `fs.watch`, ...).
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 

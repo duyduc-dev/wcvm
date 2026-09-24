@@ -110,3 +110,20 @@ export const dynamicImportCalls = (program: AnyNode): IDynamicImportCall[] => {
   });
   return calls;
 };
+
+export interface IImportMeta {
+  start: number;
+  end: number;
+}
+
+/** Every `import.meta` in a module - rewritten to the module's own meta object (see rewrite.ts). */
+export const importMetaProperties = (program: AnyNode): IImportMeta[] => {
+  const found: IImportMeta[] = [];
+  walk(program, (node) => {
+    if (node.type !== "MetaProperty") return;
+    const meta = node.meta as AnyNode & { name?: string };
+    const property = node.property as AnyNode & { name?: string };
+    if (meta.name === "import" && property.name === "meta") found.push({ start: node.start, end: node.end });
+  });
+  return found;
+};
