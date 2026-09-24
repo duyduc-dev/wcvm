@@ -709,6 +709,38 @@ test.describe("node", () => {
       expect(r.out.split("\n").filter(Boolean).sort()).toEqual(["answer 42", "rejected ERR_MODULE_NOT_FOUND"]);
     });
 
+    test("import.meta is the module's real file:// URL - what Vite does with it all works", async ({ page }) => {
+      await writeFiles(page, {
+        "/app/src/main.mjs": `
+          import { readFileSync } from "node:fs";
+          import { fileURLToPath } from "node:url";
+          import { createRequire } from "node:module";
+          console.log(import.meta.url, import.meta.filename, import.meta.dirname);
+          console.log(readFileSync(new URL("../package.json", import.meta.url), "utf8").trim());
+          console.log(fileURLToPath(new URL("./other.mjs", import.meta.url)));
+          console.log(createRequire(import.meta.url)("./helper.cjs"));
+          console.log(import.meta.resolve("./other.mjs"), import.meta.resolve("node:fs"));
+          const other = await import(new URL("./other.mjs", import.meta.url).pathname);
+          console.log(other.whoami, import.meta === import.meta);
+        `,
+        "/app/src/other.mjs": "export const whoami = import.meta.url;\n",
+        "/app/src/helper.cjs": "module.exports = 'required from ' + __filename;",
+        "/app/package.json": '{"name":"meta-app"}',
+      });
+      const r = await spawn(page, "node", ["src/main.mjs"], "/app");
+      expect(r).toEqual({
+        code: 0,
+        out:
+          "file:///app/src/main.mjs /app/src/main.mjs /app/src\n" +
+          '{"name":"meta-app"}\n' +
+          "/app/src/other.mjs\n" +
+          "required from /app/src/helper.cjs\n" +
+          "file:///app/src/other.mjs node:fs\n" +
+          "file:///app/src/other.mjs true\n",
+        err: "",
+      });
+    });
+
     test("importing a CJS file from ESM: default is module.exports, named exports are its own keys", async ({ page }) => {
       await writeFiles(page, {
         "/lib.cjs": "module.exports = { a: 1, b: 2 };\n",
