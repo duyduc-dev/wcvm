@@ -1,5 +1,6 @@
 import type { IFsClient } from "../fs/fsClient";
 import { node } from "./node";
+import { createNpm } from "./npm/npm";
 import { sh } from "./sh/sh";
 import type { IProgramContext, Program } from "./types";
 
@@ -156,6 +157,17 @@ const sleep: Program = async ({ args, sleep: wait, stderr }) => {
   return 0;
 };
 
+// Captured now, at module load: a `node` program run later in this same worker installs Node's own
+// globals over the platform's (see CLAUDE.md's "never call a global by its bare name" gotcha).
+const nativeFetch: typeof fetch =
+  typeof globalThis.fetch === "function" ? globalThis.fetch.bind(globalThis) : () => Promise.reject(new Error("fetch() is not available here"));
+const npm = createNpm({
+  fetch: nativeFetch,
+  subtle: globalThis.crypto?.subtle,
+  DecompressionStream: globalThis.DecompressionStream,
+  now: () => Date.now(),
+});
+
 const builtins: Record<string, Program> = {
   echo,
   pwd,
@@ -165,6 +177,7 @@ const builtins: Record<string, Program> = {
   rm,
   sleep,
   node,
+  npm,
   // `sh` resolves other builtins (including itself) by name, so this module
   // and sh/sh.ts import each other. A plain `sh` property would capture
   // whatever sh/sh.ts's binding happened to be AT THIS LINE, which is
