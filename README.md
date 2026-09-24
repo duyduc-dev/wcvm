@@ -70,8 +70,12 @@ Cross-Origin-Embedder-Policy: require-corp
 pnpm install
 pnpm --filter wcvm test
 pnpm build
-pnpm --filter playground dev
+pnpm --filter playground preview
 ```
+
+Serve the playground from a production build (`preview`), not `pnpm --filter playground dev`:
+Vite's dev server injects an HMR client into every `new Worker(url, {type:"module"})`, which is
+how every wcvm worker is created, corrupting the guest Node runtime's own timers.
 
 ## License
 
