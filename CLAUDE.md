@@ -977,14 +977,138 @@ Done and verified in real Chromium:
   reloading the Vue component, then the mutual-exclusion check above). A full, clean
   `pnpm exec playwright test` run (110 passed, 3 opt-in skipped) and, with `WCVM_E2E_VITE=1`, every
   test including all opt-in ones (113 passed, ~1.8 min total) confirm no regressions.
-- Tests: 882 Vitest + 113 Playwright (Chromium; 3 of them opt-in, needing the real npm registry:
+- `npm create <name>`/`npm init <name>` (`programs/npm/exec.ts`): real npm's own package-name
+  mangling (`lib/commands/init.js`'s `execCreate`, checked against real npm 11 - a bare scope
+  becomes `<scope>/create`; anything else gets `create-` inserted right after an optional leading
+  `<scope>/`, even if the name already starts with `create-`) resolves a package like
+  `create-vite`, fetched as a single package with no dependency-tree resolution at all (most
+  `create-*` tools, `create-vite` included, bundle everything into one file and declare zero
+  runtime dependencies of their own), cached under a scratch VFS path
+  (`/.wcvm/npm-exec-cache/<name>@<version>`, keyed by exact version so a repeat `npm create vite`
+  doesn't re-download) - then its own `bin` entry runs through `node` directly (an args ARRAY,
+  never round-tripped through a shell string the way `npm run`'s own forwarding is, so a
+  space-containing arg - a target directory named `"my app"`, say - survives whole). The same
+  "npx `<pkg>`" idea real npm's own `npm exec`/libnpmexec implements, scoped to just this one case;
+  a bare `npm init` with no name (real npm's interactive package.json wizard) isn't supported.
+  - **The raw-mode-TTY risk this was previously deferred over turned out not to apply at all**:
+    `create-vite`'s own interactive template picker only runs when `process.stdin.isTTY` is
+    truthy (checked directly in its real source) - and this sandbox's `tty_wrap.isatty()` is
+    already always `false` (a pre-existing, deliberate simplification - see "Known differences"),
+    so `create-vite` already treats wcvm as non-interactive by default, the exact same way it
+    would treat a CI runner with no real terminal attached. No new interactivity-related code was
+    needed at all - only the fetch-one-package-and-run-its-bin machinery above.
+  - **Two real, ecosystem-version gotchas found verifying this against the actual registry, both
+    fixed by pinning versions - not wcvm bugs, but real incompatibilities any real user hitting
+    the same combination would also hit**: (1) `create-vite@latest`'s CURRENT react-ts template
+    scaffolds Vite 8, which defaults to Rolldown (a native/Wasm Rust bundler) instead of
+    Rollup+esbuild - PLAN.md already had a note from an earlier investigation that Vite
+    8/Rolldown hits an upstream Wasm trap, unrelated to this feature. (2) Once `vite` itself was
+    pinned back to the known-working `7.3.6` (matching the hand-written React example's own pin),
+    the scaffolded template's own `@vitejs/plugin-react@^6.1.1` (also newer than what that example
+    pins) failed with `EsmResolveError: Package subpath "./internal" is not defined by "exports"
+    in .../vite/package.json` - a real Vite-7-vs-plugin-react-6 export-path mismatch, fixed by
+    pinning `@vitejs/plugin-react` back to `^5.0.0` too. With both pinned (plus the same
+    `esbuild-wasm`/`@rollup/wasm-node` `overrides` the hand-written examples already use), the
+    real, unmodified scaffolded project installs and runs Vite's dev server for real.
+  - Verified: `programs/npm/exec.test.ts` (6 Vitest - `mangleCreateName` against real npm 11's own
+    cases, including the bare-scope and already-"create-"-prefixed quirks), `programs/npm/
+    npm.test.ts`'s new `"npm create / npm init"` describe block (7 Vitest - mangling+fetch+bin-run
+    against the fake registry, the space-preserving arg check, version pinning, tarball caching on
+    a repeat run, the `create`/`init` alias equivalence, a missing-bin error, a missing-name
+    error). 1 new Playwright test against the REAL npm registry (`WCVM_E2E_VITE=1`): a real
+    `npm create vite@latest scaffolded -- --template react-ts --no-interactive` scaffolds a real
+    project non-interactively, then it's installed and its real Vite dev server actually starts -
+    run twice in parallel to rule out flakiness. A full, clean `pnpm exec playwright test` run
+    (112 passed, 4 opt-in skipped) and, with `WCVM_E2E_VITE=1`, every test including all opt-in
+    ones (116 passed, ~1.9 min total) confirm no regressions. `vitest run` (895/895) confirms no
+    regressions elsewhere.
+- A third playground example, `npm create vite@latest` (`src/createViteExample.ts`) - the direct
+  UI showcase of `npm create`/`exec.ts`, right next to the two hand-written ones: instead of
+  mounting a static `PROJECT_FILES` tree, it runs a real `npm create vite@latest -- --template
+  react-ts --no-interactive`, patches the SAME version pins found verifying `npm create` itself
+  (`vite@7.3.6`, `@vitejs/plugin-react@^5.0.0`, the `esbuild-wasm`/`@rollup/wasm-node` overrides)
+  into the real scaffolded package.json, then seeds the editor from the real scaffolded
+  `src/App.tsx` (create-vite's own current default template - a counter button with real image
+  assets, `.counter`/no `#count` id, unlike the hand-written examples') instead of any
+  wcvm-authored content. `viteExample.ts`'s `IViteExampleConfig.source` grew a second
+  `"scaffold"` kind alongside the existing `"static"` one to carry this - `attachViteExample`
+  itself still owns installing, starting `npm run dev`, wiring the editor to hot-reload, and
+  reporting status, identically either way. All three examples now share the one preview pane, so
+  `main.ts` extends the pairwise mutual-exclusion each `onBeforeStart` hook already did into a
+  three-way one (starting any one stops the other two). Verified: the playground's own
+  `tsc --noEmit` stays clean; 2 new Playwright tests (an always-on one for the placeholder text
+  before any run, and an opt-in one - `WCVM_E2E_VITE=1` - for the whole flow: scaffold, install,
+  the real counter and its real image assets rendering in the preview, an editor edit hot-
+  reloading the real `App.tsx`, then the three-way mutual-exclusion check). A full, clean
+  `pnpm exec playwright test` run (113 passed, 5 opt-in skipped) and, with `WCVM_E2E_VITE=1`,
+  every test including all opt-in ones (118 passed, ~2.1 min total) confirm no regressions.
+- Real interactivity for the Create Vite example's own `npm create vite@latest`
+  (`src/interactiveTerminal.ts`): an "interactive" checkbox swaps the silent `--no-interactive`
+  scaffold for create-vite's own REAL prompts - arrow-key framework/variant menus and all -
+  answered live by the user in a raw terminal, instead of anything wcvm scripts on their behalf.
+  `interactiveTerminal.ts` is a genuinely different kind of terminal from `terminal.ts`'s own
+  sh/node session: that one does its OWN local line editing in the browser (echo, backspace,
+  buffer-until-Enter) because sh/node's REPLs are line-buffered and only read a whole line at
+  once: reasonable, since there's no real pty here. create-vite's own prompts instead use real
+  Node `readline` in `terminal: true` mode with `emitKeypressEvents` - checked directly against a
+  real spawn first (feeding it a raw arrow-key escape sequence correctly produced a `{name:
+  "up"}` keypress event) - so `interactiveTerminal.ts` forwards every keystroke to the process's
+  stdin immediately, byte for byte, with NO local echo of its own: the process's own readline
+  does that, through its own stdout, exactly like a real pty's line discipline handing off to a
+  raw-mode foreground program would. The target directory is still given explicitly on the
+  command line (skips only the "Project name?" prompt); `--no-immediate` skips create-vite's own
+  "install and start now?" prompt outright - answered yes, it would run `npm run dev`
+  SYNCHRONOUSLY inside create-vite's own process, which never returns for a dev server -
+  installing/starting is already this example's own next step, asynchronously, the normal wcvm
+  way. Once the framework choice is genuinely free, `editablePath`/the version-pin logic can no
+  longer assume react-ts: `viteExample.ts`'s `findEditableFile` tries the configured default then
+  every other common "App" file convention create-vite's OTHER templates use, and
+  `KNOWN_PLUGIN_PINS` only pins a plugin that's actually present (`vite` itself is always pinned -
+  it alone fixes the Vite 8/Rolldown Wasm trap regardless of framework).
+  - **A real, ecosystem-version incompatibility found by actually using the feature** (reported by
+    the user picking React's own "TypeScript + React Compiler" variant): `@vitejs/plugin-react`
+    only gained the `reactCompilerPreset` export it needs at `6.0.0` (confirmed absent from every
+    `5.x`, checked directly against the published packages) - but `6.x` itself imports from a
+    `"vite/internal"` subpath that `vite@7.3.6`'s own `package.json` doesn't export at all (only
+    `vite@8+` does, and that's the same Rolldown/Wasm-trap version this sandbox can't run either).
+    There is no working (vite, plugin-react) pair for this one variant yet - detected right after
+    scaffolding (`pkg.devDependencies["babel-plugin-react-compiler"]`, one of the extra
+    dependencies create-vite's own template adds for it) and failed with a clear, actionable
+    message instead of continuing into the same cryptic Vite crash the user originally hit.
+  - **A second, more consequential bug this surfaced** (silent, not just for React Compiler):
+    `stop()`'s own `if (!vite) return` guard - added earlier so a cross-example "stop yourself"
+    call is a safe no-op when this example isn't running - was ALSO silently swallowing this
+    example's OWN `start()` failures, since `vite` isn't assigned until `npm run dev` actually
+    spawns, well after scaffolding/`npm install` could already have failed. Every failure before
+    that point (a bad template, a network error during install, this React Compiler case) left
+    the status frozen on "Scaffolding..."/"Installing..." forever, with no visible error at all -
+    confirmed retroactively by a real, unrelated transient registry ENETWORK error during
+    verification, which the fix now surfaces cleanly. Fixed by splitting `stop()` into a guarded
+    version (cross-example calls, the "dev server exited unexpectedly" handler - both already
+    guaranteed `vite` is set) and an unconditional `reportFailure()` (the click handler's own
+    catch block, which can't make that assumption).
+  - Verified: the playground's own `tsc --noEmit` stays clean. 1 new Playwright test, driven by
+    REAL Playwright keyboard events into the actual terminal DOM element (not synthetic stdin
+    writes) - checks the checkbox, clicks run, waits for the real terminal to attach, presses
+    Down/Enter to pick Vue (a different framework than the example's own react-ts default,
+    proving `findEditableFile`'s fallback and the generalized pin logic), confirms the real
+    scaffolded `src/App.vue` seeds the editor and Vite starts for real. Before writing that test,
+    the whole mechanism was checked in three escalating real-Chromium steps: `emitKeypressEvents`
+    decoding a raw arrow key in isolation, a full `npm create vite@latest --interactive` session
+    driven by synthetic stdin writes (framework/variant/linter all answered via forwarded
+    keystrokes), then the same flow through the real UI. A full, clean `pnpm exec playwright test`
+    run (113 passed, 6 opt-in skipped) and, with `WCVM_E2E_VITE=1`, every test including all
+    opt-in ones (119 passed, ~5 min total - one run also hit a real, unrelated transient registry
+    network error on an unrelated test, which passed cleanly on retry) confirm no regressions.
+- Tests: 895 Vitest + 119 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): more dev-server templates (Svelte, plain Node/Express -
-Vite+React and Vite+Vue exist) and npm workspaces, DNS (`dns.lookup()` is a fixed-address shim, low-value
-in a single virtual host with no real network to resolve a name against), real `npm` (investigated
-and DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual
-`net`/`http`; a minimal built-in `npm install`/`npm run` exists instead - see above and PLAN.md's
+Vite+React and Vite+Vue exist), npm workspaces and the rest of `npm exec` (arbitrary local/registry
+commands, not just `create`), DNS (`dns.lookup()` is a fixed-address shim, low-value in a single
+virtual host with no real network to resolve a name against), real `npm` (investigated and
+DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
+a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's
 "Real npm: feasibility findings"), Python/Bun, Studio UI.
 
 ## Architecture in one page
