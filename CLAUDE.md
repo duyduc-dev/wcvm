@@ -1128,29 +1128,84 @@ Done and verified in real Chromium:
     `messaging.ts`), so a worker that ends itself with no explicit `.terminate()` call keeps its
     creator alive regardless; not a concern for a persistent pool like `@napi-rs/wasm-runtime`'s
     own (nothing there calls `terminate()` mid-use), but a documented simplification otherwise.
-  - With both fixes plus a temporary, NOT-committed `"browser"` ESM condition (see PLAN.md - still
-    considered too architecturally risky to enable for real), a real `npm create vite@latest`
-    default (Vite 8, Rolldown) got measurably further: past the `node:wasi` "No such built-in
-    module" error from before AND past the silent 60s worker-pool hang the previous scoping attempt
-    found - `npm run dev` now visibly runs and produces output instead of hanging. It then hits a
-    THIRD, different blocker: `sh: ldd: command not found` - the installed `rolldown` package's own
-    napi-rs-based loader ships native platform binaries as `optionalDependencies` (`@rolldown/
-    binding-linux-x64-gnu` etc., one per Rust target) and, even when routed toward its wasm/browser
-    build, its loader still shells out to `ldd` (the standard `detect-libc` glibc-vs-musl check) to
-    decide which to use - `sh` has no such program. Full Vite 8/Rolldown support is genuinely NOT
-    done: this is a third, real platform gap on top of the `"browser"` condition's own already-
-    documented risk (changes ESM resolution for every installed package, not just this one) and the
-    still-unresolved worker-pool question the previous note raised (whether it's now actually fixed
-    or was simply never the blocker - undetermined, since `ldd` fails before the pool would run).
-    `rawWorker.ts` itself is committed regardless: a real, independently useful fix for any guest
-    code that uses the browser's own `Worker` global, Rolldown or not.
-  - Verified: 3 new Playwright tests in real Chromium (loads a real VFS script instead of throwing;
+  - A THIRD platform gap, found chasing this further (see below): `@emnapi/wasi-threads`'s own
+    `ThreadManager`, and `@napi-rs/wasm-runtime`'s own async-work/threadsafe-function dispatch built
+    on it, guard every `.on()`/`.once()`/`.off()`/`.ref()`/`.unref()` call on a worker object behind
+    `ENVIRONMENT_IS_NODE` (`typeof process.versions.node === "string"`) - true under real Node
+    (where `new Worker(...)` doesn't exist as a global at all; that branch targets
+    `worker_threads.Worker`, a real EventEmitter) and false in a real browser (where the same files
+    call `addEventListener()`/`removeEventListener()` instead, or - `ThreadManager`'s own pool
+    bookkeeping only - rely on native `worker.onmessage`/`.onerror`/`.onmessageerror` property
+    assignment, set unconditionally just above). wcvm's own vendored `process.versions.node` makes
+    `ENVIRONMENT_IS_NODE` true here too, even though `new Worker(...)` resolves to this real native
+    browser constructor - a genuine identity contradiction no real environment has - so the Node
+    branch ran against a plain `Worker` and crashed (`TypeError: worker.once is not a function`).
+    Once that stopped crashing, a real bundling call still hung forever at `.generate()`: the
+    async-work/threadsafe-function completion message has NO property-assignment fallback at all -
+    `.on('message', ...)` is its ONLY delivery path under the (wrongly-taken) Node branch, so a
+    no-op there silently drops the one message that would resolve the pending build. Fixed by
+    making `.on()`/`.once()`/`.off()` genuine bridges to `addEventListener()`/`removeEventListener()`
+    (unwrapping to `fn(event.data)` for `'message'`/`'messageerror'`, matching what Node's own
+    `.on()` call sites already expect), tracked per-(event, original listener) so `.off()` finds the
+    right one to remove; `.ref()`/`.unref()` toggle the same held loop-reference the SECOND PLATFORM
+    GAP above already tracks - exactly their real meaning. `'exit'`/`'detachedExit'` (Node-only
+    concepts) have no bridge and are dropped - the one real, documented simplification: an
+    unexpected worker crash goes unreported, acceptable for a pool normally only ever torn down via
+    an explicit `.terminate()` (already handled).
+  - **With all three fixes, real Rolldown WASM bundling now genuinely works end to end** - proven,
+    not just theorized: `@rolldown/browser` (swapped in for plain `rolldown` via a `package.json`
+    `overrides` entry, the same trick already used for `esbuild`/`rollup` -> their wasm builds - the
+    package.json exports leading to it needs a `"browser"` ESM condition too, since `@rolldown/
+    browser`'s own `"."` export has no `"import"` key at all, only `"types"`/`"browser"`/
+    `"default"`) loads its real `.wasm` binary (via `rawFetch.ts`, next entry), spins up its real
+    worker pool (via the three fixes above), and a real `rolldown({ input, plugins: [...] })` call
+    produces REAL bundled output - checked directly with a two-file TS project
+    (`import { greet } from './helper'`) compiling to genuine, correct bundled code. The remaining
+    piece: `@rolldown/browser`'s own filesystem is a fully ISOLATED in-memory WASI `memfs()` (not
+    wcvm's VFS at all - confirmed by reading `rolldown-binding.wasi-browser.js`'s own
+    `export const { fs: __fs, vol: __volume } = memfs()`, itself not part of the package's public
+    `exports` map), so `input`/imports resolve against nothing by default (`[UNRESOLVED_ENTRY]
+    Cannot resolve entry module`) - fixed for the standalone case with an ordinary Rollup-compatible
+    `resolveId`/`load` plugin backed by wcvm's own real `fs`, which bypasses the internal memfs
+    entirely (the sanctioned way any real bundler consumer would feed it files - not a hack). NOT
+    yet solved: Vite itself invokes Rolldown INTERNALLY, with no known way to inject this plugin
+    into that internal call - whether Vite's own dev-server file reads (not just `vite build`) even
+    route through Rolldown at all in the same way is unconfirmed too. The `"browser"` condition
+    change itself is also still NOT committed/applied for real use (kept as a documented, proven-
+    necessary-but-unapplied finding) - it remains a genuine, ecosystem-wide ESM-resolution change
+    (every package's `"."` export, not just this one), now better understood (proven to change
+    resolution correctly for this one real case, with no side effects on the one ~18-package install
+    tested) but not yet verified safe more broadly. See PLAN.md's "Scoped further" for the full
+    writeup and what's left.
+  - Verified: 5 new Playwright tests in real Chromium (loads a real VFS script instead of throwing;
     keeps the process alive until the worker's own message arrives; `.terminate()` releases the ref
-    and lets an otherwise-idle process exit) - none of this (a real native `Worker`, the `file:`
-    URL rejection, real event-loop ref/unref timing) can be exercised outside Chromium. A full,
-    clean `pnpm exec playwright test` run (116 passed, 6 opt-in skipped) and `vitest run` (895/895)
-    confirm no regressions.
-- Tests: 895 Vitest + 122 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
+    and lets an otherwise-idle process exit; `ref()`/`unref()`/`on()`/`once()`/`off()` are safe to
+    call and genuinely bridge real events for a Node-shaped listener) - none of this (a real native
+    `Worker`, the `file:` URL rejection, real event-loop ref/unref timing, real `addEventListener`
+    bridging) can be exercised outside Chromium.
+- `fetch()` of a `file:` URL (`runtime/bindings/rawFetch.ts`'s `installRawFetch`, found solving the
+  SAME Rolldown/WASM scoping above): a common pattern for loading a co-located binary asset -
+  `@napi-rs/wasm-runtime`'s real browser build fetches its own `.wasm` file via `fetch(new
+  URL('./x.wasm', import.meta.url))` - hits the exact same synthetic-`file:`-URL problem
+  `rawWorker.ts` already solves for `new Worker(...)`, confirmed the same way: `fetch("file:///a/
+  b.wasm")` rejects in real Chromium with a bare `TypeError: Failed to fetch` (no `Response`, no
+  status - nothing to branch on, unlike a real 404). `installRawFetch` wraps the real, native
+  `fetch` global: a `file:` URL resolves back to its real VFS path and returns a real `Response`
+  built from the VFS file's own bytes (200 on success, 404 - not a rejection - for a missing file,
+  the closer real-fetch analogue); anything else (`http(s):`, `blob:`, `data:`, a `Request` whose
+  own `.url` isn't `file:`) passes straight through unchanged - in particular this never touches
+  `programs/builtins.ts`'s own `nativeFetch`, captured at MODULE LOAD time (before any Process
+  Worker/runtime exists) for the npm installer's real registry access.
+  - Verified: 3 new Playwright tests in real Chromium (`fetch(new URL(..., import.meta.url))` reads
+    a real VFS file as a real `Response`; a missing path resolves 404, not a rejection; a real
+    `http(s)` URL still passes straight through - which incidentally surfaced two small, PRE-
+    EXISTING, out-of-scope gaps while writing that third test, not attempted here: a bare native
+    `fetch()` doesn't ref wcvm's own event loop on its own, and a Process Worker's own `blob:` base
+    URL doesn't support a path-absolute relative URL like `/index.html` the way a real `http(s)`
+    page does - both worked around in the test itself, not fixed).
+  A full, clean `pnpm exec playwright test` run (120 passed, 6 opt-in skipped) and `vitest run`
+  (895/895) confirm no regressions.
+- Tests: 895 Vitest + 126 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): more dev-server templates (Svelte, plain Node/Express -

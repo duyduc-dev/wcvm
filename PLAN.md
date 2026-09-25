@@ -935,51 +935,87 @@ picking this back up.
   vite@latest`: its CURRENT template scaffolds Vite 8 by default, and Vite 7 pinned back in
   doesn't work with every newer plugin either (see the React Compiler gotcha above) - Vite
   8/Rolldown support remains a real gap, not just a historical note.
-  - **Scoped further** (real npm registry, real Chromium - not attempted as a fix, both changes
-    reverted after testing): `rolldown`'s real Wasm build, `@rolldown/browser`, does NOT need
-    `node:wasi` - that's only true of its default (Node-targeted) entry point. Its package.json
-    `exports` map has a `"browser"` condition (`./dist/index.browser.mjs`) using
+  - **Scoped further, then actually proven working standalone** (real npm registry, real Chromium):
+    `rolldown`'s real Wasm build, `@rolldown/browser`, does NOT need `node:wasi` - that's only true
+    of its default (Node-targeted) entry point. Its package.json `exports` map's `"."` entry is
+    `{"types":..., "browser": "./dist/index.browser.mjs", "default": "./dist/index.mjs"}` - no
+    `"import"` key at all, unlike plain `rolldown`'s own unconditioned `"."` string - confirmed by
+    reading the real published package.json, not assumed. The `"browser"`-conditioned target uses
     `@napi-rs/wasm-runtime`'s own pure-JS WASI polyfill instead (an in-memory `memfs`, no native
-    binding at all) - confirmed by reading its source, not assumed. wcvm's own ESM resolver
-    (`runtime/esm/resolve.ts`'s `CONDITIONS`) only ever recognizes `import`/`node`/`default` -
-    real Node's own default set, deliberately excluding `browser` (a bundler-added condition, not
-    a plain `node script.js`'s own). Adding `"browser"` there DOES get past the `node:wasi`
-    "No such built-in module" error (confirmed: installed, then `npm run dev` printed no error at
-    all, unlike before) - **but it isn't sufficient on its own**: the dev server used to hang
-    silently instead (60s, no "Local:", no error, nothing) - a SECOND, distinct, harder-to-diagnose
-    blocker, in `@napi-rs/wasm-runtime`'s own worker-pool machinery (`emnapi`'s async-work/
-    threadsafe-function bridging spawns a POOL of real, raw `new Worker(...)` instances - not
-    wcvm's own `worker_threads` - eagerly, just to instantiate the wasm module at all, even for
-    single-threaded use). That pool needed a real fix of its own, since found and made
-    (`runtime/bindings/rawWorker.ts` - see CLAUDE.md's Status entry): a real native `Worker` can't
-    load wcvm's synthetic `file:` `import.meta.url` scheme at all (throws synchronously), and has
-    no ref-counting of its own, so a script doing nothing but starting one exited before its first
-    message could arrive. With that fix AND the (still uncommitted, still not applied for real)
-    `"browser"` condition together, the hang is gone - `npm run dev` now runs and prints real
-    output instead of sitting silent - but a THIRD, distinct blocker replaces it: `sh: ldd: command
-    not found`. `rolldown`'s own npm package ships native binaries per Rust target as
-    `optionalDependencies` (`@rolldown/binding-linux-x64-gnu` etc.) and its loader - even routed
-    toward the wasm/browser build via `"browser"` - still shells out to `ldd` first (the standard
-    `detect-libc` glibc-vs-musl probe used to pick a target) before ever reaching the wasm path;
-    `sh` has no such program. Whether the worker-pool fix alone was sufficient, or whether it's
-    just never reached (since `ldd` fails first), is UNDETERMINED - the two blockers weren't
-    separable in the one test run that reached this far. Still worth weighing even setting `ldd`
-    aside: enabling `"browser"` globally in `CONDITIONS` changes ESM resolution for EVERY installed
-    package, not just this one - a real, ecosystem-wide behavior change (a package's own
-    `"browser"` build can assume DOM globals, or deliberately omit Node APIs a script might
-    actually want), not a free, scoped-to-one-package win. A real fix now likely needs THREE
-    things: (1) a working `ldd`/`detect-libc` stub (or forcing `rolldown`'s resolution straight to
-    `@rolldown/browser` via a `package.json` `overrides` swap, matching the existing `esbuild`/
-    `rollup` -> wasm-build overrides Vite 7 already uses here, bypassing the native-binary loader
-    entirely rather than stubbing what it shells out to - untried), (2) confirming the worker-pool
-    fix actually holds once (1) is unblocked, and (3) deciding how narrowly to scope the
-    `"browser"` condition (e.g. only for specific known-safe packages, not global) rather than
-    flipping it wholesale. Full native `node:wasi` support (matching real Node's own module, not
-    routing through a package's own browser build at all) was also considered and rejected as the
-    wrong layer to solve this at: `@napi-rs/wasm-runtime`'s Node-targeted `wasi-worker.mjs` still
-    uses genuine OS thread/file primitives real Node's own native WASI binding backs, that a
-    JS-only `node:wasi` shim couldn't provide either, whereas the package's OWN browser build
-    already solves that half of the problem for free.
+    binding at all). wcvm's own ESM resolver
+    (`runtime/esm/resolve.ts`'s `CONDITIONS`) only ever recognizes `import`/`node`/`default` - real
+    Node's own default set, deliberately excluding `browser` (a bundler-added condition, not a
+    plain `node script.js`'s own). Adding `"browser"` there DOES get past the `node:wasi` "No such
+    built-in module" error and past the real npm package's own native-binary/`ldd` problem entirely
+    when COMBINED with a `package.json` `overrides` swap (`{"rolldown": "npm:@rolldown/
+    browser@1.2.11"}`, the exact same trick already used for `esbuild`/`rollup` -> their wasm
+    builds) - confirmed by reading `@rolldown/browser`'s own binding file
+    (`rolldown-binding.wasi-browser.js`): zero references to `ldd`/`detect-libc`/`child_process` at
+    all, unlike plain `rolldown`'s own Node-targeted `dist/index.mjs`, whose native-binary loader is
+    exactly where that shellout lives - swapping the PACKAGE NAME bypasses that code path entirely,
+    rather than trying to stub what it shells out to.
+    - **Two more real, genuine platform gaps found actually running this, both now FIXED and
+      committed** (not just scoped): (1) the WASI-browser binding does `fetch(new URL('./x.wasm',
+      import.meta.url))` to load its own `.wasm` binary - wcvm's own synthetic `file:`
+      `import.meta.url` scheme breaks this the same way it breaks `new Worker(file:...)` (a real
+      native `fetch("file:///...")` rejects with a bare `TypeError: Failed to fetch`, not a
+      Response) - fixed in `runtime/bindings/rawFetch.ts` (see CLAUDE.md's Status entry), serving
+      the VFS file's own bytes as a real `Response` instead. (2) `@emnapi/wasi-threads`'s
+      `ThreadManager` (the worker-pool library behind `@napi-rs/wasm-runtime`) branches its ENTIRE
+      `.on()`/`.once()`/`.off()`/`.ref()`/`.unref()` surface on `ENVIRONMENT_IS_NODE` - true in wcvm
+      (real vendored `process.versions.node`) even though `new Worker(...)` here is a real BROWSER
+      constructor, not `worker_threads` - a genuine identity contradiction no real environment has.
+      First crashed (`TypeError: worker.once is not a function`); once patched to not crash, a real
+      build call still hung forever at `.generate()` - the async-work/threadsafe-function completion
+      message has NO fallback delivery path besides `.on('message', ...)`, so a naive no-op silently
+      dropped the one message a pending build was waiting on. Fixed in `runtime/bindings/
+      rawWorker.ts` by making `.on()`/`.once()`/`.off()` genuinely bridge to real
+      `addEventListener()`/`removeEventListener()` (see CLAUDE.md's Status entry for the full
+      writeup, including why this doesn't double-deliver `ThreadManager`'s own separate,
+      redundant-for-us `.on('message', ...)` -> `worker.onmessage` forwarding).
+    - **With all of the above, a REAL `rolldown({ input, plugins })` call produces REAL bundled
+      output inside wcvm** - proven directly, not theorized: a two-file TypeScript project
+      (`main.ts` importing `greet` from `helper.ts`) compiled to correct, real bundled JS. This is
+      the actual headline result of this whole investigation: Rolldown's own WASM build genuinely
+      runs, start to finish, inside a wcvm Process Worker.
+    - **What's still needed for `input`/imports to resolve at all**: `@rolldown/browser`'s own
+      filesystem is a fully ISOLATED in-memory WASI `memfs()`, not wcvm's VFS - confirmed by reading
+      `rolldown-binding.wasi-browser.js`'s own `export const { fs: __fs, vol: __volume } =
+      memfs()` (itself NOT part of the package's public `exports` map, so it can't be imported and
+      pre-populated from outside in the normal way either). Left completely empty, `rolldown()`
+      fails immediately with `[UNRESOLVED_ENTRY] Cannot resolve entry module`. Fixed for a
+      STANDALONE call with an ordinary Rollup-compatible `resolveId`/`load` plugin, backed by
+      wcvm's own real `fs` (`resolveId` resolving relative/absolute specifiers against real VFS
+      paths with `fs.existsSync`, `load` reading via `fs.readFileSync`) - this is the SANCTIONED,
+      documented way any real bundler consumer feeds Rollup/Rolldown files that don't live on a
+      real disk (matching how, say, an in-browser playground like StackBlitz's or Rollup's own would
+      do it), not a workaround specific to wcvm.
+    - **NOT yet solved, and the real remaining blocker for actual Vite support**: Vite itself
+      constructs and drives its own internal `rolldown()`/`RolldownBuild` calls - there is no known
+      way to inject the virtual-fs plugin above into THAT internal call from outside (unlike, say,
+      `build.rollupOptions.plugins`, a long-standing PUBLIC Vite config surface that only applies to
+      the production `vite build` step, if Vite 8 even still honors it the same way for Rolldown).
+      Separately unconfirmed: whether Vite 8's DEV SERVER (not just `vite build`) even routes
+      ordinary file reads through Rolldown/its memfs at all, or keeps its own separate,
+      already-working (real `fs`-based) dev-time transform pipeline the way Vite 7 does - if the
+      latter, dev-server support might not need this bridge at all and could already work today;
+      untested either way. This is real, substantial, open-ended follow-up work, not a quick patch -
+      left for a deliberate next phase rather than guessed at further here.
+    - **The `"browser"` ESM condition change itself is still NOT committed/applied for real use** -
+      kept as a documented, now-PROVEN-NECESSARY-AND-SUFFICIENT (for this one case) finding, not
+      shipped. It remains a genuine, ecosystem-wide ESM-resolution behavior change (every installed
+      package's own `"."` export, not just `@rolldown/browser`'s) - now better understood (it
+      correctly routed resolution with no observed side effects on the one ~18-package `vanilla-ts`
+      install tested) but not verified safe more broadly. Before enabling it for real: decide
+      whether to scope it narrowly (e.g. only for specific known-safe packages via an allowlist,
+      not global) rather than flipping `CONDITIONS` wholesale, and test against a wider variety of
+      real installed packages than the one so far.
+    - Full native `node:wasi` support (matching real Node's own module, not routing through a
+      package's own browser build at all) was considered and rejected as the wrong layer to solve
+      this at: `@napi-rs/wasm-runtime`'s Node-targeted `wasi-worker.mjs` still uses genuine OS
+      thread/file primitives real Node's own native WASI binding backs, that a JS-only `node:wasi`
+      shim couldn't provide either, whereas the package's OWN browser build already solves that
+      half of the problem for free.
 
 Later: Python (Pyodide), Bun shim, debugger, Studio UI.
 
