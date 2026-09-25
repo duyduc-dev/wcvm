@@ -4,7 +4,7 @@
 // hooking the running project up to the editor and the shared preview pane is identical either
 // way). Extracted once a second framework (Vue) needed the exact same machinery.
 
-import type { IWcvm } from "wcvm";
+import type { FileSystemTree, IWcvm } from "wcvm";
 
 export interface IViteExampleConfig {
   /** The project's own directory in the VFS, e.g. "/react-app". */
@@ -44,6 +44,36 @@ const collect = (proc: Process, onText: (text: string) => void, writeToTerminal?
       }
     })();
   }
+};
+
+/** Strips ANSI SGR escape codes (`\x1b[...m`) from a copy of the text used only for substring
+ *  checks/display, never from what's actually shown in the terminal (the whole point of turning
+ *  color on there). Real Vite's own colorized banner literally prints "Local\x1b[22m:", not
+ *  "Local:" - picocolors wraps just the WORD "Local" in bold, with the punctuation appended after
+ *  the closing code - so a plain `/Local:/` check silently stops matching once color is on unless
+ *  it runs against a stripped copy first (found by an actual hang: `npm run dev` with FORCE_COLOR
+ *  set really did start Vite - the raw log had a real "Local:" line - `/Local:/.test(log)` just
+ *  never saw it as one contiguous substring). */
+const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, "");
+
+/** Turns a flat "relative/path": "contents" map (much simpler for a framework's own example to
+ *  author than a nested tree literal) into the nested `FileSystemTree` `wc.fs.mount()` needs -
+ *  one call that writes the whole project in a single round trip, instead of a
+ *  mkdir()+writeFile() pair per file each going through the host<->kernel bridge on its own. */
+const buildTree = (files: Record<string, string>): FileSystemTree => {
+  const root: FileSystemTree = {};
+  for (const [path, contents] of Object.entries(files)) {
+    const parts = path.split("/");
+    let dir = root;
+    for (const segment of parts.slice(0, -1)) {
+      const existing = dir[segment];
+      const node = existing && "directory" in existing ? existing : { directory: {} };
+      dir[segment] = node;
+      dir = node.directory;
+    }
+    dir[parts.at(-1)!] = { file: { contents } };
+  }
+  return root;
 };
 
 export interface IViteExampleHandle {
@@ -94,16 +124,16 @@ export const attachViteExample = (
     onBeforeStart?.();
     await wc.preview.enable();
 
-    for (const [path, contents] of Object.entries(config.files)) {
-      const full = `${config.project}/${path}`;
-      await wc.fs.mkdir(full.slice(0, full.lastIndexOf("/")), { recursive: true });
-      await wc.fs.writeFile(full, contents);
-    }
+    await wc.fs.mount(buildTree(config.files), config.project);
     await writeEditable();
     projectWritten = true;
 
+    // FORCE_COLOR: real npm's own output has none (plain string literals - see runScript.ts),
+    // but it flows through to `npm run dev`'s own child (real Node/Vite) unchanged, so Vite's
+    // colorful startup banner shows up in real color in the shared terminal pane it's mirrored
+    // into below - the same reason terminal.ts's own interactive session sets it.
     status.textContent = `Installing ${config.name}, Vite and friends from registry.npmjs.org with wcvm's npm install (~10s the first time)...`;
-    const install = await wc.spawn("npm", ["install"], { cwd: config.project });
+    const install = await wc.spawn("npm", ["install"], { cwd: config.project, env: { FORCE_COLOR: "3" } });
     let installLog = "";
     collect(install, (text) => (installLog += text), writeToTerminal);
     const installed = await install.exit;
@@ -112,19 +142,19 @@ export const attachViteExample = (
     status.textContent = `${installLog.trim()} - starting Vite...`;
     // `npm run dev` (package.json's own "dev": "vite") rather than invoking vite.js directly -
     // exercises wcvm's own npm run, including its PATH-resolved `vite` bin.
-    const started = await wc.spawn("npm", ["run", "dev", "--", "--port", String(config.port), "--strictPort"], { cwd: config.project });
+    const started = await wc.spawn("npm", ["run", "dev", "--", "--port", String(config.port), "--strictPort"], { cwd: config.project, env: { FORCE_COLOR: "3" } });
     vite = started;
     runButton.textContent = `stop ${config.name} example`;
     let log = "";
     collect(started, (text) => {
       log += text;
-      if (/Local:/.test(log) && vite === started) {
+      if (/Local:/.test(stripAnsi(log)) && vite === started) {
         status.textContent = `Vite is running on virtual port ${config.port} - the app is in the preview pane below. Edit ${config.editablePath} here and watch it hot-reload.`;
       }
     }, writeToTerminal);
     started.exit.then((result) => {
       if (vite !== started) return; // already stopped (or restarted) by the user
-      stop(`Vite exited unexpectedly (code ${result.exitCode}):\n${log.trim().split("\n").slice(-5).join("\n")}`);
+      stop(`Vite exited unexpectedly (code ${result.exitCode}):\n${stripAnsi(log).trim().split("\n").slice(-5).join("\n")}`);
     });
   };
 
