@@ -20,7 +20,7 @@
 
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
-import { EsmSyntaxError, parseModule, parseScript, type IAcorn } from "./ast";
+import { parseModule, parseScript, type IAcorn } from "./ast";
 import { createEsmResolver, EsmResolveError, modulePath, moduleUrlSuffix, type EsmFormat, type IEsmResolveContext } from "./resolve";
 import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 
@@ -197,7 +197,27 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
     );
   };
 
-  return { importEntry, rewriteScript, formatOfPath: resolver.formatOfPath };
+  /**
+   * Blob-ifies the file at `path` (and, for a module, its whole static import graph) so it can be
+   * handed to a REAL native `new Worker(...)` - see `runtime/bindings/rawWorker.ts`, the only
+   * caller: a guest script's own `new Worker(new URL("./x.mjs", import.meta.url))` builds a
+   * `file:` URL (this sandbox's own deliberate `import.meta.url` scheme, rewritten from the real
+   * Blob URL the module was ACTUALLY loaded through - see this file's own doc comment), and a
+   * real native Worker can never load a `file:` URL (confirmed: it throws `Failed to construct
+   * 'Worker': Script ... cannot be accessed from origin ...` synchronously) - so that file needs
+   * ITS OWN fresh Blob URL, the same way this loader already makes one for every ordinary import.
+   * `module` picks ESM (parse + rewrite its own import graph, `type: "module"`) vs. a plain
+   * classic script (blob the raw bytes as-is, no import resolution - `import()`/`import.meta`
+   * aren't supported inside one, matching a real classic script's own restriction).
+   */
+  const blobUrlForFile = (path: string, module: boolean): string => {
+    if (!module) return blobFor(decoder.decode(ctx.fs.readFile(path)));
+    installBridge();
+    return prepare(path, resolver.formatOfPath(path));
+  };
+
+  return { importEntry, rewriteScript, formatOfPath: resolver.formatOfPath, blobUrlForFile };
 };
 
-export { EsmResolveError, EsmSyntaxError };
+export { EsmResolveError };
+export { EsmSyntaxError } from "./ast";
