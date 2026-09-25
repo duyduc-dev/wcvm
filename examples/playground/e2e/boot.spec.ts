@@ -2115,3 +2115,28 @@ test.describe("sh", () => {
     expect(r.code).toBe(0);
   });
 });
+
+test.describe("terminal color", () => {
+  // The playground's terminal (src/terminal.ts) is a real xterm.js instance, which already
+  // renders ANSI color codes natively - the missing piece was real Node's own color-aware paths
+  // (console.log's colorized util.inspect, and most CLI color libraries) staying colorless since
+  // there's no real TTY here for them to detect (`tty_wrap`'s isatty() is always false).
+  // terminal.ts now spawns with FORCE_COLOR=3, which Node's own internal/tty.js's getColorDepth()
+  // (vendored verbatim, pure env-var logic - no native binding involved at all) honors regardless
+  // of isTTY. Checked directly against a real spawn, not through xterm's own rendering (a
+  // well-tested third-party concern, not wcvm's).
+  test("FORCE_COLOR makes a real node process's own console.log colorize its output", async ({ page }) => {
+    const r = await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn("node", ["-e", "console.log(42)"], { env: { FORCE_COLOR: "3" } });
+      return new Response(proc.stdout).text();
+    });
+    expect(r).toContain("\u001b[");
+    expect(r).toContain("42");
+  });
+
+  test("without it, the same process's output has no color codes at all", async ({ page }) => {
+    const r = await spawn(page, "node", ["-e", "console.log(42)"]);
+    expect(r).toEqual({ code: 0, out: "42\n", err: "" });
+  });
+});
