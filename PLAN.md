@@ -623,6 +623,16 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   run here); a REQUIRED one is installed anyway, with a warning, instead of npm's `EBADPLATFORM`. A
   peer dependency that conflicts with an already-placed copy is kept as-is with a warning (npm would
   fail with `ERESOLVE`). Tarball symlinks/hardlinks aren't extracted (npm doesn't either).
+  `npm run`/`start`/`stop`/`restart`/`test` (`runScript.ts`): no command-name abbreviation (real
+  npm's `npm ru` also runs `run` - only the exact names/aliases listed in CLAUDE.md's "Status"
+  work here), no `--json`/`--parseable` listing output, no workspaces, and only
+  `npm_lifecycle_event`/`npm_lifecycle_script`/`npm_package_json`/`npm_package_*`
+  (name/version/config/engines/bin) are set - not real npm's full breadth (`npm_config_*`,
+  `INIT_CWD`, `npm_execpath`, ...), since there's no separate config system here to source most of
+  those from. A missing package.json is the same simplified `ENOENT` shape `npm install` already
+  uses, not real npm's much longer syscall-shaped message. A resolved bin's mode bits aren't
+  checked - any file with a recognized `#!/usr/bin/env node` shebang runs regardless of its own
+  executable permission, unlike a real shell.
 - Preview absolute-path routing (`workers/preview/previewRouting.ts`): an absolute URL from a
   previewed page is REDIRECTED into its port's prefix, so `response.url` is the prefixed URL and a
   `fetch(url, { redirect: "manual" | "error" })` to one sees an opaque redirect/a network error. A
@@ -886,9 +896,27 @@ picking this back up.
 - React + TypeScript (`@vitejs/plugin-react`) runs with Fast Refresh - **done** (needed `file:` URL
   imports and pure-JS hashing, see CLAUDE.md's "Status"), and is now the playground's one-click
   example, with a live App.tsx editor.
-- Left in this phase: more templates (Vue, Svelte, plain Node/Express) and `npm run` - the
-  example starts Vite with `node node_modules/vite/bin/vite.js` because `npm run dev` doesn't
-  exist yet.
+- `npm run`/`start`/`stop`/`restart`/`test` - **done**, see CLAUDE.md's "Status" for the full
+  writeup: pre/post hooks, the `start`/`restart` fallbacks, `--if-present`/`--ignore-scripts`, and
+  a new `PATH`-search/shebang-exec capability in `sh` itself (`resolveExecutable`/`resolveCommand`)
+  that this needed and any script can now use. The example now starts Vite with `npm run dev --
+  --port 5173 --strictPort` instead of invoking `vite.js` directly.
+- Considered, deferred: scaffolding the example with a real `npm create vite@latest` instead of
+  the hand-written `PROJECT_FILES` template. That's `npm exec create-vite@latest` under the hood
+  (npx-style: fetch a temp package, resolve its bin, run it) - a genuinely new npm subcommand
+  wcvm's npm doesn't have at all yet, not something `npm run` gives it for free. Bigger risk than
+  scope: `create-vite`'s own template picker is an interactive, raw-mode terminal prompt (arrow
+  keys), and this sandbox's `readline` is explicitly TTY-independent - no raw mode, no ANSI cursor
+  control (see "Lessons learned"/`tty_wrap`) - so it would need `--template react-ts`-style flags
+  to skip prompting entirely, and it's unverified whether `create-vite` even checks
+  `isTTY`/argv early enough to avoid touching raw mode at all before that. Left as a possible
+  future `npm exec`/npx capability in its own right, parallel to `npm run` - not attempted here.
+- A second template, Vue + Vite (plain JS, `@vitejs/plugin-vue`) - **done**, see CLAUDE.md's
+  "Status": the run/stop/edit machinery both examples share was pulled out into
+  `src/viteExample.ts`, confirming the whole `npm install` -> `npm run dev` -> preview pipeline is
+  generic, not React-specific. The two share the playground's one preview pane, so they're made
+  mutually exclusive in the UI (starting either stops the other's dev server first).
+- Left in this phase: more templates (Svelte, plain Node/Express) and npm workspaces.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked.
 
