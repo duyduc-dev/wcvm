@@ -5,13 +5,13 @@ import { sh } from "./sh";
 
 const setup = () => {
   const { fs, vfs } = createLoopbackFs();
-  const run = async (args: string[], cwd = "/", stdin?: IStdinHost) => {
+  const run = async (args: string[], cwd = "/", stdin?: IStdinHost, env: Record<string, string> = {}) => {
     const out: string[] = [];
     const err: string[] = [];
     const status = await sh({
       args,
       cwd,
-      env: {},
+      env,
       fs,
       pid: 1,
       stdout: (d) => out.push(typeof d === "string" ? d : new TextDecoder().decode(d)),
@@ -21,7 +21,7 @@ const setup = () => {
     });
     return { status, out: out.join(""), err: err.join("") };
   };
-  const sh1 = (script: string, cwd = "/", stdin?: IStdinHost) => run(["-c", script], cwd, stdin);
+  const sh1 = (script: string, cwd = "/", stdin?: IStdinHost, env: Record<string, string> = {}) => run(["-c", script], cwd, stdin, env);
   return { fs, vfs, run, sh: sh1 };
 };
 
@@ -124,6 +124,47 @@ describe("sh -c", () => {
     const r = await t.sh(`node -e "console.log(1 + 1)" && echo done | cat`);
     expect(r).toMatchObject({ status: 0, out: "2\ndone\n" });
   }, 20_000); // boots a whole Node runtime: ~2s alone, occasionally past 5s under full-suite load
+});
+
+describe("PATH-resolved executables (a bare name that isn't a builtin)", () => {
+  it("resolves a bare name through PATH to a node-shebang script and runs it", async () => {
+    t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
+    t.fs.writeFile("/app/node_modules/.bin/greet", "#!/usr/bin/env node\nconsole.log('hi', process.argv.slice(2).join(','));\n");
+    const r = await t.sh("greet a b", "/app", undefined, { PATH: "/app/node_modules/.bin" });
+    expect(r).toMatchObject({ status: 0, out: "hi a,b\n" });
+  }, 20_000);
+
+  it("follows a bin's symlink (as npm install itself creates) to its real path, so its own relative require resolves", async () => {
+    t.fs.mkdir("/app/node_modules/pkg/lib", { recursive: true });
+    t.fs.writeFile("/app/node_modules/pkg/lib/helper.js", "module.exports = 'helper';");
+    t.fs.mkdir("/app/node_modules/pkg/bin", { recursive: true });
+    t.fs.writeFile("/app/node_modules/pkg/bin/run.js", "#!/usr/bin/env node\nconsole.log(require('../lib/helper.js'));\n");
+    t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
+    t.fs.symlink("../pkg/bin/run.js", "/app/node_modules/.bin/run");
+    const r = await t.sh("run", "/app", undefined, { PATH: "/app/node_modules/.bin" });
+    expect(r).toMatchObject({ status: 0, out: "helper\n" });
+  }, 20_000);
+
+  it("a name containing '/' resolves directly, with no PATH search, like a real shell", async () => {
+    t.fs.mkdir("/app/tools", { recursive: true });
+    t.fs.writeFile("/app/tools/hello.js", "#!/usr/bin/env node\nconsole.log('direct');\n");
+    const r = await t.sh("tools/hello.js", "/app");
+    expect(r).toMatchObject({ status: 0, out: "direct\n" });
+  }, 20_000);
+
+  it("a name not found anywhere on PATH is still command-not-found (127)", async () => {
+    const r = await t.sh("ghost", "/app", undefined, { PATH: "/app/node_modules/.bin" });
+    expect(r.status).toBe(127);
+    expect(r.err).toContain("ghost: command not found");
+  });
+
+  it("a found file with no node shebang can't be executed here (126), not silently ignored", async () => {
+    t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
+    t.fs.writeFile("/app/node_modules/.bin/native", "not a script");
+    const r = await t.sh("native", "/app", undefined, { PATH: "/app/node_modules/.bin" });
+    expect(r.status).toBe(126);
+    expect(r.err).toContain("native: cannot execute");
+  });
 });
 
 describe("sh <file>", () => {

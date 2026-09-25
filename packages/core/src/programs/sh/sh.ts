@@ -3,6 +3,9 @@
 // in-memory (no real OS pipes needed, everything runs in one worker), and
 // > >> < file redirects. `cd` is a shell builtin (it mutates this script's
 // own cwd, not a real command). No $ expansion, globbing or background jobs.
+// A name that isn't a builtin is searched through `PATH` like a real shell would
+// (`resolveExecutable`, below) - this is what lets `npm run` (programs/npm/runScript.ts) invoke a
+// package's own `node_modules/.bin` entries.
 
 import type { IFsClient } from "../../fs/fsClient";
 import type { IStdinHost } from "../../runtime/runtime";
@@ -24,6 +27,60 @@ const errnoOf = (error: unknown): string => {
 const describe = (error: unknown): string => ERRNO_TEXT[errnoOf(error)] ?? errnoOf(error);
 
 const absolute = (cwd: string, path: string): string => (path.startsWith("/") ? path : cwd === "/" ? `/${path}` : `${cwd}/${path}`);
+
+/** A `#!/usr/bin/env node`-style shebang (optionally `env -S ...`, or a direct interpreter path
+ *  ending in `node`) - the only interpreter this sandbox can actually hand a script off to. */
+const NODE_SHEBANG = /^#!\s*(?:\S*\/env\s+(?:-\S+\s+)*)?(?:\S*\/)?node(?:\s|$)/;
+
+const firstLine = (bytes: Uint8Array): string => {
+  const text = new TextDecoder().decode(bytes.length > 256 ? bytes.subarray(0, 256) : bytes);
+  const nl = text.indexOf("\n");
+  return nl === -1 ? text : text.slice(0, nl);
+};
+
+type ResolvedExecutable = { path: string } | { error: "not-found" } | { error: "unsupported" };
+
+/**
+ * Resolves `name` to a real executable, the way a real shell would: a name containing `/`
+ * resolves directly (relative to `cwd`); a bare name is searched through `PATH` (colon-separated)
+ * - `npm run` (`programs/npm/runScript.ts`) prepends every ancestor `node_modules/.bin` to it,
+ * the same way real npm does, so a script's own `vite`/`tsc`/... resolves here exactly like it
+ * would from a real shell. Only a `#!.../env node` shebang can actually run - there's no other
+ * interpreter in this sandbox. The REAL path (following the symlink `npm install` itself creates
+ * for a bin) is returned, so a relative `require`/import inside it resolves against the package's
+ * own directory, matching real Node's own symlink-following behavior for its main module.
+ */
+const resolveExecutable = (fs: IFsClient, cwd: string, env: Record<string, string>, name: string): ResolvedExecutable => {
+  const candidates = name.includes("/")
+    ? [absolute(cwd, name)]
+    : (env.PATH ?? "").split(":").filter(Boolean).map((dir) => `${dir.endsWith("/") ? dir.slice(0, -1) : dir}/${name}`);
+  for (const candidate of candidates) {
+    let kind: string;
+    try {
+      kind = fs.stat(candidate).kind;
+    } catch {
+      continue;
+    }
+    if (kind !== "file") continue;
+    if (!NODE_SHEBANG.test(firstLine(fs.readFile(candidate)))) return { error: "unsupported" };
+    return { path: fs.realpath(candidate) };
+  }
+  return { error: "not-found" };
+};
+
+type CommandResolution = { program: Program; args: string[] } | { notFound: true } | { unsupported: true };
+
+/** What `runStage` actually needs to invoke `name`: a builtin directly, or - for anything else -
+ *  `resolveExecutable`'s real path handed to the `node` builtin. Kept separate from `runStage`
+ *  itself so the "not a builtin -> try PATH -> node/not-found/unsupported" branching doesn't add
+ *  to ITS own complexity on top of the pipeline/redirect/pipe logic it already has. */
+const resolveCommand = (fs: IFsClient, env: Record<string, string>, cwd: string, name: string, args: string[]): CommandResolution => {
+  const builtin = resolveProgram(name);
+  if (builtin) return { program: builtin, args };
+  const resolved = resolveExecutable(fs, cwd, env, name);
+  if ("error" in resolved) return resolved.error === "not-found" ? { notFound: true } : { unsupported: true };
+  return { program: resolveProgram("node")!, args: [resolved.path, ...args] };
+};
 
 const concat = (parts: Uint8Array[]): Uint8Array => {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
@@ -115,11 +172,16 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
       return result.status;
     }
 
-    const program = resolveProgram(name);
-    if (!program) {
+    const resolution = resolveCommand(ctx.fs, ctx.env, state.cwd, name, args);
+    if ("notFound" in resolution) {
       ctx.stderr(`sh: ${name}: command not found\n`);
       return 127;
     }
+    if ("unsupported" in resolution) {
+      ctx.stderr(`sh: ${name}: cannot execute: unsupported interpreter\n`);
+      return 126;
+    }
+    const { program, args: programArgs } = resolution;
 
     const outRedirect = cmd.redirects.filter((r) => r.type === ">" || r.type === ">>").at(-1) as { type: ">" | ">>"; target: string } | undefined;
     const inRedirect = cmd.redirects.filter((r) => r.type === "<").at(-1);
@@ -143,18 +205,16 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
 
     let status: number;
     try {
+      // Spread the whole context, not a hand-picked subset: a nested `node` (from a resolved
+      // bin, or a literal `sh -c "node ..."`) needs the same net/fsWatch/spawnSync/workerThread/...
+      // capabilities a top-level process gets, or it silently loses them the moment it runs
+      // through a shell instead of being spawned directly.
       status = await program({
-        args,
+        ...ctx,
+        args: programArgs,
         cwd: state.cwd,
-        env: ctx.env,
-        fs: ctx.fs,
-        pid: ctx.pid,
-        globalObject: ctx.globalObject,
-        sleep: ctx.sleep,
-        childProcess: ctx.childProcess,
         stdin,
         stdout,
-        stderr: ctx.stderr,
       });
     } catch (error) {
       ctx.stderr(`sh: ${name}: ${error instanceof Error ? error.message : String(error)}\n`);

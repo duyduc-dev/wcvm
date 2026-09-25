@@ -250,10 +250,95 @@ describe("npm install", () => {
     expect(t.requests.every((url) => url.startsWith(FAKE_REGISTRY))).toBe(true);
   });
 
-  it("only `install` is supported", async () => {
+  it("only `install` and `run` are supported", async () => {
     const t = setup({});
     expect((await t.run([])).code).toBe(1);
-    expect(await t.run(["run", "dev"])).toMatchObject({ code: 1, stderr: expect.stringContaining('"run" is not supported') });
+    expect(await t.run(["publish"])).toMatchObject({ code: 1, stderr: expect.stringContaining('"publish" is not supported') });
     expect(await t.run(["--help"])).toMatchObject({ code: 0, stdout: expect.stringContaining("Usage: npm install") });
+  });
+});
+
+describe("npm run", () => {
+  const scriptsPkg = (scripts: Record<string, string>, extra: Record<string, unknown> = {}) => JSON.stringify({ name: "app", version: "1.0.0", scripts, ...extra });
+
+  it("runs a script with real npm's own banner, and forwards trailing args onto the command line", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ dev: "echo hi" }) });
+    const r = await t.run(["run", "dev", "--", "a", "b"]);
+    expect(r).toEqual({ code: 0, stdout: "\n> app@1.0.0 dev\n> echo hi a b\n\nhi a b\n", stderr: "" });
+  });
+
+  it("runs pre<x> then <x> then post<x>, in order", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ predev: "echo PRE", dev: "echo DEV", postdev: "echo POST" }) });
+    const r = await t.run(["run", "dev"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("\n> app@1.0.0 predev\n> echo PRE\n\nPRE\n\n> app@1.0.0 dev\n> echo DEV\n\nDEV\n\n> app@1.0.0 postdev\n> echo POST\n\nPOST\n");
+  });
+
+  it("a failing pre<x> stops <x> and post<x> from ever running, and relays its exit code with no extra npm error text", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ predev: "false", dev: "echo DEV", postdev: "echo POST" }) });
+    const r = await t.run(["run", "dev"]);
+    expect(r).toEqual({ code: 1, stdout: "\n> app@1.0.0 predev\n> false\n\n", stderr: "" });
+  });
+
+  it("--ignore-scripts skips pre/post hooks", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ predev: "echo PRE", dev: "echo DEV", postdev: "echo POST" }) });
+    const r = await t.run(["run", "dev", "--ignore-scripts"]);
+    expect(r.stdout).toBe("\n> app@1.0.0 dev\n> echo DEV\n\nDEV\n");
+  });
+
+  it("a missing script fails with real npm's own message; --if-present makes it a silent no-op instead", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({}) });
+    const r = await t.run(["run", "missing"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe('npm error Missing script: "missing"\nnpm error \nnpm error To see a list of scripts, run:\nnpm error   npm run\n');
+    expect(await t.run(["run", "missing", "--if-present"])).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+
+  it("`npm run` with no script name lists them, split into lifecycle vs. custom - or prints nothing at all if there are none", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ start: "node index.js", build: "echo build" }) });
+    expect((await t.run(["run"])).stdout).toBe("Lifecycle scripts included in app@1.0.0:\n  start\n    node index.js\navailable via `npm run`:\n  build\n    echo build\n");
+
+    const empty = setup({}, { "/app/package.json": scriptsPkg({}) });
+    expect(await empty.run(["run"])).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+
+  it("`npm start` falls back to `node server.js` when there's no start script but server.js exists", async () => {
+    const t = setup({}, { "/app/package.json": JSON.stringify({ name: "app", version: "1.0.0" }), "/app/server.js": "console.log('serving')" });
+    const r = await t.run(["start"]);
+    expect(r).toEqual({ code: 0, stdout: "\n> app@1.0.0 start\n> node server.js\n\nserving\n", stderr: "" });
+  }, 20_000); // boots a real Node runtime
+
+  it("`npm restart` falls back to `npm stop --if-present && npm start` when there's no restart script", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ start: "echo STARTED" }) });
+    const r = await t.run(["restart"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("\n> app@1.0.0 restart\n> npm stop --if-present && npm start\n\n\n> app@1.0.0 start\n> echo STARTED\n\nSTARTED\n");
+  });
+
+  it("`npm test`/`t`/`tst` and `npm stop` are aliases for the matching script event", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ test: "echo TESTED", stop: "echo STOPPED" }) });
+    expect((await t.run(["t"])).stdout).toContain("TESTED\n");
+    expect((await t.run(["tst"])).stdout).toContain("TESTED\n");
+    expect((await t.run(["stop"])).stdout).toContain("STOPPED\n");
+  });
+
+  it("`run-script`/`rum`/`urn` are aliases for `run`", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ dev: "echo hi" }) });
+    for (const alias of ["run-script", "rum", "urn"]) expect((await t.run([alias, "dev"])).stdout).toContain("hi\n");
+  });
+
+  it("prepends every ancestor node_modules/.bin to PATH, so a script can invoke its own installed bin", async () => {
+    const t = setup({}, { "/app/package.json": scriptsPkg({ dev: "greet" }) });
+    t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
+    t.fs.writeFile("/app/node_modules/.bin/greet", "#!/usr/bin/env node\nconsole.log('hi from a bin');\n");
+    const r = await t.run(["run", "dev"]);
+    expect(r).toMatchObject({ code: 0, stdout: expect.stringContaining("hi from a bin\n") });
+  }, 20_000); // boots a real Node runtime for the resolved bin
+
+  it("without a package.json at all, fails like npm install's own ENOENT does", async () => {
+    const t = setup({});
+    const r = await t.run(["run", "dev"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^npm error code ENOENT\nnpm error Could not read package\.json/);
   });
 });
