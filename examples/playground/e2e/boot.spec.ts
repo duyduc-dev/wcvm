@@ -2346,4 +2346,82 @@ test.describe("raw native Worker (the browser's own Worker global, not worker_th
     const r = await spawn(page, "node", ["src/main.mjs"], "/rawworker3");
     expect(r).toEqual({ code: 0, out: "terminating\n", err: "" });
   });
+
+  test("ref()/unref()/on()/once()/off() are safe to call, bridging real events for a Node-shaped listener", async ({ page }) => {
+    await writeFiles(page, {
+      "/rawworker4/src/worker.mjs": "postMessage('one'); setTimeout(() => postMessage('two'), 20);",
+      "/rawworker4/src/main.mjs": `
+        const url = new URL('./worker.mjs', import.meta.url);
+        const w = new Worker(url, { type: 'module' });
+        w.unref();
+        w.ref();
+        const seen = [];
+        const onMessage = (data) => {
+          seen.push(data);
+          if (data === 'two') {
+            w.off('message', onMessage);
+            console.log(seen.join(','));
+            process.nextTick(() => process.exit(0));
+          }
+        };
+        w.on('message', onMessage);
+        w.once('exit', () => { throw new Error('should never fire - no browser equivalent'); });
+      `,
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawworker4");
+    expect(r).toEqual({ code: 0, out: "one,two\n", err: "" });
+  });
+});
+
+test.describe("raw fetch() of a file: URL (the browser's own fetch, not wc.fs.fetch)", () => {
+  test("fetch(new URL(..., import.meta.url)) reads the VFS file as a real Response", async ({ page }) => {
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/rawfetch/src", { recursive: true });
+      await fs.writeFile("/rawfetch/src/asset.bin", "hello from the vfs");
+      await fs.writeFile(
+        "/rawfetch/src/main.mjs",
+        `
+        const url = new URL('./asset.bin', import.meta.url);
+        const res = await fetch(url);
+        const text = await res.text();
+        console.log(res.status, text);
+      `,
+      );
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawfetch");
+    expect(r).toEqual({ code: 0, out: "200 hello from the vfs\n", err: "" });
+  });
+
+  test("fetch(file: URL) for a missing path resolves 404, not a rejection", async ({ page }) => {
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/rawfetch2/src", { recursive: true });
+      await fs.writeFile(
+        "/rawfetch2/src/main.mjs",
+        `
+        const url = new URL('./missing.bin', import.meta.url);
+        const res = await fetch(url);
+        console.log(res.status, res.ok);
+      `,
+      );
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawfetch2");
+    expect(r).toEqual({ code: 0, out: "404 false\n", err: "" });
+  });
+
+  test("fetch() of a real http(s) URL still passes straight through unchanged", async ({ page }) => {
+    // Two pre-existing gaps unrelated to this fix, not attempted here: (1) a bare native fetch()
+    // doesn't ref wcvm's own event loop on its own - a live timer keeps the process open long
+    // enough for a fast same-origin fetch to actually resolve before the process would otherwise
+    // exit idle; (2) a Process Worker's own base URL is a `blob:` one (how every process script is
+    // loaded - see esm/loader.ts), which doesn't support a path-absolute relative URL the way a
+    // real http(s) page does ("/index.html" alone fails to parse there) - an explicit absolute URL
+    // sidesteps it.
+    const r = await spawn(page, "node", [
+      "-e",
+      "const t = setInterval(() => {}, 50); fetch(new URL('/index.html', location.origin)).then((r) => { console.log(r.status); clearInterval(t); })",
+    ]);
+    expect(r).toEqual({ code: 0, out: "200\n", err: "" });
+  });
 });

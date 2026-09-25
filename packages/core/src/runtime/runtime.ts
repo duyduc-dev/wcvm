@@ -16,6 +16,7 @@ import { createModuleBuiltin } from "./moduleBuiltin";
 import { createEsmResolver } from "./esm/resolve";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
+import { installRawFetch } from "./bindings/rawFetch";
 import { installRawWorker } from "./bindings/rawWorker";
 import { createPrimordials } from "./primordials";
 import { createProcessObject, NODE_VERSION, ProcessExit } from "./process";
@@ -439,6 +440,22 @@ const createRuntime = (options: IRuntimeOptions) => {
     getBlobUrlForFile: () => getEsmLoader().blobUrlForFile,
     globalObject,
     ref: () => loop.ref(),
+  });
+
+  // A guest script's own `fetch(new URL("./x.wasm", import.meta.url))` - see
+  // bindings/rawFetch.ts - needs the same `file:` URL recognition as `installRawWorker` above, but
+  // resolves straight to the VFS file's own bytes rather than a Blob URL (fetch just wants a
+  // Response, not something loadable as a script).
+  installRawFetch({
+    fileURLToPath: (url) => {
+      try {
+        return (requireBuiltin("url") as { fileURLToPath(u: string): string }).fileURLToPath(url);
+      } catch {
+        return undefined;
+      }
+    },
+    readFile: (path) => fs.readFile(path),
+    globalObject,
   });
 
   /** Runs the script at `entry` (absolute or cwd-relative). */
