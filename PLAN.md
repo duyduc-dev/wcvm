@@ -633,6 +633,14 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   uses, not real npm's much longer syscall-shaped message. A resolved bin's mode bits aren't
   checked - any file with a recognized `#!/usr/bin/env node` shebang runs regardless of its own
   executable permission, unlike a real shell.
+  `npm create`/`npm init <name>` (`exec.ts`): only this one case of real npm's own `npm exec`/npx
+  idea - an arbitrary `npm exec <command>` (resolving from local `node_modules/.bin` first, or an
+  arbitrary registry package by name with no "create-"/"init-" mangling) isn't implemented. No
+  dependency-tree resolution for the fetched package itself (fine for `create-vite` and most
+  `create-*` tools, which bundle everything and declare zero runtime dependencies of their own -
+  one that genuinely needs installed dependencies would fail to load them). No lockfile, no
+  version-range spec beyond what `pickVersion` already supports for `npm install`, no git/file/
+  workspace specs for the initializer itself.
 - Preview absolute-path routing (`workers/preview/previewRouting.ts`): an absolute URL from a
   previewed page is REDIRECTED into its port's prefix, so `response.url` is the prefixed URL and a
   `fetch(url, { redirect: "manual" | "error" })` to one sees an opaque redirect/a network error. A
@@ -901,24 +909,32 @@ picking this back up.
   a new `PATH`-search/shebang-exec capability in `sh` itself (`resolveExecutable`/`resolveCommand`)
   that this needed and any script can now use. The example now starts Vite with `npm run dev --
   --port 5173 --strictPort` instead of invoking `vite.js` directly.
-- Considered, deferred: scaffolding the example with a real `npm create vite@latest` instead of
-  the hand-written `PROJECT_FILES` template. That's `npm exec create-vite@latest` under the hood
-  (npx-style: fetch a temp package, resolve its bin, run it) - a genuinely new npm subcommand
-  wcvm's npm doesn't have at all yet, not something `npm run` gives it for free. Bigger risk than
-  scope: `create-vite`'s own template picker is an interactive, raw-mode terminal prompt (arrow
-  keys), and this sandbox's `readline` is explicitly TTY-independent - no raw mode, no ANSI cursor
-  control (see "Lessons learned"/`tty_wrap`) - so it would need `--template react-ts`-style flags
-  to skip prompting entirely, and it's unverified whether `create-vite` even checks
-  `isTTY`/argv early enough to avoid touching raw mode at all before that. Left as a possible
-  future `npm exec`/npx capability in its own right, parallel to `npm run` - not attempted here.
+- `npm create <name>`/`npm init <name>` - **done** (revisiting the "considered, deferred" note
+  this used to be: the raw-mode-prompt risk turned out not to apply at all - see CLAUDE.md's
+  "Status" for the full writeup, including two real ecosystem-version gotchas found verifying it
+  against real `create-vite`).
 - A second template, Vue + Vite (plain JS, `@vitejs/plugin-vue`) - **done**, see CLAUDE.md's
   "Status": the run/stop/edit machinery both examples share was pulled out into
   `src/viteExample.ts`, confirming the whole `npm install` -> `npm run dev` -> preview pipeline is
   generic, not React-specific. The two share the playground's one preview pane, so they're made
   mutually exclusive in the UI (starting either stops the other's dev server first).
+- A third example, `npm create vite@latest` (`src/createViteExample.ts`) - **done**, including a
+  real INTERACTIVE mode (`src/interactiveTerminal.ts`, an "interactive" checkbox) driving
+  create-vite's own real arrow-key prompts, not just the silent `--no-interactive` path - see
+  CLAUDE.md's "Status" for the full writeup, including a real, still-open ecosystem
+  incompatibility this found (React's own "React Compiler" variant needs `@vitejs/plugin-react`
+  6+, which needs `vite@8+`'s own `"vite/internal"` export - the same Rolldown/Wasm-trap version
+  from the note below - so it's detected and fails with a clear message instead of a cryptic Vite
+  crash, not actually supported) and a real, more consequential bug it surfaced along the way (a
+  `stop()` guard added for cross-example mutual exclusion was ALSO silently swallowing this
+  example's own start() failures before `vite` got assigned - not React-Compiler-specific, any
+  scaffold/install failure).
 - Left in this phase: more templates (Svelte, plain Node/Express) and npm workspaces.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
-  esbuild worked.
+  esbuild worked. Confirmed again directly (not just from old notes) verifying `npm create
+  vite@latest`: its CURRENT template scaffolds Vite 8 by default, and Vite 7 pinned back in
+  doesn't work with every newer plugin either (see the React Compiler gotcha above) - Vite
+  8/Rolldown support remains a real gap, not just a historical note.
 
 Later: Python (Pyodide), Bun shim, debugger, Studio UI.
 
