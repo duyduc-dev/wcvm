@@ -1,11 +1,13 @@
-// The playground's example: a real Vite + React + TypeScript app, run entirely inside wcvm. One
-// click writes the project into the virtual filesystem, installs it from the real npm registry
-// with wcvm's own `npm install`, and starts Vite's real CLI; the preview pane (src/preview.ts)
-// points itself at the dev server the moment it listens. The App.tsx editor writes straight into
-// the running project, so every edit hot-updates the component in place (React Fast Refresh -
-// its state survives).
+// The playground's React example: a real Vite + React + TypeScript app, run entirely inside
+// wcvm. One click writes the project into the virtual filesystem, installs it from the real npm
+// registry with wcvm's own `npm install`, and starts Vite's real CLI via `npm run dev`; the
+// preview pane (src/preview.ts) points itself at the dev server the moment it listens. The
+// App.tsx editor writes straight into the running project, so every edit hot-updates the
+// component in place (React Fast Refresh - its state survives). Shares its actual run/stop/edit
+// machinery with vueExample.ts via viteExample.ts's `attachViteExample`.
 
 import type { IWcvm } from "wcvm";
+import { attachViteExample, type IViteExampleHandle } from "./viteExample";
 
 const PROJECT = "/react-app";
 const PORT = 5173;
@@ -89,109 +91,18 @@ button { font-size: 1rem; padding: 0.5rem 1rem; border-radius: 8px; border: 1px 
 `,
 };
 
-type Process = Awaited<ReturnType<IWcvm["spawn"]>>;
-
-/** Everything a process writes, as text, as it arrives - also mirrored into the shared terminal
- *  pane (if one's attached), interleaved with whatever that session is doing, so npm install's
- *  and Vite's own output (including its ongoing HMR log lines) are visible somewhere in full,
- *  not just the one-line status text derived from them. */
-const collect = (proc: Process, onText: (text: string) => void, writeToTerminal?: (text: string) => void) => {
-  for (const stream of [proc.stdout, proc.stderr]) {
-    void (async () => {
-      const reader = stream.getReader();
-      const decoder = new TextDecoder();
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) return;
-        const text = decoder.decode(value);
-        onText(text);
-        writeToTerminal?.(text);
-      }
-    })();
-  }
-};
-
 export const attachReactExample = (
   wc: IWcvm,
   elements: {
     runButton: HTMLButtonElement;
     status: HTMLElement;
     editor: HTMLTextAreaElement;
-    /** Mirrors this example's npm/vite output into the shared terminal pane, if one's attached. */
     writeToTerminal?: (text: string) => void;
+    onBeforeStart?: () => void;
   },
-) => {
-  const { runButton, status, editor, writeToTerminal } = elements;
-  editor.value = APP_TSX;
-
-  let vite: Process | undefined;
-  let projectWritten = false;
-
-  const writeApp = () => wc.fs.writeFile(`${PROJECT}/src/App.tsx`, editor.value);
-
-  // Every edit lands in the running project; Vite's watcher picks it up and hot-updates it.
-  let pending: ReturnType<typeof setTimeout> | undefined;
-  editor.addEventListener("input", () => {
-    if (!projectWritten) return; // used as the starting App.tsx on the next run instead
-    clearTimeout(pending);
-    pending = setTimeout(() => void writeApp(), 250);
-  });
-
-  const stop = (message: string) => {
-    vite?.kill();
-    vite = undefined;
-    runButton.textContent = "run React example";
-    status.textContent = message;
-  };
-
-  const start = async () => {
-    await wc.preview.enable();
-
-    for (const [path, contents] of Object.entries(PROJECT_FILES)) {
-      const full = `${PROJECT}/${path}`;
-      await wc.fs.mkdir(full.slice(0, full.lastIndexOf("/")), { recursive: true });
-      await wc.fs.writeFile(full, contents);
-    }
-    await writeApp();
-    projectWritten = true;
-
-    status.textContent = "Installing React, Vite and friends from registry.npmjs.org with wcvm's npm install (~10s the first time)...";
-    const install = await wc.spawn("npm", ["install"], { cwd: PROJECT });
-    let installLog = "";
-    collect(install, (text) => (installLog += text), writeToTerminal);
-    const installed = await install.exit;
-    if (installed.exitCode !== 0) throw new Error(`npm install failed:\n${installLog.trim()}`);
-
-    status.textContent = `${installLog.trim()} - starting Vite...`;
-    const started = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", String(PORT), "--strictPort"], { cwd: PROJECT });
-    vite = started;
-    runButton.textContent = "stop React example";
-    let log = "";
-    collect(started, (text) => {
-      log += text;
-      if (/Local:/.test(log) && vite === started) {
-        status.textContent = `Vite is running on virtual port ${PORT} - the app is in the preview pane below. Edit src/App.tsx here and watch it hot-reload.`;
-      }
-    }, writeToTerminal);
-    started.exit.then((result) => {
-      if (vite !== started) return; // already stopped (or restarted) by the user
-      stop(`Vite exited unexpectedly (code ${result.exitCode}):\n${log.trim().split("\n").slice(-5).join("\n")}`);
-    });
-  };
-
-  runButton.addEventListener("click", async () => {
-    if (vite) {
-      stop("Stopped.");
-      return;
-    }
-    runButton.disabled = true;
-    status.textContent = "Writing the project...";
-    try {
-      await start();
-    } catch (error) {
-      stop(`Failed to start: ${(error as Error).message}`);
-    } finally {
-      runButton.disabled = false;
-    }
-  });
-};
+): IViteExampleHandle =>
+  attachViteExample(
+    wc,
+    { project: PROJECT, port: PORT, name: "React", files: PROJECT_FILES, editablePath: "src/App.tsx", initialContent: APP_TSX },
+    elements,
+  );

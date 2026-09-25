@@ -2,6 +2,8 @@ import { boot } from "wcvm";
 import { attachPreview } from "./preview";
 import { attachReactExample } from "./reactExample";
 import { attachTerminal } from "./terminal";
+import type { IViteExampleHandle } from "./viteExample";
+import { attachVueExample } from "./vueExample";
 
 const wc = boot();
 
@@ -46,15 +48,34 @@ try {
     attachPreview(wc, { enableButton: previewEnable, status: previewStatus, frame: previewFrame });
   }
 
+  // Both examples share the one preview pane above, so only one of their dev servers should ever
+  // be listening at a time - starting either one stops the other first (`onBeforeStart`).
+  let reactExample: IViteExampleHandle | undefined;
+  let vueExample: IViteExampleHandle | undefined;
+
   const exampleRun = document.querySelector<HTMLButtonElement>("#example-run");
   const exampleStatus = document.querySelector<HTMLElement>("#example-status");
   const exampleEditor = document.querySelector<HTMLTextAreaElement>("#example-editor");
   if (exampleRun && exampleStatus && exampleEditor) {
-    attachReactExample(wc, {
+    reactExample = attachReactExample(wc, {
       runButton: exampleRun,
       status: exampleStatus,
       editor: exampleEditor,
       writeToTerminal: (text) => session?.write(text),
+      onBeforeStart: () => vueExample?.stop("Stopped (switched to the React example)."),
+    });
+  }
+
+  const exampleVueRun = document.querySelector<HTMLButtonElement>("#example-vue-run");
+  const exampleVueStatus = document.querySelector<HTMLElement>("#example-vue-status");
+  const exampleVueEditor = document.querySelector<HTMLTextAreaElement>("#example-vue-editor");
+  if (exampleVueRun && exampleVueStatus && exampleVueEditor) {
+    vueExample = attachVueExample(wc, {
+      runButton: exampleVueRun,
+      status: exampleVueStatus,
+      editor: exampleVueEditor,
+      writeToTerminal: (text) => session?.write(text),
+      onBeforeStart: () => reactExample?.stop("Stopped (switched to the Vue example)."),
     });
   }
 } catch (error) {

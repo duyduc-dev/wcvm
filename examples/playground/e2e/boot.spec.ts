@@ -1824,6 +1824,47 @@ test.describe("example: Vite + React + TypeScript", () => {
   });
 });
 
+test.describe("example: Vite + Vue", () => {
+  // The playground's #example-vue section (src/vueExample.ts): shares its actual run/stop/edit
+  // machinery with the React example above via viteExample.ts - the second proof that pipeline is
+  // generic. Also shares the one #preview-frame with the React example, so the two are mutually
+  // exclusive: starting either one stops the other first.
+  test("the example section is the Vue app, with App.vue ready to edit", async ({ page }) => {
+    await expect(page.locator("#example-vue-label")).toContainText("Vite + Vue");
+    await expect(page.locator("#example-vue-run")).toHaveText("run Vue example");
+    await expect(page.locator("#example-vue-editor")).toHaveValue(/const count = ref\(0\)[\s\S]*count is \{\{ count \}\}/);
+    await expect(page.locator("#example-vue-status")).toHaveText("Not running.");
+  });
+
+  // OPT-IN, like the React one: it installs Vue and Vite from the real registry.
+  test("runs it end to end: install, Vite, the app in the preview, an edit hot-reloading, and starting React stops it (shared preview pane)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs Vue + Vite from registry.npmjs.org)");
+    test.setTimeout(240_000);
+    await page.click("#example-vue-run");
+    await expect(page.locator("#example-vue-status")).toHaveText(/Vite is running on virtual port 5174/, { timeout: 180_000 });
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5174/");
+
+    const frame = page.frameLocator("#preview-frame");
+    const count = frame.locator("#count");
+    await expect(count).toHaveText("count is 0", { timeout: 60_000 });
+    await count.click();
+    await count.click();
+    await expect(count).toHaveText("count is 2");
+
+    // Typing in the editor writes src/App.vue; Vite hot-updates the component in place.
+    const edited = (await page.locator("#example-vue-editor").inputValue()).replace("<h1>Vite + Vue</h1>", "<h1>Edited live</h1>");
+    await page.locator("#example-vue-editor").fill(edited);
+    await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
+    await expect(count).toHaveText("count is 2");
+
+    // The two examples share the one preview pane - starting React stops Vue first, immediately
+    // (before React's own install even begins), not just once React finishes starting.
+    await page.click("#example-run");
+    await expect(page.locator("#example-vue-status")).toHaveText("Stopped (switched to the React example).");
+    await expect(page.locator("#example-vue-run")).toHaveText("run Vue example");
+  });
+});
+
 test.describe("zlib", () => {
   test("a streaming gzip/gunzip round trip via createGzip/createGunzip", async ({ page }) => {
     const r = await spawn(page, "node", ["-e", `
