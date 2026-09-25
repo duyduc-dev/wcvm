@@ -1100,7 +1100,57 @@ Done and verified in real Chromium:
     run (113 passed, 6 opt-in skipped) and, with `WCVM_E2E_VITE=1`, every test including all
     opt-in ones (119 passed, ~5 min total - one run also hit a real, unrelated transient registry
     network error on an unrelated test, which passed cleanly on retry) confirm no regressions.
-- Tests: 895 Vitest + 119 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
+- A real, native browser `Worker` (`new Worker(new URL("./x.mjs", import.meta.url))` - the
+  browser's own global, not `worker_threads` - see `bindings/worker.ts` for that one): found
+  scoping Vite 8/Rolldown support further (see PLAN.md's "Scoped further" note) - `@napi-rs/
+  wasm-runtime`'s real browser build, which Rolldown's real Wasm binary uses, spawns a pool of
+  these directly even for single-threaded use. Real Node has no global `Worker` at all, so nothing
+  vendored covers it; `runtime/bindings/rawWorker.ts`'s `installRawWorker` wraps the real, native
+  constructor instead. Two real, confirmed-in-Chromium platform gaps, not assumed:
+  - `import.meta.url` is deliberately rewritten to a synthetic `file:` URL (`esm/loader.ts`'s own
+    doc comment), so guest path logic (`fileURLToPath`, `createRequire(import.meta.url)`) resolves
+    against the VFS like a real filesystem - but a real native `Worker` can never load a `file:`
+    URL at all: `new Worker("file:///a/b.mjs")` throws SYNCHRONOUSLY in real Chromium
+    (`Failed to construct 'Worker': Script at 'file:///a/b.mjs' cannot be accessed from origin
+    '...'`), not a hang, not an async error event. `WcvmWorker`'s constructor resolves a `file:`
+    URL back to its real VFS path and hands it to a NEW `esm/loader.ts` export, `blobUrlForFile`
+    (blob-ifies the file - and, for `type: "module"`, its whole static import graph, reusing the
+    exact same `prepare()` every ordinary import already goes through - a plain classic script is
+    blobbed as raw bytes, no import resolution, matching a real classic script's own restriction);
+    anything that isn't this sandbox's own `file:` scheme (`http(s):`, `blob:`, `data:`) passes
+    straight through to the real constructor unchanged.
+  - A real native `Worker` has NO wcvm-specific ref-counting of its own, so a script doing nothing
+    but `new Worker(...)` and awaiting its first message saw an idle event loop and exited before
+    that message could ever arrive (confirmed empirically: a first diagnostic attempt received
+    nothing and exited 0 prematurely). Fixed by ref'ing the loop for as long as a `WcvmWorker`
+    instance exists, released on `.terminate()` - a real native `Worker` has no "I stopped myself"
+    signal exposed to its own creator at all (unlike a `MessagePort`'s own close event - see
+    `messaging.ts`), so a worker that ends itself with no explicit `.terminate()` call keeps its
+    creator alive regardless; not a concern for a persistent pool like `@napi-rs/wasm-runtime`'s
+    own (nothing there calls `terminate()` mid-use), but a documented simplification otherwise.
+  - With both fixes plus a temporary, NOT-committed `"browser"` ESM condition (see PLAN.md - still
+    considered too architecturally risky to enable for real), a real `npm create vite@latest`
+    default (Vite 8, Rolldown) got measurably further: past the `node:wasi` "No such built-in
+    module" error from before AND past the silent 60s worker-pool hang the previous scoping attempt
+    found - `npm run dev` now visibly runs and produces output instead of hanging. It then hits a
+    THIRD, different blocker: `sh: ldd: command not found` - the installed `rolldown` package's own
+    napi-rs-based loader ships native platform binaries as `optionalDependencies` (`@rolldown/
+    binding-linux-x64-gnu` etc., one per Rust target) and, even when routed toward its wasm/browser
+    build, its loader still shells out to `ldd` (the standard `detect-libc` glibc-vs-musl check) to
+    decide which to use - `sh` has no such program. Full Vite 8/Rolldown support is genuinely NOT
+    done: this is a third, real platform gap on top of the `"browser"` condition's own already-
+    documented risk (changes ESM resolution for every installed package, not just this one) and the
+    still-unresolved worker-pool question the previous note raised (whether it's now actually fixed
+    or was simply never the blocker - undetermined, since `ldd` fails before the pool would run).
+    `rawWorker.ts` itself is committed regardless: a real, independently useful fix for any guest
+    code that uses the browser's own `Worker` global, Rolldown or not.
+  - Verified: 3 new Playwright tests in real Chromium (loads a real VFS script instead of throwing;
+    keeps the process alive until the worker's own message arrives; `.terminate()` releases the ref
+    and lets an otherwise-idle process exit) - none of this (a real native `Worker`, the `file:`
+    URL rejection, real event-loop ref/unref timing) can be exercised outside Chromium. A full,
+    clean `pnpm exec playwright test` run (116 passed, 6 opt-in skipped) and `vitest run` (895/895)
+    confirm no regressions.
+- Tests: 895 Vitest + 122 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): more dev-server templates (Svelte, plain Node/Express -

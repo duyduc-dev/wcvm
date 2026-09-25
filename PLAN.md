@@ -945,29 +945,41 @@ picking this back up.
     real Node's own default set, deliberately excluding `browser` (a bundler-added condition, not
     a plain `node script.js`'s own). Adding `"browser"` there DOES get past the `node:wasi`
     "No such built-in module" error (confirmed: installed, then `npm run dev` printed no error at
-    all, unlike before) - **but it isn't sufficient on its own**: the dev server then hangs
+    all, unlike before) - **but it isn't sufficient on its own**: the dev server used to hang
     silently instead (60s, no "Local:", no error, nothing) - a SECOND, distinct, harder-to-diagnose
-    blocker, likely in `@napi-rs/wasm-runtime`'s own worker-pool machinery (`emnapi`'s async-work/
+    blocker, in `@napi-rs/wasm-runtime`'s own worker-pool machinery (`emnapi`'s async-work/
     threadsafe-function bridging spawns a POOL of real, raw `new Worker(...)` instances - not
     wcvm's own `worker_threads` - eagerly, just to instantiate the wasm module at all, even for
-    single-threaded use - `onCreateWorker` creates each one, `reuseWorker: { size: ... }` sizes the
-    pool; something in that pool's own postMessage-based coordination isn't completing inside a
-    wcvm Process Worker's own environment, for a reason not yet root-caused). Also worth weighing
-    even if that hang gets fixed: enabling `"browser"` globally in `CONDITIONS` changes ESM
-    resolution for EVERY installed package, not just this one - a real, ecosystem-wide behavior
-    change (a package's own `"browser"` build can assume DOM globals, or deliberately omit Node
-    APIs a script might actually want), not a free, scoped-to-one-package win. A real fix likely
-    needs BOTH: (1) resolving the worker-pool hang (its own real investigation - real Chromium
-    devtools on the nested workers themselves, not just the top-level process, matching the
-    "grandchild target" instrumentation difficulty documented in CLAUDE.md's own `console.log`
-    gotchas for the preview Service Worker), and (2) deciding how narrowly to scope the `"browser"`
-    condition (e.g. only for specific known-safe packages, not global) rather than flipping it
-    wholesale. Full native `node:wasi` support (matching real Node's own module, not routing
-    through a package's own browser build at all) was also considered and rejected as the wrong
-    layer to solve this at: `@napi-rs/wasm-runtime`'s Node-targeted `wasi-worker.mjs` still uses
-    genuine OS thread/file primitives real Node's own native WASI binding backs, that a JS-only
-    `node:wasi` shim couldn't provide either, whereas the package's OWN browser build already
-    solves that half of the problem for free.
+    single-threaded use). That pool needed a real fix of its own, since found and made
+    (`runtime/bindings/rawWorker.ts` - see CLAUDE.md's Status entry): a real native `Worker` can't
+    load wcvm's synthetic `file:` `import.meta.url` scheme at all (throws synchronously), and has
+    no ref-counting of its own, so a script doing nothing but starting one exited before its first
+    message could arrive. With that fix AND the (still uncommitted, still not applied for real)
+    `"browser"` condition together, the hang is gone - `npm run dev` now runs and prints real
+    output instead of sitting silent - but a THIRD, distinct blocker replaces it: `sh: ldd: command
+    not found`. `rolldown`'s own npm package ships native binaries per Rust target as
+    `optionalDependencies` (`@rolldown/binding-linux-x64-gnu` etc.) and its loader - even routed
+    toward the wasm/browser build via `"browser"` - still shells out to `ldd` first (the standard
+    `detect-libc` glibc-vs-musl probe used to pick a target) before ever reaching the wasm path;
+    `sh` has no such program. Whether the worker-pool fix alone was sufficient, or whether it's
+    just never reached (since `ldd` fails first), is UNDETERMINED - the two blockers weren't
+    separable in the one test run that reached this far. Still worth weighing even setting `ldd`
+    aside: enabling `"browser"` globally in `CONDITIONS` changes ESM resolution for EVERY installed
+    package, not just this one - a real, ecosystem-wide behavior change (a package's own
+    `"browser"` build can assume DOM globals, or deliberately omit Node APIs a script might
+    actually want), not a free, scoped-to-one-package win. A real fix now likely needs THREE
+    things: (1) a working `ldd`/`detect-libc` stub (or forcing `rolldown`'s resolution straight to
+    `@rolldown/browser` via a `package.json` `overrides` swap, matching the existing `esbuild`/
+    `rollup` -> wasm-build overrides Vite 7 already uses here, bypassing the native-binary loader
+    entirely rather than stubbing what it shells out to - untried), (2) confirming the worker-pool
+    fix actually holds once (1) is unblocked, and (3) deciding how narrowly to scope the
+    `"browser"` condition (e.g. only for specific known-safe packages, not global) rather than
+    flipping it wholesale. Full native `node:wasi` support (matching real Node's own module, not
+    routing through a package's own browser build at all) was also considered and rejected as the
+    wrong layer to solve this at: `@napi-rs/wasm-runtime`'s Node-targeted `wasi-worker.mjs` still
+    uses genuine OS thread/file primitives real Node's own native WASI binding backs, that a
+    JS-only `node:wasi` shim couldn't provide either, whereas the package's OWN browser build
+    already solves that half of the problem for free.
 
 Later: Python (Pyodide), Bun shim, debugger, Studio UI.
 

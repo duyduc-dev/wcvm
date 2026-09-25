@@ -2297,3 +2297,53 @@ test.describe("terminal color", () => {
     expect(r).toEqual({ code: 0, out: "42\n", err: "" });
   });
 });
+
+test.describe("raw native Worker (the browser's own Worker global, not worker_threads)", () => {
+  const writeFiles = (page: import("@playwright/test").Page, files: Record<string, string>) =>
+    page.evaluate(async (files) => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      for (const [path, contents] of Object.entries(files)) {
+        await fs.mkdir(path.slice(0, path.lastIndexOf("/")) || "/", { recursive: true });
+        await fs.writeFile(path, contents);
+      }
+    }, files);
+
+  test("new Worker(new URL(..., import.meta.url)) loads from the VFS instead of throwing", async ({ page }) => {
+    await writeFiles(page, {
+      "/rawworker/src/worker.mjs": "postMessage('hello from worker');",
+      "/rawworker/src/main.mjs": `
+        const url = new URL('./worker.mjs', import.meta.url);
+        const w = new Worker(url, { type: 'module' });
+        w.onerror = (e) => { console.log('error', e.message || String(e)); process.nextTick(() => process.exit(1)); };
+        w.onmessage = (e) => { console.log('message', e.data); process.nextTick(() => process.exit(0)); };
+      `,
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawworker");
+    expect(r).toEqual({ code: 0, out: "message hello from worker\n", err: "" });
+  });
+
+  test("keeps the process alive until the worker's message arrives (ref counting)", async ({ page }) => {
+    await writeFiles(page, {
+      "/rawworker2/src/worker.mjs": "setTimeout(() => postMessage('late'), 200);",
+      "/rawworker2/src/main.mjs": `
+        const url = new URL('./worker.mjs', import.meta.url);
+        new Worker(url, { type: 'module' }).onmessage = (e) => { console.log(e.data); process.nextTick(() => process.exit(0)); };
+      `,
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawworker2");
+    expect(r).toEqual({ code: 0, out: "late\n", err: "" });
+  });
+
+  test("terminate() releases the ref, letting a process with no other work exit", async ({ page }) => {
+    await writeFiles(page, {
+      "/rawworker3/src/worker.mjs": "// never posts anything",
+      "/rawworker3/src/main.mjs": `
+        const url = new URL('./worker.mjs', import.meta.url);
+        const w = new Worker(url, { type: 'module' });
+        setTimeout(() => { console.log('terminating'); w.terminate(); }, 50);
+      `,
+    });
+    const r = await spawn(page, "node", ["src/main.mjs"], "/rawworker3");
+    expect(r).toEqual({ code: 0, out: "terminating\n", err: "" });
+  });
+});

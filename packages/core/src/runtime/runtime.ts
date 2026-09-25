@@ -16,6 +16,7 @@ import { createModuleBuiltin } from "./moduleBuiltin";
 import { createEsmResolver } from "./esm/resolve";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
+import { installRawWorker } from "./bindings/rawWorker";
 import { createPrimordials } from "./primordials";
 import { createProcessObject, NODE_VERSION, ProcessExit } from "./process";
 import { startRepl } from "./repl";
@@ -422,6 +423,23 @@ const createRuntime = (options: IRuntimeOptions) => {
     });
     return esmLoader;
   };
+
+  // A guest script's own `new Worker(new URL("./x.mjs", import.meta.url))` - see
+  // bindings/rawWorker.ts - needs the real Node `url.fileURLToPath` to recognize this sandbox's
+  // own `file:` import.meta.url scheme, and the ESM loader (built lazily, same as `getEsmLoader`
+  // itself) to give the target file a real, loadable Blob URL.
+  installRawWorker({
+    fileURLToPath: (url) => {
+      try {
+        return (requireBuiltin("url") as { fileURLToPath(u: string): string }).fileURLToPath(url);
+      } catch {
+        return undefined;
+      }
+    },
+    getBlobUrlForFile: () => getEsmLoader().blobUrlForFile,
+    globalObject,
+    ref: () => loop.ref(),
+  });
 
   /** Runs the script at `entry` (absolute or cwd-relative). */
   const runMain = (entry: string): Promise<number> => {
