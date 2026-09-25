@@ -116,7 +116,7 @@ const accepts = (node: INode, realName: string, spec: string, packument: IPackum
   return range !== undefined && version !== undefined && satisfies(version, range);
 };
 
-const readJson = (fs: IFsClient, path: string): Record<string, any> | undefined => {
+export const readJson = (fs: IFsClient, path: string): Record<string, any> | undefined => {
   try {
     return JSON.parse(new TextDecoder().decode(fs.readFile(path)));
   } catch {
@@ -156,7 +156,7 @@ const packagePath = (entryPath: string): string | undefined => {
   return parts.join("/");
 };
 
-const extract = (fs: IFsClient, dir: string, tar: Uint8Array) => {
+export const extract = (fs: IFsClient, dir: string, tar: Uint8Array) => {
   mkdirp(fs, dir);
   // package.json last: its presence (with the right version) is what marks a package as fully
   // installed for the next run, so an interrupted extraction is never mistaken for a complete one.

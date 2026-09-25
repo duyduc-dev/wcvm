@@ -342,3 +342,60 @@ describe("npm run", () => {
     expect(r.stderr).toMatch(/^npm error code ENOENT\nnpm error Could not read package\.json/);
   });
 });
+
+describe("npm create / npm init", () => {
+  const thingVersions = {
+    "1.0.0": { bin: "bin/cli.js", files: { "bin/cli.js": "#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n" } },
+    "2.0.0": { bin: "bin/cli.js", files: { "bin/cli.js": "#!/usr/bin/env node\nconsole.log('v2', JSON.stringify(process.argv.slice(2)));\n" } },
+  };
+
+  it("mangles `thing` to `create-thing`, fetches it, and runs its own bin with the given args", async () => {
+    const t = setup({ "create-thing": { versions: thingVersions } });
+    const r = await t.run(["create", "thing@1.0.0", "my app", "--", "--flag", "value"]);
+    expect(r).toMatchObject({ code: 0, stderr: "" });
+    expect(JSON.parse(r.stdout)).toEqual(["my app", "--flag", "value"]); // a space-containing arg survives whole - never round-tripped through a shell string
+    expect(t.requests.some((u) => u.includes("create-thing"))).toBe(true);
+  }, 20_000); // boots a real Node runtime for the resolved bin
+
+  it("`npm init thing` behaves exactly like `npm create thing` (same package, same latest version)", async () => {
+    const t = setup({ "create-thing": { versions: thingVersions } });
+    const viaCreate = await t.run(["create", "thing"]);
+    const viaInit = await t.run(["init", "thing"]);
+    expect(viaInit).toEqual(viaCreate);
+    expect(viaCreate.stdout).toBe("v2 []\n"); // 2.0.0 is latest
+  }, 20_000);
+
+  it("resolves an explicit version, not just latest", async () => {
+    const t = setup({ "create-thing": { versions: thingVersions } });
+    const r = await t.run(["create", "thing@1.0.0"]);
+    expect(r.stdout).toBe("[]\n"); // 2.0.0 (latest) would print "v2 []" instead
+  }, 20_000);
+
+  it("caches a fetched package by name+version - a second run doesn't re-download its tarball", async () => {
+    const t = setup({ "create-thing": { versions: thingVersions } });
+    await t.run(["create", "thing"]);
+    const before = t.requests.filter((u) => u.endsWith(".tgz")).length;
+    await t.run(["create", "thing"]);
+    expect(t.requests.filter((u) => u.endsWith(".tgz")).length).toBe(before);
+  }, 20_000);
+
+  it("a scope alone mangles to <scope>/create", async () => {
+    const t = setup({ "@foo/create": { versions: { "1.0.0": { bin: "bin/cli.js", files: { "bin/cli.js": "#!/usr/bin/env node\nconsole.log('scoped');\n" } } } } });
+    const r = await t.run(["create", "@foo"]);
+    expect(r).toMatchObject({ code: 0, stdout: "scoped\n" });
+  }, 20_000);
+
+  it("a package with no bin fails cleanly", async () => {
+    const t = setup({ "create-thing": { versions: { "1.0.0": {} } } });
+    const r = await t.run(["create", "thing"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^npm error code ENOEXEC\nnpm error create-thing has no executable/);
+  });
+
+  it("no package name at all fails cleanly, for both create and init", async () => {
+    const t = setup({});
+    expect((await t.run(["create"])).code).toBe(1);
+    expect((await t.run(["init"])).code).toBe(1);
+    expect((await t.run(["create"])).stderr).toContain("no package name");
+  });
+});
