@@ -1,4 +1,5 @@
 import { boot } from "wcvm";
+import { attachCreateViteExample } from "./createViteExample";
 import { attachPreview } from "./preview";
 import { attachReactExample } from "./reactExample";
 import { attachTerminal } from "./terminal";
@@ -48,10 +49,12 @@ try {
     attachPreview(wc, { enableButton: previewEnable, status: previewStatus, frame: previewFrame });
   }
 
-  // Both examples share the one preview pane above, so only one of their dev servers should ever
-  // be listening at a time - starting either one stops the other first (`onBeforeStart`).
+  // All three examples share the one preview pane above, so only one of their dev servers should
+  // ever be listening at a time - starting any one of them stops the other two first
+  // (`onBeforeStart`); `stop()` itself is a no-op for one that isn't running.
   let reactExample: IViteExampleHandle | undefined;
   let vueExample: IViteExampleHandle | undefined;
+  let createExample: IViteExampleHandle | undefined;
 
   const exampleRun = document.querySelector<HTMLButtonElement>("#example-run");
   const exampleStatus = document.querySelector<HTMLElement>("#example-status");
@@ -62,7 +65,10 @@ try {
       status: exampleStatus,
       editor: exampleEditor,
       writeToTerminal: (text) => session?.write(text),
-      onBeforeStart: () => vueExample?.stop("Stopped (switched to the React example)."),
+      onBeforeStart: () => {
+        vueExample?.stop("Stopped (switched to the React example).");
+        createExample?.stop("Stopped (switched to the React example).");
+      },
     });
   }
 
@@ -75,7 +81,30 @@ try {
       status: exampleVueStatus,
       editor: exampleVueEditor,
       writeToTerminal: (text) => session?.write(text),
-      onBeforeStart: () => reactExample?.stop("Stopped (switched to the Vue example)."),
+      onBeforeStart: () => {
+        reactExample?.stop("Stopped (switched to the Vue example).");
+        createExample?.stop("Stopped (switched to the Vue example).");
+      },
+    });
+  }
+
+  const exampleCreateRun = document.querySelector<HTMLButtonElement>("#example-create-run");
+  const exampleCreateStatus = document.querySelector<HTMLElement>("#example-create-status");
+  const exampleCreateEditor = document.querySelector<HTMLTextAreaElement>("#example-create-editor");
+  const exampleCreateInteractive = document.querySelector<HTMLInputElement>("#example-create-interactive");
+  const exampleCreateTerminal = document.querySelector<HTMLElement>("#example-create-terminal");
+  if (exampleCreateRun && exampleCreateStatus && exampleCreateEditor && exampleCreateInteractive && exampleCreateTerminal) {
+    createExample = attachCreateViteExample(wc, {
+      runButton: exampleCreateRun,
+      status: exampleCreateStatus,
+      editor: exampleCreateEditor,
+      writeToTerminal: (text) => session?.write(text),
+      interactiveCheckbox: exampleCreateInteractive,
+      interactiveTerminal: exampleCreateTerminal,
+      onBeforeStart: () => {
+        reactExample?.stop("Stopped (switched to the Create Vite example).");
+        vueExample?.stop("Stopped (switched to the Create Vite example).");
+      },
     });
   }
 } catch (error) {

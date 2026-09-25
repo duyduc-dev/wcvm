@@ -88,6 +88,6 @@ export const attachVueExample = (
 ): IViteExampleHandle =>
   attachViteExample(
     wc,
-    { project: PROJECT, port: PORT, name: "Vue", files: PROJECT_FILES, editablePath: "src/App.vue", initialContent: APP_VUE },
+    { project: PROJECT, port: PORT, name: "Vue", editablePath: "src/App.vue", source: { kind: "static", files: PROJECT_FILES, initialContent: APP_VUE } },
     elements,
   );
