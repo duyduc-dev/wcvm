@@ -888,17 +888,104 @@ Done and verified in real Chromium:
   its state intact. Tests: an always-on one for the page wiring, and an OPT-IN one
   (`WCVM_E2E_VITE=1`, real registry) for the whole flow through the real UI - install, the
   counter in the preview, clicks, an editor edit hot-reloading with the count kept (~16 s).
-- Tests: 865 Vitest + 111 Playwright (Chromium; 2 of them opt-in, needing the real npm registry:
+- `npm run`/`start`/`stop`/`restart`/`test` (Phase 8's last piece before templates/workspaces):
+  wcvm's npm (`programs/npm/runScript.ts`) runs a package.json script through wcvm's own `sh`,
+  including `pre<x>`/`post<x>` hooks (skippable with `--ignore-scripts`), a missing script's exit
+  short-circuited to 0 by `--if-present`, `start`'s real fallback to `node server.js` (only when
+  no `start` script and `server.js` exists), and `restart`'s real fallback to `npm stop
+  --if-present && npm start` (which then recurses back into wcvm's own npm, exactly like real
+  npm's does). Aliases match real npm's own (`lib/utils/cmd-list.js`): `run-script`/`rum`/`urn` for
+  `run`, `t`/`tst` for `test`. Not vendored (this isn't Node's own `lib/`, and real npm's own
+  `@npmcli/run-script` pulls in native child_process spawning this sandbox doesn't have) - hand-
+  written, but checked side-by-side against a real npm 11 install for every observable behavior:
+  the run banner (`\n> <pkg id> <event>\n> <cmd> [args]\n\n`), the two-section `npm run` listing
+  (real npm's own fixed lifecycle-name list decides the split), the missing-script message's exact
+  text, `npm_lifecycle_event`/`npm_lifecycle_script`/`npm_package_*` env vars (the same recursive
+  flatten real npm's `package-envs.js` does), and - the piece that makes any of this useful -
+  `PATH` gaining every ancestor's `node_modules/.bin` (`set-path.js`'s own walk-to-the-root logic),
+  nearest first, ahead of whatever `PATH` already had.
+  - **A new capability in `sh` itself, not just npm**: a bare command name that isn't a builtin is
+    now searched through `PATH` (`sh.ts`'s `resolveExecutable`/`resolveCommand`) exactly like a
+    real shell would - the only interpreter this sandbox can hand a script off to is `node`, so
+    only a `#!/usr/bin/env node`-style shebang (direct interpreter paths and `env -S` both
+    recognized) resolves to anything; anything else is a clean `126` (found, can't execute) rather
+    than a silent no-op, and nothing at all on `PATH` stays the existing `127`. The REAL path
+    (`fs.realpath`, following the symlink `npm install`'s own bin-linking already creates) is what
+    gets handed to `node`, so a resolved bin's own relative `require`s resolve against its
+    package's real directory, matching real Node's own symlink-following for its main module -
+    this is what lets `npm run dev`'s `"dev": "vite"` actually find and run
+    `node_modules/.bin/vite`.
+  - **A real, pre-existing bug found and fixed along the way**: `sh.ts`'s `runStage` used to hand
+    a nested program (any builtin it invokes, including `node`) only a hand-picked SUBSET of the
+    calling process's own `IProgramContext` - `fs`/`cwd`/`env`/`pid`/`globalObject`/`sleep`/
+    `childProcess`/`stdin`/`stdout`/`stderr`, silently dropping `spawnSync`/`ipc`/`fsWatch`/`net`/
+    `netSync`/`udp`/`workerThread`/`mintThreadId`. Harmless for the small scripts `sh` had ever
+    run before (an `echo`/`cat` pipeline, or a `node -e` smoke test with no real I/O) - but it
+    would have silently broken Vite's entire dev server the moment it ran through `npm run`
+    instead of being spawned directly: `net` for its own TCP server, `fsWatch` for chokidar,
+    `spawnSync`/`childProcess` for esbuild's own service child. Fixed by spreading the WHOLE
+    context (`{ ...ctx, args, cwd: state.cwd, stdin, stdout }`) instead of listing fields by hand -
+    the same fix keeps working automatically as `IProgramContext` grows new capabilities later.
+  - **A second real bug, caught before it ever ran** (a circular-import crash, not a behavioral
+    one): `runScript.ts` originally imported `sh` statically. Since `builtins.ts` EAGERLY calls
+    `createNpm(...)` at its own module-load time (to build the `Program` it registers, not lazily
+    like the `sh`/`node` builtins themselves), and `sh.ts` itself already statically depends on
+    `builtins.ts` (via `programs/index.ts`'s `resolveProgram`) for the pre-existing, documented
+    `sh`-resolves-builtins-by-name cycle - a static `npm.ts -> runScript.ts -> sh.ts -> index.ts ->
+    builtins.ts -> npm.ts` cycle meant `createNpm` could still be mid-load (not yet exported) the
+    moment `builtins.ts` tried to call it, throwing `"createNpm is not a function"` the instant
+    anything imported `npm.ts` first (exactly what `npm.test.ts` does). Fixed the same way
+    `node.ts` already avoids a similar problem for its own (much heavier) runtime import: a
+    dynamic `import("../sh/sh")` inside `runOne`, run long after every module has finished
+    loading, never touches the cycle at all.
+  - The playground's React example now starts Vite with `npm run dev -- --port 5173
+    --strictPort` (`reactExample.ts`) instead of directly invoking `node
+    node_modules/vite/bin/vite.js` - exercising this whole feature for real, not just in
+    isolation; the existing opt-in Vite e2e test (below) is what actually re-confirmed HMR still
+    works end to end through the new path.
+  - See PLAN.md's "Known differences" for what `npm run` deliberately doesn't do (no command-name
+    abbreviation, no `--json`/`--parseable` listing, no workspaces, a smaller env var set).
+  - Verified: `programs/sh/sh.test.ts`'s new `"PATH-resolved executables"` describe block (5
+    Vitest, including a bin resolved through a real symlink the way `npm install` itself creates
+    one, and a bare relative path with no `PATH` search at all), `programs/npm/npm.test.ts`'s new
+    `"npm run"` describe block (12 Vitest - the banner, pre/post ordering and short-circuiting,
+    `--if-present`/`--ignore-scripts`, the listing, both fallbacks, every alias, a real PATH-
+    resolved bin booting a real Node runtime, and the missing-package.json error). A full, clean
+    `pnpm exec playwright test` run (109 passed, 2 opt-in skipped) and, with `WCVM_E2E_VITE=1`,
+    the Vite dev server and React example e2e tests (3 passed, ~26 s total) confirm no regressions
+    and that the new `npm run dev` path really does carry Vite's dev server, HMR and all, through
+    to a real Chromium tab. `vitest run` (882/882) confirms no regressions elsewhere.
+- A second playground example, Vue + Vite (`src/vueExample.ts`) - proof the whole `npm install` ->
+  `npm run dev` -> preview pipeline is actually generic, not accidentally React-specific: the
+  run/stop/edit machinery both examples share (writing project files, spawning `npm install` then
+  `npm run dev`, wiring the editor to hot-reload, reporting status) was pulled out of
+  `reactExample.ts` into `src/viteExample.ts`'s `attachViteExample(wc, config, elements)`, taking
+  each framework's own project/port/files/editable-path/initial-content as a small config object;
+  `reactExample.ts` is now just that config plus its own `PROJECT_FILES`. The Vue project itself is
+  a plain-JS `create-vite` "vue" template (`vue` + `@vitejs/plugin-vue`, no TypeScript - Vue's SFC
+  compiler doesn't need it, so this also checks that path is real, not just Babel/React's), same
+  `esbuild-wasm`/`@rollup/wasm-node` overrides as the React example, on its own port (5174) and
+  project dir (`/vue-app`). Both examples share the ONE `#preview-frame` already in the page, so
+  they're made mutually exclusive in the UI (not in wcvm itself, which has no such limit): each
+  `attachViteExample` call takes an `onBeforeStart` hook, wired in `main.ts` so starting either
+  example stops the other's dev server first, synchronously, before that example's own install
+  even begins - confirmed by a test that starts Vue, then clicks React's own button, and asserts
+  Vue's status flips to "Stopped (switched to the React example)." immediately, without waiting
+  for React's own ~10s install. Verified: the playground's own `tsc --noEmit` stays clean; 2 new
+  Playwright tests (an always-on one for the `#example-vue-*` page wiring, and an opt-in one -
+  `WCVM_E2E_VITE=1` - for the whole flow: install, the counter in the preview, an editor edit hot-
+  reloading the Vue component, then the mutual-exclusion check above). A full, clean
+  `pnpm exec playwright test` run (110 passed, 3 opt-in skipped) and, with `WCVM_E2E_VITE=1`, every
+  test including all opt-in ones (113 passed, ~1.8 min total) confirm no regressions.
+- Tests: 882 Vitest + 113 Playwright (Chromium; 3 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): DNS (`dns.lookup()` is a fixed-address shim, low-value in a
-single virtual host with no real network to resolve a name against), real `npm` (investigated and
-DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
-a minimal built-in `npm install` exists instead - see above and PLAN.md's "Real npm: feasibility
-findings"), Vite dev server/HMR (preview WebSocket tunnel, absolute-path routing and `npm install`
-CJS `import()`, the builtins Vite imports and a real `import.meta.url` are done, and Vite's dev
-dev server runs WITH HMR, under an opt-in e2e test - see PLAN.md Phase 8 for what's left),
-Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): more dev-server templates (Svelte, plain Node/Express -
+Vite+React and Vite+Vue exist) and npm workspaces, DNS (`dns.lookup()` is a fixed-address shim, low-value
+in a single virtual host with no real network to resolve a name against), real `npm` (investigated
+and DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual
+`net`/`http`; a minimal built-in `npm install`/`npm run` exists instead - see above and PLAN.md's
+"Real npm: feasibility findings"), Python/Bun, Studio UI.
 
 ## Architecture in one page
 
