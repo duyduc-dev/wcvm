@@ -1582,6 +1582,74 @@ test.describe("npm install", () => {
   });
 });
 
+test.describe("npm create", () => {
+  // `npm create vite@latest` (real registry, needs the internet - opt-in like "Vite dev server"):
+  // wcvm's npm mangles "vite" to "create-vite" (exec.ts's mangleCreateName, matching real npm's
+  // own init.js), fetches JUST that one package (it has zero runtime dependencies of its own -
+  // everything's bundled into its own dist/index.js) and runs its real, unmodified bin directly.
+  // create-vite decides whether to prompt interactively from `process.stdin.isTTY` - always false
+  // here (no raw-mode TTY in this sandbox), so it runs fully non-interactively off argv alone, the
+  // same as a CI system with no real terminal. Then proves the scaffolded project is real by
+  // installing and starting it, exactly like the hand-written React example does.
+  test("scaffolds a real react-ts project non-interactively, and it installs and runs for real", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then Vite/React, from registry.npmjs.org)");
+    test.setTimeout(120_000);
+
+    const created = await spawn(page, "npm", ["create", "vite@latest", "scaffolded", "--", "--template", "react-ts", "--no-interactive"], "/");
+    expect(created.code).toBe(0);
+    expect(created.out).toContain("Scaffolding project in");
+    expect(created.out).toContain("Done. Now run:");
+
+    const files = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile("/scaffolded/package.json")));
+      return { pkg, top: (await fs.readdir("/scaffolded")).sort() };
+    });
+    expect(files.pkg).toMatchObject({ name: "scaffolded", dependencies: { react: expect.any(String), "react-dom": expect.any(String) } });
+    expect(files.top).toEqual(expect.arrayContaining(["index.html", "package.json", "src", "vite.config.ts"]));
+
+    // The scaffolded project is a real, unmodified react-ts template - but create-vite@latest's
+    // CURRENT template scaffolds Vite 8, which defaults to Rolldown (a native/Wasm Rust bundler,
+    // not Rollup+esbuild) - and PLAN.md already recorded that hitting an upstream Wasm trap in an
+    // earlier investigation. Pin vite and @vitejs/plugin-react down to the exact versions the
+    // hand-written React example already proved work (plugin-react@6.x, scaffolded by default,
+    // expects newer export paths vite@7.3.6 doesn't have) - vite 7 still uses Rollup+esbuild, so
+    // it still takes the same wasm-build overrides that example uses.
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile("/scaffolded/package.json")));
+      pkg.devDependencies.vite = "7.3.6";
+      pkg.devDependencies["@vitejs/plugin-react"] = "^5.0.0";
+      pkg.overrides = { esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" };
+      await fs.writeFile("/scaffolded/package.json", JSON.stringify(pkg));
+    });
+    const install = await spawn(page, "npm", ["install"], "/scaffolded");
+    expect(install.code).toBe(0);
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const vite = await wc.spawn("npm", ["run", "dev", "--", "--port", "5197", "--strictPort"], { cwd: "/scaffolded" });
+      const w = window as unknown as { __create_vite: typeof vite; __create_viteOut: string };
+      w.__create_vite = vite;
+      w.__create_viteOut = "";
+      for (const stream of [vite.stdout, vite.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__create_viteOut += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    const viteOutput = () => page.evaluate(() => (window as unknown as { __create_viteOut: string }).__create_viteOut);
+    await expect.poll(viteOutput, { timeout: 30_000 }).toContain("Local:");
+
+    await page.evaluate(() => (window as unknown as { __create_vite: { kill: () => void } }).__create_vite.kill());
+  });
+});
+
 test.describe("Vite dev server", () => {
   // An unmodified Vite 7 inside wcvm, the whole way: installed by wcvm's own `npm install` from the
   // REAL npm registry, esbuild and Rollup swapped for their wasm builds via `overrides`, started
@@ -1862,6 +1930,95 @@ test.describe("example: Vite + Vue", () => {
     await page.click("#example-run");
     await expect(page.locator("#example-vue-status")).toHaveText("Stopped (switched to the React example).");
     await expect(page.locator("#example-vue-run")).toHaveText("run Vue example");
+  });
+});
+
+test.describe("example: npm create vite", () => {
+  // The playground's #example-create section (src/createViteExample.ts): the direct showcase of
+  // wcvm's own `npm create`/`npm exec` capability (programs/npm/exec.ts) - it scaffolds a REAL
+  // project with `npm create vite@latest -- --template react-ts`, not a hand-written template
+  // like the other two examples, then shares their same install/run/edit machinery
+  // (viteExample.ts) and the one shared preview pane (mutually exclusive with the other two).
+  test("the example section shows a placeholder until the real scaffold runs", async ({ page }) => {
+    await expect(page.locator("#example-create-label")).toContainText("npm create vite@latest");
+    await expect(page.locator("#example-create-run")).toHaveText("run Create Vite example");
+    await expect(page.locator("#example-create-editor")).toHaveValue(/npm create vite@latest/);
+    await expect(page.locator("#example-create-status")).toHaveText("Not running.");
+  });
+
+  // OPT-IN: installs create-vite itself, then React + Vite, all from the real registry.
+  test("scaffolds, installs and runs a REAL project, seeds the editor from its real App.tsx, and starting Vue stops it", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then React + Vite, from registry.npmjs.org)");
+    test.setTimeout(240_000);
+    await page.click("#example-create-run");
+    await expect(page.locator("#example-create-status")).toHaveText(/Vite is running on virtual port 5175/, { timeout: 180_000 });
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5175/");
+
+    // The editor was seeded from the real scaffolded src/App.tsx - real create-vite's own
+    // default template, not anything wcvm wrote itself.
+    await expect(page.locator("#example-create-editor")).toHaveValue(/function App/);
+    await expect(page.locator("#example-create-editor")).not.toHaveValue(/npm create vite@latest/);
+
+    const frame = page.frameLocator("#preview-frame");
+    const counter = frame.locator("button.counter");
+    await expect(counter).toHaveText("Count is 0", { timeout: 60_000 });
+    await counter.click();
+    await counter.click();
+    await expect(counter).toHaveText("Count is 2");
+
+    // Typing in the editor writes the real src/App.tsx; Vite hot-updates the component in place.
+    const edited = (await page.locator("#example-create-editor").inputValue()).replace("<h1>Get started</h1>", "<h1>Edited live</h1>");
+    await page.locator("#example-create-editor").fill(edited);
+    await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
+    await expect(counter).toHaveText("Count is 2");
+
+    // All three examples share the one preview pane - starting Vue stops this one first.
+    await page.click("#example-vue-run");
+    await expect(page.locator("#example-create-status")).toHaveText("Stopped (switched to the Vue example).");
+    await expect(page.locator("#example-create-run")).toHaveText("run Create Vite example");
+  });
+
+  // OPT-IN: create-vite's own REAL interactive prompts, driven by genuine Playwright keyboard
+  // events (not synthetic stdin writes) - proves interactiveTerminal.ts's raw, unbuffered
+  // keystroke forwarding really works through the actual UI, checked directly against a real
+  // spawn beforehand (wcvm's vendored readline.emitKeypressEvents correctly decodes a forwarded
+  // arrow-key escape sequence). Picks Vue - a different framework than the example's own default
+  // (react-ts) - to also prove findEditableFile's own fallback (src/App.tsx doesn't exist for a
+  // Vue scaffold) and the generalized version-pin logic (only known-safe pins are applied).
+  test("interactive mode shows create-vite's own real prompts, driven by real keyboard input, and picking Vue scaffolds a real Vue app", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then Vue + Vite, from registry.npmjs.org)");
+    test.setTimeout(240_000);
+
+    await page.check("#example-create-interactive");
+    await page.click("#example-create-run");
+
+    // The raw terminal attaches once create-vite's own process starts.
+    await expect(page.locator("#example-create-terminal .xterm")).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(2500); // let the first real prompt (framework list) actually render
+
+    // Framework list order: Vanilla, Vue, React, ... - one Down press then Enter picks Vue.
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(800);
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1200);
+    // Variant list: TypeScript (vue-ts) is first/default - just Enter. Vue has no ESLint/Oxlint
+    // prompt (react-only), so scaffolding starts right after this.
+    await page.keyboard.press("Enter");
+
+    await expect(page.locator("#example-create-status")).toHaveText(/Vite is running on virtual port 5175/, { timeout: 180_000 });
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5175/");
+
+    // The editor was seeded from the REAL scaffolded src/App.vue - findEditableFile fell through
+    // past the example's own configured default (src/App.tsx, which doesn't exist here).
+    await expect(page.locator("#example-create-editor")).toHaveValue(/<template>/);
+
+    const pkg = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      return JSON.parse(new TextDecoder().decode(await fs.readFile("/created-app/package.json")));
+    });
+    expect(pkg.dependencies).toHaveProperty("vue");
+    expect(pkg.devDependencies.vite).toBe("7.3.6"); // the always-safe pin, applied regardless of framework
+    if (pkg.devDependencies["@vitejs/plugin-vue"]) expect(pkg.devDependencies["@vitejs/plugin-vue"]).toBe("^6.0.0");
   });
 });
 

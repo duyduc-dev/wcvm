@@ -103,6 +103,6 @@ export const attachReactExample = (
 ): IViteExampleHandle =>
   attachViteExample(
     wc,
-    { project: PROJECT, port: PORT, name: "React", files: PROJECT_FILES, editablePath: "src/App.tsx", initialContent: APP_TSX },
+    { project: PROJECT, port: PORT, name: "React", editablePath: "src/App.tsx", source: { kind: "static", files: PROJECT_FILES, initialContent: APP_TSX } },
     elements,
   );

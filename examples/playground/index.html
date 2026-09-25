@@ -16,6 +16,8 @@
       .example-status { font-size: 12px; color: #aaa; padding: 4px 0; white-space: pre-wrap; }
       .example-hint { font-size: 12px; color: #aaa; padding: 4px 0 2px; }
       .example-editor { width: 100%; box-sizing: border-box; height: 260px; font: 12px monospace; background: #111; color: #ddd; border: 1px solid #444; padding: 8px; tab-size: 2; }
+      .example-interactive-label { font-size: 12px; color: #aaa; padding-left: 8px; }
+      .example-interactive-terminal:not(:empty) { border: 1px solid #444; margin-top: 6px; }
     </style>
   </head>
   <body>
@@ -33,11 +35,20 @@
       <textarea id="example-editor" class="example-editor" spellcheck="false" aria-label="src/App.tsx"></textarea>
     </div>
     <div id="example-vue" class="example">
-      <div id="example-vue-label" class="example-label">Example: a Vite + Vue app - installed from npm and run entirely in this tab, sharing the one preview pane below with the React example (starting one stops the other)</div>
+      <div id="example-vue-label" class="example-label">Example: a Vite + Vue app - installed from npm and run entirely in this tab, sharing the one preview pane below with the other two examples (starting one stops the others)</div>
       <button id="example-vue-run">run Vue example</button>
       <div id="example-vue-status" class="example-status">Not running.</div>
       <div id="example-vue-hint" class="example-hint">src/App.vue - edit it while the app runs; changes hot-reload in the preview.</div>
       <textarea id="example-vue-editor" class="example-editor" spellcheck="false" aria-label="src/App.vue"></textarea>
+    </div>
+    <div id="example-create" class="example">
+      <div id="example-create-label" class="example-label">Example: `npm create vite@latest` scaffolds a REAL project here (not a hand-written template) - installed from npm and run entirely in this tab, sharing the one preview pane below with the other two examples (starting one stops the others)</div>
+      <button id="example-create-run">run Create Vite example</button>
+      <label class="example-interactive-label"><input type="checkbox" id="example-create-interactive" /> interactive (answer create-vite's own real prompts yourself, arrow keys and all)</label>
+      <div id="example-create-terminal" class="example-interactive-terminal"></div>
+      <div id="example-create-status" class="example-status">Not running.</div>
+      <div id="example-create-hint" class="example-hint">src/App.tsx - populated by the real scaffold on first run; edit it while the app runs and changes hot-reload in the preview.</div>
+      <textarea id="example-create-editor" class="example-editor" spellcheck="false" aria-label="src/App.tsx"></textarea>
     </div>
     <div id="preview">
       <button id="preview-enable">enable preview</button>
