@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>studio</title>
+    <script>
+      // Applied synchronously, before anything paints, so there's no flash of the wrong theme
+      // on load — see src/lib/theme.ts for the same logic used everywhere after boot.
+      (function () {
+        var stored = localStorage.getItem("wcvm-studio-theme");
+        var isDark =
+          stored === "dark" ||
+          (stored !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", isDark);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

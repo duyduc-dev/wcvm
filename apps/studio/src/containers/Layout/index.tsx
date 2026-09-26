@@ -4,15 +4,20 @@ import {
   BreadcrumbItem,
   BreadcrumbLink,
 } from "@/components/ui/breadcrumb";
+import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { type PropsWithChildren } from "react";
+import { useTheme } from "@/hooks/use-theme";
 
 const Layout = ({ children }: PropsWithChildren) => {
+  const { isDark, toggleTheme } = useTheme();
+
   return (
     <SidebarProvider>
       {/* <AppSidebar /> */}
       <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
+        <header className="flex h-16 shrink-0 items-center justify-between gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
           <div className="flex items-center gap-2 px-4">
             {/* <SidebarTrigger className="-ml-1" />
             <Separator
@@ -27,6 +32,15 @@ const Layout = ({ children }: PropsWithChildren) => {
               </BreadcrumbList>
             </Breadcrumb>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            className="mr-4"
+          >
+            {isDark ? <MoonIcon /> : <SunIcon />}
+          </Button>
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">{children}</div>
       </SidebarInset>

@@ -127,4 +127,34 @@
   html {
     @apply font-mono;
     }
+  /* Tailwind v4's Preflight dropped the `button { cursor: pointer }` v3 shipped, so a
+     plain native <button> (the IDE's title bar / activity bar / tab strip controls)
+     falls back to the UA default `cursor: default`. Disabled controls keep the
+     default cursor, matching VS Code. */
+  button:not(:disabled, [aria-disabled="true"]),
+  [role="button"]:not([aria-disabled="true"]) {
+    @apply cursor-pointer;
+    }
+}
+
+/* xterm and Monaco render into elements they create themselves (not ones this app's
+   components render), so these two rules are the only way to reach them — everything
+   reachable from our own JSX uses ordinary Tailwind utility classes instead. Hosts get
+   the `ide-editor-host` / `ide-term-host` marker class purely as a selector anchor. */
+.ide-term-host .xterm {
+  @apply h-full px-2 py-1.5;
+}
+.ide-term-host .xterm-viewport {
+  background-color: transparent !important;
+  /* The viewport reserves scrollbar space unconditionally, and an unstyled native scrollbar
+     renders with the browser's light-mode default (an opaque white thumb/track) regardless of
+     the app's own theme — glaring against a dark terminal background. A neutral, semi-
+     transparent gray reads fine on either background, so no separate dark-mode rule is needed. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(127, 127, 127, 0.5) transparent;
+}
+.ide-editor-host .monaco-editor,
+.ide-editor-host .monaco-editor .overflow-guard {
+  width: 100% !important;
+  height: 100% !important;
 }

@@ -29,7 +29,7 @@ const RecentProjects = () => {
         {projects.length > 0 && (
           <button
             onClick={clearAllProject}
-            className="flex items-center gap-2 text-neutral-400 cursor-pointer hover:text-neutral-500 transition-all hover:underline"
+            className="flex items-center gap-2 text-muted-foreground cursor-pointer hover:text-foreground transition-all hover:underline"
           >
             <BroomIcon size={20} />
             <p className="text-sm">Clear All</p>
@@ -39,9 +39,9 @@ const RecentProjects = () => {
 
       {projects.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 border border-dashed py-10 mt-5 text-center">
-          <FolderDashedIcon size={28} className="text-neutral-300" />
-          <p className="text-sm text-neutral-500">No recent projects yet</p>
-          <p className="text-[12px] text-neutral-400">
+          <FolderDashedIcon size={28} className="text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">No recent projects yet</p>
+          <p className="text-[12px] text-muted-foreground">
             Projects you create will show up here.
           </p>
         </div>
@@ -53,11 +53,11 @@ const RecentProjects = () => {
                 navigate({ to: "/editor/$id", params: { id: proj.id } })
               }
               key={proj.id}
-              className="border py-2 px-4 cursor-pointer hover:bg-neutral-100 transition-all flex items-center justify-between"
+              className="border py-2 px-4 cursor-pointer hover:bg-accent transition-all flex items-center justify-between"
             >
               <div className="flex flex-col gap-1">
                 <p className="text-sm">{proj.path.split("/").at(-1)}</p>
-                <p className="text-[12px] text-neutral-400">{proj.path}</p>
+                <p className="text-[12px] text-muted-foreground">{proj.path}</p>
               </div>
               <div>
                 <button

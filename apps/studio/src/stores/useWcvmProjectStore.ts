@@ -1,5 +1,5 @@
 import { WCVM_PROJECTS_STORAGE_KEY } from "@/services/wcvm/constants";
-import type { IWcvmProject } from "@/services/wcvm/model";
+import type { IWcvmProject, IWcvmProjectType } from "@/services/wcvm/model";
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { v6 as uuidv6 } from "uuid";
@@ -7,6 +7,8 @@ import {
   createBlankTemplateProject,
   type BlankTemplateCreationResult,
 } from "@/services/wcvm/blankTemplateProject";
+import { createViteTemplateProject } from "@/services/wcvm/viteTemplateProject";
+import { createRectifyTemplateProject } from "@/services/wcvm/rectifyTemplateProject";
 import {
   clearAllFileSystem,
   removeFolderByPath,
@@ -17,6 +19,8 @@ interface IWcvmProjectStore {
   getProject: (id: string) => IWcvmProject | undefined;
   addProject: (
     projectPath: string,
+    type?: IWcvmProjectType,
+    onProgress?: (message: string) => void,
   ) => Promise<BlankTemplateCreationResult & { project?: IWcvmProject }>;
   clearAllProject: () => Promise<void>;
   removeProjectByPath: (path: string) => void;
@@ -31,16 +35,24 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
         return get().projects.find((p) => p.id === id);
       },
 
-      async addProject(input) {
+      async addProject(input, type = "blank", onProgress) {
         const id = uuidv6();
-        const newProj = await createBlankTemplateProject(input);
+        // "rectify" has its own manual wiring (no official create-vite template for it); any
+        // other non-"blank" type IS a real create-vite `--template` name (see
+        // src/services/wcvm/viteTemplateProject.ts).
+        const newProj =
+          type === "blank"
+            ? await createBlankTemplateProject(input)
+            : type === "rectify"
+              ? await createRectifyTemplateProject(input, onProgress)
+              : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const project: IWcvmProject = {
             path: input,
             id,
             createdAt: Date.now(),
-            type: "blank",
+            type,
           };
           set((state) => ({ projects: [project, ...state.projects] }));
           return {

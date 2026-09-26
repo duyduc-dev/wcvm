@@ -2,23 +2,33 @@ import { toast } from "@/components/ui/toast";
 import { boot, type IWcvm } from "wcvm";
 
 let WcvmInstance: IWcvm;
+let bootPromise: Promise<void> | undefined;
 
-const bootWcvm = async () => {
-  WcvmInstance = boot({
-    persist: true,
-  });
+// Guarded against double-invocation: React StrictMode (main.tsx) runs mount effects twice in
+// dev, and boot() isn't idempotent — an unguarded second call would spin up a second kernel
+// (and its Workers) that nothing ever tears down.
+const bootWcvm = (): Promise<void> => {
+  if (bootPromise) return bootPromise;
 
-  if (import.meta.env.DEV) {
-    WcvmInstance.diagnostics.onEvent((e) => {
-      console.log(`[bootWcvm][${e.timestamp}] ~ ${e.type} ~ `, e.payload);
+  bootPromise = (async () => {
+    WcvmInstance = boot({
+      persist: true,
     });
-  }
 
-  await toast.promise(WcvmInstance.ready, {
-    loading: "Initializing WCVM ...",
-    success: () => "Initialized WCVM successfully",
-    error: "Could not initialize WCVM",
-  });
+    if (import.meta.env.DEV) {
+      WcvmInstance.diagnostics.onEvent((e) => {
+        console.log(`[bootWcvm][${e.timestamp}] ~ ${e.type} ~ `, e.payload);
+      });
+    }
+
+    await toast.promise(WcvmInstance.ready, {
+      loading: "Initializing WCVM ...",
+      success: () => "Initialized WCVM successfully",
+      error: "Could not initialize WCVM",
+    });
+  })();
+
+  return bootPromise;
 };
 
 const getWcvmInstance = () => {

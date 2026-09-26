@@ -12,7 +12,7 @@ export const TEMPLATES = [
   {
     icon: LayoutIcon,
     title: "Start from template",
-    description: "React, Vue",
+    description: "React, Vue, or Rectify + TypeScript",
     dialog: CreateTemplateDialog,
   },
 ];
