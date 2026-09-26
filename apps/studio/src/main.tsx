@@ -4,6 +4,7 @@ import "./index.css";
 import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { routeTree } from "./routeTree.gen";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
+import { Toaster } from "./components/ui/toast.tsx";
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -21,6 +22,7 @@ if (!rootElement.innerHTML) {
       <TooltipProvider>
         <RouterProvider router={router} />
       </TooltipProvider>
+      <Toaster />
     </StrictMode>,
   );
 }
