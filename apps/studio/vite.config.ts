@@ -23,6 +23,37 @@ function crossOriginIsolationHeaders(): Plugin {
   };
 }
 
+// wcvm's own build (packages/core/tsup.config.ts) emits the preview Service Worker at
+// dist/workers/preview/PreviewServiceWorker.js; `wc.preview.enable()` resolves it relative to
+// wherever this app ends up serving wcvm's own dist/index.js from (in dev, pnpm's workspace
+// symlink means Vite serves it under `/@fs/...`), so the exact final path/hash isn't fixed here
+// — matched by a name fragment instead, same as examples/playground/vite.config.ts does. A
+// Service Worker's own default scope is capped at its script's own directory unless the server
+// says otherwise: since that directory isn't "/", Service-Worker-Allowed has to widen it
+// explicitly for the `{ scope: "/" }` `enable()` passes to `register()` to actually take effect
+// — without this, registration throws a SecurityError and the whole preview feature silently
+// never works.
+const isPreviewServiceWorker = (url: string | undefined) => Boolean(url?.includes("PreviewServiceWorker"));
+
+function previewServiceWorkerHeaders(): Plugin {
+  const middleware: Connect.NextHandleFunction = (req, res, next) => {
+    if (isPreviewServiceWorker(req.url)) {
+      res.setHeader("Service-Worker-Allowed", "/");
+    }
+    next();
+  };
+
+  return {
+    name: "wcvm-preview-sw-headers",
+    configureServer(server) {
+      server.middlewares.use(middleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(middleware);
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -34,10 +65,18 @@ export default defineConfig({
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
     crossOriginIsolationHeaders(),
+    previewServiceWorkerHeaders(),
   ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  build: {
+    // The built preview Service Worker is small enough that Vite's default asset inlining would
+    // otherwise turn its `new URL(..., import.meta.url)` reference into a `data:` URL —
+    // `navigator.serviceWorker.register()` rejects that (its script must be a real same-origin
+    // URL, not an opaque-origin `data:` one) — so nothing gets inlined here at all.
+    assetsInlineLimit: 0,
   },
 });

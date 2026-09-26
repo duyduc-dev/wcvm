@@ -1,0 +1,117 @@
+import { useEffect } from "react";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { ActivityBar } from "../ActivityBar";
+import { CommandPalette } from "../CommandPalette";
+import { useIde } from "../controller/useIde";
+import { EditorGroup } from "../EditorGroup";
+import { Explorer } from "../Explorer";
+import { PreviewPanel } from "../PreviewPanel";
+import { StatusBar } from "../StatusBar";
+import { TerminalPanel } from "../TerminalPanel";
+import { TitleBar } from "../TitleBar";
+import {
+  CENTER_DEFAULT_SIZE,
+  CENTER_MIN_SIZE,
+  EDITOR_DEFAULT_SIZE,
+  EDITOR_MIN_SIZE,
+  EXPLORER_DEFAULT_SIZE,
+  EXPLORER_MAX_SIZE,
+  EXPLORER_MIN_SIZE,
+  PREVIEW_DEFAULT_SIZE,
+  TERMINAL_PANEL_DEFAULT_SIZE,
+  TERMINAL_PANEL_MIN_SIZE,
+} from "./constants";
+
+export function AppShell() {
+  const { c, snap } = useIde();
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      // Alt+⌘B (macOS) / Alt+Ctrl+B — matched first since it also satisfies the plain
+      // mod+B check below.
+      if (e.altKey && (key === "b" || e.code === "KeyB")) {
+        e.preventDefault();
+        c.togglePreview();
+      } else if (key === "b") {
+        e.preventDefault();
+        c.toggleSidebar();
+      } else if (key === "j") {
+        e.preventDefault();
+        c.togglePanel();
+      } else if (key === "s") {
+        e.preventDefault();
+        c.saveActiveFile();
+      } else if (e.shiftKey && key === "p") {
+        e.preventDefault();
+        c.openPalette("command");
+      } else if (key === "p") {
+        e.preventDefault();
+        c.openPalette("file");
+      } else if (e.shiftKey && key === "c") {
+        e.preventDefault();
+        void c.newShellTerminal();
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [c]);
+
+  // Browsers reserve ⌘W, so an editor tab can't be closed that way — warn instead before the
+  // whole session (unsaved edits + any running dev server) is torn down.
+  useEffect(() => {
+    if (snap.dirty.length === 0) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    addEventListener("beforeunload", onBeforeUnload);
+    return () => removeEventListener("beforeunload", onBeforeUnload);
+  }, [snap.dirty.length]);
+
+  return (
+    <div className="flex h-full w-full flex-col overflow-hidden text-foreground">
+      <TitleBar />
+      <div className="flex min-h-0 flex-1">
+        <ActivityBar />
+        <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+          {!snap.sidebarCollapsed && (
+            <>
+              <ResizablePanel id="explorer" defaultSize={EXPLORER_DEFAULT_SIZE} minSize={EXPLORER_MIN_SIZE} maxSize={EXPLORER_MAX_SIZE}>
+                <Explorer key={snap.rootPath} />
+              </ResizablePanel>
+              <ResizableHandle />
+            </>
+          )}
+          <ResizablePanel id="center" defaultSize={CENTER_DEFAULT_SIZE} minSize={CENTER_MIN_SIZE}>
+            <ResizablePanelGroup orientation="vertical">
+              <ResizablePanel id="editor" defaultSize={EDITOR_DEFAULT_SIZE} minSize={EDITOR_MIN_SIZE}>
+                <EditorGroup />
+              </ResizablePanel>
+              {!snap.panelCollapsed && (
+                <>
+                  <ResizableHandle />
+                  <ResizablePanel id="terminal" defaultSize={TERMINAL_PANEL_DEFAULT_SIZE} minSize={TERMINAL_PANEL_MIN_SIZE}>
+                    <TerminalPanel />
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
+          </ResizablePanel>
+          {!snap.previewCollapsed && (
+            <>
+              <ResizableHandle />
+              <ResizablePanel id="preview" defaultSize={PREVIEW_DEFAULT_SIZE}>
+                <PreviewPanel />
+              </ResizablePanel>
+            </>
+          )}
+        </ResizablePanelGroup>
+      </div>
+      <StatusBar />
+      <CommandPalette />
+    </div>
+  );
+}

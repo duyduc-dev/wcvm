@@ -21,7 +21,7 @@ const CardTemplate = () => {
             <DialogTrigger
               nativeButton={false}
               render={
-                <Card className="w-full sm:w-60 cursor-pointer hover:bg-neutral-50 transition-all">
+                <Card className="w-full sm:w-60 cursor-pointer hover:bg-accent transition-all">
                   <CardHeader>
                     <template.icon size={32} />
                     <CardTitle>{template.title}</CardTitle>
