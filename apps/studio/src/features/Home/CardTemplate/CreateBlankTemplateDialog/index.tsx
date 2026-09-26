@@ -25,7 +25,8 @@ import {
   slugify,
   slugifyLive,
 } from "./service";
-import { getWcvmInstance } from "@/lib/wcvm";
+import { useNavigate } from "@tanstack/react-router";
+import { useWcvmProjectStore } from "@/stores/useWcvmProjectStore";
 
 const createBlankTemplateSchema = z.object({
   projectName: z.string().trim().min(1, "Project name is required"),
@@ -35,6 +36,8 @@ const createBlankTemplateSchema = z.object({
 type CreateBlankTemplateValues = z.infer<typeof createBlankTemplateSchema>;
 
 const CreateBlankTemplateDialog = () => {
+  const navigate = useNavigate({ from: "/" });
+  const createProject = useWcvmProjectStore((s) => s.addProject);
   const {
     register,
     handleSubmit,
@@ -57,16 +60,25 @@ const CreateBlankTemplateDialog = () => {
       values.directory,
       slugify(values.projectName),
     );
-    const wcvm = getWcvmInstance();
+    const { isFailure, message, type, project } =
+      await createProject(projectPath);
 
-    if (await wcvm.fs.exists(projectPath)) {
-      setError("projectName", {
-        message: `A project already exists at ${projectPath}`,
+    if (isFailure) {
+      if (type === "projectName") {
+        setError("projectName", {
+          message,
+        });
+      } else {
+        setError("projectName", {
+          message: `Error occurred at ${projectPath}`,
+        });
+      }
+    } else {
+      navigate({
+        to: "/editor/$id",
+        params: { id: project!.id },
       });
-      return;
     }
-
-    await wcvm.fs.mkdir(projectPath, { recursive: true });
   };
 
   useEffect(() => {

@@ -76,6 +76,13 @@ describe("kernel fs handlers", () => {
     expect(vfs.exists("/m/a.txt")).toBe(true);
   });
 
+  it("resets the whole filesystem", async () => {
+    const { send, vfs } = setup();
+    await send("fs:mkdir", { path: "/p/q", recursive: true });
+    await send("fs:reset");
+    expect(vfs.readdir("/")).toEqual([]);
+  });
+
   it("rejects with the errno code, and before the kernel is ready", async () => {
     await expect(setup().send("fs:readFile", { path: "/nope" })).rejects.toMatchObject(
       { code: "ENOENT" },

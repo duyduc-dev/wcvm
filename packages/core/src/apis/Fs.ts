@@ -19,6 +19,12 @@ interface IFs {
   /** Seeds `tree` under `basePath` (default `/`) in one call. */
   mount(tree: FileSystemTree, basePath?: string): Promise<void>;
   /**
+   * Removes every entry directly under `/` (not `/` itself), recursively - the whole filesystem,
+   * emptied out. If `boot({ persist: true })` is enabled, the persisted OPFS copy is cleared too
+   * (each removal goes through the same path the write-behind mirror already watches).
+   */
+  reset(): Promise<void>;
+  /**
    * Downloads `url` straight into `path` - a real fetch() on a dedicated Fetcher Worker, streamed
    * to disk rather than buffered whole in memory first, with up to 10 other fetch()es in flight
    * at once (a big npm install's own many concurrent package downloads will use this). Rejects
@@ -57,6 +63,7 @@ const createFsApi = (
     realpath: (path) => call("fs:realpath", { path }),
     chmod: (path, mode) => call("fs:chmod", { path, mode }),
     mount: (tree, basePath = "/") => call("fs:mount", { tree, basePath }),
+    reset: () => call("fs:reset"),
     fetch: (url, path) => call("fetcher:fetch", { url, path }),
   };
 };
