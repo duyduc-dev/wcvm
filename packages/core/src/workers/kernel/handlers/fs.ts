@@ -2,6 +2,7 @@ import { KernelMessage } from "../../../bridges/models";
 import { WcvmError } from "../../../errors/WcvmError";
 import { IFsClient } from "../../../fs/fsClient";
 import { mountTree } from "../../../kernel/mount";
+import { resetFs } from "../../../kernel/reset";
 import { FileSystemTree } from "../../../models";
 import { Router } from "../router";
 
@@ -28,6 +29,7 @@ const fsRequests: Record<string, FsRequest> = {
   "fs:chmod": (fs, d) => fs.chmod(str(d, "path"), d.mode as number),
   "fs:mount": (fs, d) =>
     mountTree(fs, d.tree as FileSystemTree, (d.basePath as string) ?? "/"),
+  "fs:reset": (fs) => resetFs(fs),
 };
 
 /** Routes `fs:*` requests from the host to the kernel's blocking fs client. */

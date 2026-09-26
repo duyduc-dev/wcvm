@@ -1,6 +1,5 @@
 import { Outlet, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
-import Layout from "@/containers/Layout";
 import { useEffect } from "react";
 import { bootWcvm } from "@/lib/wcvm";
 
@@ -15,9 +14,7 @@ function RootComponent() {
 
   return (
     <>
-      <Layout>
-        <Outlet />
-      </Layout>
+      <Outlet />
       <TanStackRouterDevtools position="bottom-right" />
     </>
   );

@@ -1852,6 +1852,33 @@ test.describe("OPFS persistence", () => {
 
     expect(result).toEqual({ keep: true, gone: false });
   });
+
+  test("fs.reset() clears the persisted copy too, so a reload starts empty", async ({ page }) => {
+    const root = `e2e-persist-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      await wc.fs.mkdir("/proj", { recursive: true });
+      await wc.fs.writeFile("/proj/a.txt", "will be reset");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await wc.fs.reset();
+      // reset() answers synchronously against the vfs, same write-behind lag before OPFS itself
+      // actually reflects the removal.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }, root);
+
+    await page.reload();
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15000 });
+
+    const result = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      return wc.fs.readdir("/");
+    }, root);
+
+    expect(result).toEqual([]);
+  });
 });
 
 test.describe("example: Vite + React + TypeScript", () => {

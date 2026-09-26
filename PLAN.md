@@ -279,6 +279,17 @@ OPFS has no symlinks, so a script's own symlinks are not persisted (a documented
 See CLAUDE.md's Status section for the full writeup, including two real gotchas (write-behind
 needing a serialized queue to avoid a stale result racing a fresher one; restore needing to
 finish before the mirror is even wired up, or it would write straight back what it just read).
+
+Also done - `wc.fs.reset()`: removes every entry directly under `/` (not `/` itself), recursively -
+a whole-filesystem wipe. `kernel/reset.ts`'s `resetFs(fs)` composes it from the existing
+`readdir`/`rm` primitives over the kernel's blocking fs client (same shape as `kernel/mount.ts`'s
+`mountTree`, wired into `workers/kernel/handlers/fs.ts` as `"fs:reset"`) - no new sync-SAB opcode.
+Since each `rm` goes through the vfs's own `onChange`, it clears the OPFS-persisted copy too when
+`boot({ persist: true })` is enabled, for free. Verified: `kernel/reset.test.ts` (2 Vitest),
+`workers/kernel/handlers/fs.test.ts`'s new case, `apis/Fs.test.ts`'s updated case, and a Playwright
+test under the existing "OPFS persistence" describe block (write a file with `persist` enabled,
+`reset()`, reload - the directory comes back empty) - the OPFS-clearing claim specifically needs a
+real reload to prove, same as the two existing OPFS persistence tests it sits beside.
 Also done - `zlib` (Phase 7's third piece, and real npm's first concrete blocker resolved - see the
 2026-09-23 feasibility findings below): Node's real vendored `lib/zlib.js`, unmodified, over an
 `internalBinding('zlib')` backed by the browser's real, native `CompressionStream`/
