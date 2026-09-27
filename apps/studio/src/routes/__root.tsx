@@ -1,7 +1,6 @@
 import { toast } from "@/components/ui/toast";
 import { getWcvmInstance } from "@/lib/wcvm";
 import { Outlet, createRootRoute } from "@tanstack/react-router";
-import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import { useEffect } from "react";
 
 export const Route = createRootRoute({
@@ -21,10 +20,5 @@ function RootComponent() {
     loadWCVM();
   }, []);
 
-  return (
-    <>
-      <Outlet />
-      <TanStackRouterDevtools position="bottom-right" />
-    </>
-  );
+  return <Outlet />;
 }
