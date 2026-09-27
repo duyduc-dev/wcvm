@@ -5,6 +5,7 @@ import { TooltipProvider } from "./components/ui/tooltip.tsx";
 import { routeTree } from "./routeTree.gen";
 import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { Toaster } from "./components/ui/toast.tsx";
+import { bootWcvm } from "./lib/wcvm/index.ts";
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -12,6 +13,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
+bootWcvm();
 const router = createRouter({ routeTree });
 
 const rootElement = document.getElementById("root")!;
