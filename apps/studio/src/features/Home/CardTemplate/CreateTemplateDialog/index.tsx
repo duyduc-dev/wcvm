@@ -36,7 +36,9 @@ import {
 } from "./constants";
 
 const createTemplateSchema = z.object({
-  framework: z.enum(FRAMEWORK_OPTIONS.map((f) => f.id) as [string, ...string[]]),
+  framework: z.enum(
+    FRAMEWORK_OPTIONS.map((f) => f.id) as [string, ...string[]],
+  ),
   projectName: z.string().trim().min(1, "Project name is required"),
   directory: z.string().trim().min(1, "Directory is required"),
 });
@@ -109,7 +111,8 @@ const CreateTemplateDialog = () => {
         <DialogHeader>
           <DialogTitle>
             <div className="flex items-center gap-2">
-              <selected.icon size={20} /> <p>Creating {selected.label} project</p>
+              <selected.icon size={20} />{" "}
+              <p>Creating {selected.label} project</p>
             </div>
           </DialogTitle>
           <DialogDescription>
@@ -189,9 +192,7 @@ const CreateTemplateDialog = () => {
           />
         </Field>
         <Field>
-          <FieldLabel htmlFor="template-project-name">
-            Project Name
-          </FieldLabel>
+          <FieldLabel htmlFor="template-project-name">Project Name</FieldLabel>
           <Controller
             control={control}
             name="projectName"

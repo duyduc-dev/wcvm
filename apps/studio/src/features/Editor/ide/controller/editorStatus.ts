@@ -12,9 +12,6 @@ export interface EditorStatusSnapshot {
 
 const EMPTY: EditorStatusSnapshot = { cursor: null, language: null };
 
-/** A tiny external store (same `subscribe`/`getSnapshot` shape as `IdeController` itself) so
- * StatusBar can read live cursor/language state via `useSyncExternalStore` — a keystroke or
- * cursor move updates just this, not the whole IdeSnapshot every other panel reads. */
 export class EditorStatus {
   private listeners = new Set<() => void>();
   private snap: EditorStatusSnapshot = EMPTY;
