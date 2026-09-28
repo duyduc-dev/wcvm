@@ -99,9 +99,31 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 // the existing preview:fetch tests) or, now, from an iframe's navigation or its own subresource
 // fetches once loaded (also a nested client, so still correctly skipped).
 // A previewed page opened in its own tab is top-level too - but it's not a wcvm page, so skip it.
+//
+// Retries briefly instead of failing on the first empty match: the host tab can be genuinely,
+// if momentarily, ABSENT from the client list - not just not-yet-claimed - whenever the page
+// itself is mid-navigation. The concrete way this happens in practice: a dev server rebuilding
+// wcvm's own dist/ (`tsup --watch`, e.g. via the repo's root `pnpm dev`) makes Vite's dev server
+// force a full reload of the host page (`import.meta.hot`'s own full-reload, logged as "page
+// reload <path>") - if that reload lands while a preview iframe's OWN navigation is in flight (a
+// dev server the guest just started coming up, its preview tab opening for the first time), the
+// old document is torn down and the new one hasn't loaded far enough to register as a client yet,
+// so `matchAll()` genuinely has nothing to return for that one instant. Confirmed against the
+// real dev-server log (`[vite] (client) page reload .../PreviewServiceWorker.js`) landing at the
+// exact moment a preview navigation was in flight. A handful of short retries covers this - a
+// reload completes well under a second - without turning a real "nothing is host any more" case
+// into a long hang (previewResponse's 502 still fires if nothing ever shows up).
 const findHostClient = async (): Promise<IClient | undefined> => {
-  const clients = await sw.clients.matchAll({ type: "window" });
-  return clients.find((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
+  const matchOne = async () => {
+    const clients = await sw.clients.matchAll({ type: "window" });
+    return clients.find((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
+  };
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const found = await matchOne();
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return matchOne();
 };
 
 // A page with COEP: require-corp (needed here for SharedArrayBuffer/crossOriginIsolated, see
