@@ -1879,6 +1879,158 @@ test.describe("OPFS persistence", () => {
 
     expect(result).toEqual([]);
   });
+
+  // OPT-IN: a real npm install (registry.npmjs.org), queuing far more OPFS writes than the other
+  // tests' own single small file - proves wc.fs.sync() (not an arbitrary delay) is what actually
+  // makes "reload right after a big write finishes" safe. Confirmed this fails without sync():
+  // temporarily removing the call below drops from 2 mirrored node_modules files to 1 on reload,
+  // the exact race sync() exists to close.
+  test("wc.fs.sync() makes a real npm install's files survive a reload with no other delay", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs a real package from registry.npmjs.org)");
+    test.setTimeout(60_000);
+    const root = `e2e-persist-sync-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    const countFiles = `async function countFiles(wc, path) {
+      if (!(await wc.fs.exists(path))) return 0;
+      let count = 0;
+      for (const name of await wc.fs.readdir(path)) {
+        const full = path + "/" + name;
+        const stat = await wc.fs.stat(full);
+        count += stat.kind === "directory" ? await countFiles(wc, full) : 1;
+      }
+      return count;
+    }`;
+
+    const before = await page.evaluate(
+      async ({ persistRoot, countFilesSrc }) => {
+        const countFiles = new Function(`return ${countFilesSrc}`)();
+        const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+        await wc.ready;
+        await wc.fs.mkdir("/proj", { recursive: true });
+        await wc.fs.writeFile("/proj/package.json", JSON.stringify({ name: "sync-e2e", private: true, dependencies: { "is-odd": "^3.0.1" } }));
+        const install = await wc.spawn("npm", ["install"], { cwd: "/proj" });
+        await Promise.all(
+          [install.stdout, install.stderr].map(async (stream: ReadableStream<Uint8Array>) => {
+            const reader = stream.getReader();
+            for (;;) {
+              const { done } = await reader.read();
+              if (done) return;
+            }
+          }),
+        );
+        const exit = await install.exit;
+        await wc.fs.sync(); // the fix - no other delay follows
+        return { exitCode: exit.exitCode, fileCount: await countFiles(wc, "/proj/node_modules") };
+      },
+      { persistRoot: root, countFilesSrc: countFiles },
+    );
+    expect(before.exitCode).toBe(0);
+    expect(before.fileCount).toBeGreaterThan(0);
+
+    await page.reload();
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15000 });
+
+    const after = await page.evaluate(
+      async ({ persistRoot, countFilesSrc }) => {
+        const countFiles = new Function(`return ${countFilesSrc}`)();
+        const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+        await wc.ready;
+        return countFiles(wc, "/proj/node_modules");
+      },
+      { persistRoot: root, countFilesSrc: countFiles },
+    );
+    expect(after).toBe(before.fileCount);
+  });
+
+  // OPT-IN: a real npm install of a package with a real bin (cowsay) - proves npm's own
+  // bin-linking symlink (node_modules/.bin/cowsay) survives a reload and still actually runs
+  // afterward, not just that it's present. This is the real regression a Studio user hit: `npm run
+  // dev` worked, a reload happened, and the next `npm run dev` failed with a plain
+  // "command not found" - the package itself was still there, only its bin symlink was gone (OPFS
+  // itself has no symlinks; wcvm now tracks them in a small side-channel manifest instead - see
+  // CLAUDE.md's "Status").
+  test("a real npm install's bin symlink survives a reload and still runs afterward", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs a real package with a bin from registry.npmjs.org)");
+    test.setTimeout(60_000);
+    const root = `e2e-persist-bin-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    const before = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      await wc.fs.mkdir("/proj", { recursive: true });
+      await wc.fs.writeFile("/proj/package.json", JSON.stringify({ name: "bin-e2e", private: true, dependencies: { cowsay: "^1.6.0" } }));
+      const install = await wc.spawn("npm", ["install"], { cwd: "/proj" });
+      await Promise.all(
+        [install.stdout, install.stderr].map(async (stream: ReadableStream<Uint8Array>) => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { done } = await reader.read();
+            if (done) return;
+          }
+        }),
+      );
+      const exit = await install.exit;
+      const lstatKind = (await wc.fs.lstat("/proj/node_modules/.bin/cowsay")).kind;
+      await wc.fs.sync();
+      return { exitCode: exit.exitCode, lstatKind };
+    }, root);
+    expect(before.exitCode).toBe(0);
+    expect(before.lstatKind).toBe("symlink");
+
+    await page.reload();
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15000 });
+
+    const after = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      const lstatKind = (await wc.fs.lstat("/proj/node_modules/.bin/cowsay")).kind;
+      // The actual real-world check: run the bin through sh, exactly like `npm run <script>` would.
+      const run = await wc.spawn("sh", ["-c", "node_modules/.bin/cowsay --help"], { cwd: "/proj" });
+      const exit = await run.exit;
+      return { lstatKind, runExitCode: exit.exitCode };
+    }, root);
+
+    expect(after.lstatKind).toBe("symlink");
+    expect(after.runExitCode).toBe(0);
+  });
+
+  // A real, reproduced regression the symlink-manifest fix itself introduced: a page reload
+  // interrupting a manifest write mid-flight left corrupted JSON in OPFS, and reading it back on
+  // the next boot threw uncaught inside the FS Worker's own boot() - which never sent "ready", so
+  // the whole kernel hung until the host's own 10s ERR_BOOT_TIMEOUT fired, with nothing pointing
+  // at the real cause. Fixed by treating an unreadable manifest as "no known symlinks" (logged),
+  // the same best-effort philosophy the rest of write-behind persistence already has - never able
+  // to block booting at all.
+  test("a corrupted symlink manifest in real OPFS no longer hangs boot", async ({ page }) => {
+    test.setTimeout(30000);
+    const root = `e2e-persist-corrupt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      await wc.fs.writeFile("/a.txt", "hello");
+      await wc.fs.sync();
+
+      const opfsRoot = await navigator.storage.getDirectory();
+      const dir = await opfsRoot.getDirectoryHandle(persistRoot, { create: true });
+      const fileHandle = await dir.getFileHandle("__wcvm_symlinks__.json", { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(new TextEncoder().encode('{"/link": "/a.tx')); // truncated, invalid JSON
+      await writable.close();
+    }, root);
+
+    await page.reload();
+    // The real regression was a 10s hang - a normal boot here (well under that) is the actual
+    // assertion; expect()'s own timeout would otherwise mask exactly this failure mode.
+    await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 5000 });
+
+    const fileStillThere = await page.evaluate(async (persistRoot) => {
+      const wc = (window as unknown as WcWindow).wcvmBoot({ persist: { root: persistRoot } });
+      await wc.ready;
+      return new TextDecoder().decode(await wc.fs.readFile("/a.txt"));
+    }, root);
+    expect(fileStillThere).toBe("hello");
+  });
 });
 
 test.describe("example: Vite + React + TypeScript", () => {
@@ -1952,7 +2104,7 @@ test.describe("example: Vite + Vue", () => {
     await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
     await expect(count).toHaveText("count is 2");
 
-    // The two examples share the one preview pane - starting React stops Vue first, immediately
+    // The four examples share the one preview pane - starting React stops Vue first, immediately
     // (before React's own install even begins), not just once React finishes starting.
     await page.click("#example-run");
     await expect(page.locator("#example-vue-status")).toHaveText("Stopped (switched to the React example).");
@@ -1960,12 +2112,58 @@ test.describe("example: Vite + Vue", () => {
   });
 });
 
+test.describe("example: Node + Express", () => {
+  // The playground's #example-express section (src/expressExample.ts): a plain `node server.js`
+  // process installed from npm - no bundler/dev-server at all, and NOT Svelte: Svelte's own real
+  // compiler has genuine circular static ESM imports (confirmed across svelte@5.0.0-5.57.1, so
+  // it's structural, not a version-pinning problem), which wcvm's ESM loader can't support yet -
+  // parked, see PLAN.md. Shares the one #preview-frame with the other examples (mutually
+  // exclusive) but not viteExample.ts's own machinery: there's no HMR for a plain server, so every
+  // edit restarts the whole process instead.
+  test("the example section is the Express app, with server.js ready to edit", async ({ page }) => {
+    await expect(page.locator("#example-express-label")).toContainText("Node + Express");
+    await expect(page.locator("#example-express-run")).toHaveText("run Express example");
+    await expect(page.locator("#example-express-editor")).toHaveValue(/app\.listen\(port/);
+    await expect(page.locator("#example-express-status")).toHaveText("Not running.");
+  });
+
+  // OPT-IN, like the others: it installs Express from the real registry.
+  test("runs it end to end: install, a real Express server in the preview, editing restarts it, and starting React stops it (shared preview pane)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs Express from registry.npmjs.org)");
+    test.setTimeout(180_000);
+    await page.click("#example-express-run");
+    await expect(page.locator("#example-express-status")).toHaveText(/Express is running on virtual port 5176/, { timeout: 120_000 });
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5176/");
+
+    const frame = page.frameLocator("#preview-frame");
+    const count = frame.locator("#count");
+    await expect(count).toHaveText("count is 0", { timeout: 30_000 });
+    // No client JS at all - this button submits a real <form method="post">, a full navigation.
+    await count.click();
+    await expect(count).toHaveText("count is 1");
+    await count.click();
+    await expect(count).toHaveText("count is 2");
+
+    // Editing server.js restarts the whole process (no HMR for a plain server) - the preview pane
+    // blanks and re-renders once it relistens, and the in-memory counter resets to 0.
+    const edited = (await page.locator("#example-express-editor").inputValue()).replace("<h1>Node + Express</h1>", "<h1>Edited live</h1>");
+    await page.locator("#example-express-editor").fill(edited);
+    await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
+    await expect(count).toHaveText("count is 0");
+
+    // The four examples share the one preview pane - starting React stops Express first.
+    await page.click("#example-run");
+    await expect(page.locator("#example-express-status")).toHaveText("Stopped (switched to the React example).");
+    await expect(page.locator("#example-express-run")).toHaveText("run Express example");
+  });
+});
+
 test.describe("example: npm create vite", () => {
   // The playground's #example-create section (src/createViteExample.ts): the direct showcase of
   // wcvm's own `npm create`/`npm exec` capability (programs/npm/exec.ts) - it scaffolds a REAL
   // project with `npm create vite@latest -- --template react-ts`, not a hand-written template
-  // like the other two examples, then shares their same install/run/edit machinery
-  // (viteExample.ts) and the one shared preview pane (mutually exclusive with the other two).
+  // like the other examples, then shares their same install/run/edit machinery
+  // (viteExample.ts) and the one shared preview pane (mutually exclusive with the others).
   test("the example section shows a placeholder until the real scaffold runs", async ({ page }) => {
     await expect(page.locator("#example-create-label")).toContainText("npm create vite@latest");
     await expect(page.locator("#example-create-run")).toHaveText("run Create Vite example");
@@ -1999,7 +2197,7 @@ test.describe("example: npm create vite", () => {
     await expect(frame.locator("h1")).toHaveText("Edited live", { timeout: 30_000 });
     await expect(counter).toHaveText("Count is 2");
 
-    // All three examples share the one preview pane - starting Vue stops this one first.
+    // All four examples share the one preview pane - starting Vue stops this one first.
     await page.click("#example-vue-run");
     await expect(page.locator("#example-create-status")).toHaveText("Stopped (switched to the Vue example).");
     await expect(page.locator("#example-create-run")).toHaveText("run Create Vite example");

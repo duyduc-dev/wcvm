@@ -275,10 +275,13 @@ implementation can stand in for Vitest; `FsServer` gained a third constructor pa
 knowing anything about OPFS itself. `workers/fs/worker.ts` gained the same "init" -> (async
 restore) -> "ready" boot handshake the Fetcher Worker already has (it used to post "ready"
 unconditionally at import time - fine with no persistence to restore first, not once there is).
-OPFS has no symlinks, so a script's own symlinks are not persisted (a documented simplification).
-See CLAUDE.md's Status section for the full writeup, including two real gotchas (write-behind
-needing a serialized queue to avoid a stale result racing a fresher one; restore needing to
-finish before the mirror is even wired up, or it would write straight back what it just read).
+OPFS has no symlinks, so they can't be mirrored as ordinary OPFS entries - tracked in a small
+side-channel manifest instead and replayed on restore (`wc.fs.sync()` and the symlink-manifest fix
+are both done now too - see CLAUDE.md's "Status": a real, reproduced data-loss bug and a real,
+reproduced npm-bin-symlink bug, both found from the same Studio report). See CLAUDE.md's Status
+section for the full writeup, including two real gotchas (write-behind needing a serialized queue
+to avoid a stale result racing a fresher one; restore needing to finish before the mirror is even
+wired up, or it would write straight back what it just read).
 
 Also done - `wc.fs.reset()`: removes every entry directly under `/` (not `/` itself), recursively -
 a whole-filesystem wipe. `kernel/reset.ts`'s `resetFs(fs)` composes it from the existing
@@ -767,7 +770,9 @@ module: `Thing.test.ts`).
 - Fetcher worker streaming into the VFS; parallel async fetches capped ~10 - done, see "Current
   state": `wc.fs.fetch()`, `kernel/fetcher.ts`, `workers/fetcher/`.
 - OPFS mirror (write-behind), restored before serving syscalls - done, see "Current state":
-  `boot({ persist })`, `fs/opfsPersistence.ts`.
+  `boot({ persist })`, `fs/opfsPersistence.ts`. `wc.fs.sync()` - done, see "Current state" and
+  "Hard-won gotchas": closes a real, reproduced data-loss race (a reload right after a big write
+  can lose whatever the write-behind mirror hadn't caught up on yet).
 - `zlib` (the first of the two missing builtins the feasibility investigation below flagged) -
   done, see "Current state": `bindings/zlib.ts`, `OP_ZLIB_SYNC`, `kernel/kernelSyncServer.ts`.
 - `crypto` (the second missing builtin, scoped down to hashing only with the user first - see
@@ -940,7 +945,22 @@ picking this back up.
   `stop()` guard added for cross-example mutual exclusion was ALSO silently swallowing this
   example's own start() failures before `vite` got assigned - not React-Compiler-specific, any
   scaffold/install failure).
-- Left in this phase: more templates (Svelte, plain Node/Express) and npm workspaces.
+- A fourth example, plain Node + Express (`src/expressExample.ts`) - **done**, see CLAUDE.md's
+  "Status" for the full writeup: no bundler/dev server at all, proving the install-from-npm/run-
+  in-this-tab pipeline isn't Vite-specific either; `npm start` exercises wcvm's own real fallback
+  (`node server.js`); editing restarts the whole process (no HMR for a plain server) instead of
+  relying on a watcher.
+- **Svelte was attempted and PARKED - a real, structural blocker, not a version-pinning issue** -
+  see CLAUDE.md's "Status" for the full writeup: Svelte's own real compiler has genuine circular
+  static ESM imports (confirmed across svelte@5.0.0-5.57.1, so it's structural, not a pinning
+  problem), which wcvm's ESM loader can't support - creating one `blob:` URL per module up front
+  means two mutually-referencing modules can never both be created first. A real fix needs the ESM
+  loader to merge strongly-connected components of the static import graph into one blob (the same
+  thing a real bundler does) - genuine runtime work on the order of the Rolldown/worker-pool
+  investigations above, not a template-writing task. Asked the user how to proceed; parked in favor
+  of the Express example above.
+- Left in this phase: npm workspaces. Svelte stays parked (see above) until wcvm's ESM loader can
+  merge circular import cycles into one module.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked. Confirmed again directly (not just from old notes) verifying `npm create
   vite@latest`: its CURRENT template scaffolds Vite 8 by default, and Vite 7 pinned back in

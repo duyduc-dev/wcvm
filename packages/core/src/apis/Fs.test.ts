@@ -36,6 +36,7 @@ describe("fs api", () => {
     await fs.mount({});
     await fs.reset();
     await fs.fetch("https://example.test/a", "/a.txt");
+    await fs.sync();
 
     expect(request.mock.calls.map(([type]) => type)).toEqual([
       "fs:writeFile",
@@ -48,6 +49,7 @@ describe("fs api", () => {
       "fs:mount",
       "fs:reset",
       "fetcher:fetch",
+      "fs:sync",
     ]);
     expect(request.mock.calls[1][1]).toEqual({ path: "/d", recursive: true });
     expect(request.mock.calls[2][1]).toEqual({ path: "/e", recursive: false });

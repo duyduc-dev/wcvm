@@ -24,7 +24,10 @@ Done and verified in real Chromium:
   Killing (or the natural exit of) a process kills its whole subtree: a `child_process` with no
   live parent left would otherwise strand a Process Worker in the tab forever (`detached` is
   accepted but not honoured, so there is no opt-out yet).
-- Built-ins: `echo cat ls pwd mkdir rm sleep true false node sh npm`. `cat` with no args streams real
+- Built-ins: `echo cat ls pwd mkdir rm sleep clear true false node sh npm` (`clear` just writes the
+  standard ANSI erase-display/home-cursor sequence - `\x1b[2J\x1b[3J\x1b[H` - there's no TTY/
+  terminfo database here to shell out a real `clear` to; any ANSI-compatible consumer of stdout,
+  xterm.js included, renders it as a real clear). `cat` with no args streams real
   stdin.
 - `sh -c "..."` / `sh script.sh` (`programs/sh/`): `;`/`&&`/`||` sequencing, `|` pipes (in-memory,
   everything is one worker), `>`/`>>`/`<` redirects, `cd` as a shell builtin. Runs over the same
@@ -308,6 +311,165 @@ Done and verified in real Chromium:
   without disturbing the page's own. A full, clean `pnpm exec playwright test` run (82/82) and
   `vitest run` (539/539) confirm no regressions from a boot handshake every existing test also now
   depends on (even with `persist` never set).
+- `wc.fs.sync()`: resolves once OPFS persistence (if enabled) has actually caught up with every fs
+  change so far - closes a real, confirmed data-loss race in the write-behind mirror above, found
+  investigating a Studio bug report ("packages aren't installed anymore after a reload"). The
+  mirror is entirely fire-and-forget from the outside: a caller has no way to know when it's
+  actually safe to reload/navigate away without losing whatever hasn't landed in OPFS yet.
+  Reproduced directly, not just suspected: a real two-file npm install (`is-odd`), followed
+  IMMEDIATELY by `page.reload()` with zero artificial delay, lost one of the two files - the exact
+  shape of what a user hits clicking away or reloading the instant a "Done" toast appears.
+  `fs/opfsPersistence.ts`'s `createOpfsMirror` now returns `{ notify, flush }` instead of a bare
+  function (`notify` is the same write-behind callback as before, wired to `Vfs.onChange`; `flush()`
+  returns the mirror's own current queue tail, resolving once every `notify()` call queued so far
+  has settled - a later `notify()` starts a NEW tail that flush doesn't need to wait for, which is
+  correct: "everything so far", not "forever"). Plumbed the same way every other kernel <-> FS
+  Worker unprompted event already is: `workers/fs/handler.ts` gained a `{type: "flushPersistence",
+  id}` request the FS Worker always answers with a matching `{type: "flushPersistence:done", id}`
+  reply (even with no mirror at all - persist wasn't enabled - so a caller waiting on it never
+  hangs); `kernel/persistenceFlusher.ts` is the kernel-side id-keyed promise map, the same
+  one-shot-async-op shape `kernel/fetcher.ts` already established; `workers/kernel/handlers/fs.ts`
+  registers `"fs:sync"` calling `kernel.flushPersistence()` directly (not an `IFsClient` op - there's
+  no such syscall, same reasoning `"fetcher:fetch"` already has for not being one either);
+  `apis/Fs.ts` exposes it as `fs.sync(): Promise<void>`. Wired into all three of Studio's own
+  project-creation flows (`blankTemplateProject.ts`/`viteTemplateProject.ts`/
+  `rectifyTemplateProject.ts`) right before reporting success, so "project created" now genuinely
+  means "safely durable" - the actual fix for the reported bug. Verified: `fs/
+  opfsPersistence.test.ts`'s 2 new cases (`flush()` waits for real queued writes with no arbitrary
+  delay; `flush()` never rejects even when a queued write failed), `workers/fs/handler.test.ts`'s 2
+  new cases (a real flush()-then-reply round trip; a silent no-op with no persistence configured),
+  `kernel/persistenceFlusher.test.ts` (3 Vitest, mirroring `kernel/fetcher.test.ts`'s own shape),
+  `workers/kernel/handlers/fs.test.ts`'s new case, `apis/Fs.test.ts`'s updated case. 1 new
+  Playwright test reusing the exact repro above but with `wc.fs.sync()` inserted before the reload
+  (opt-in, `WCVM_E2E_VITE=1` - needs a real npm install) - confirmed the file count survives
+  intact; commented in the test that removing the `sync()` call reproduces the loss again, the same
+  way the OPFS write-ordering regression test already documents its own "verified to actually fail
+  without the fix" check. A full, clean `pnpm exec playwright test` run (122 passed, 8 opt-in
+  skipped) and `vitest run` (907/907) confirm no regressions.
+- OPFS persistence for symlinks: a SEPARATE bug from `wc.fs.sync()` above, found from the same
+  Studio report followed further - `npm run dev` worked, a reload happened, and the next
+  `npm run dev` failed with a plain `sh: vite: command not found`, even with `sync()` already
+  called. Root cause confirmed directly: OPFS has no symlinks at all, so npm's own bin-linking
+  (`node_modules/.bin/vite`, a real symlink) was NEVER mirrored in the first place - not a timing
+  race `sync()` could fix, a structural gap (previously a documented, but wrong-in-practice,
+  simplification: "real npm installs create very few symlinks"). Reproduced directly: installed a
+  package with a real bin, confirmed the bin was a symlink, called `sync()`, reloaded - the
+  PACKAGE's own files survived, but the bin symlink was gone. Fixed in `fs/opfsPersistence.ts` with
+  a small side-channel manifest (`__wcvm_symlinks__.json`, one JSON file of `{path: target}` pairs
+  directly under the OPFS root, outside the vfs's own mirrored tree so it never shows up in
+  `wc.fs.readdir("/")`): `resyncSubtree` now records a symlink into the manifest instead of
+  silently skipping it (both when the changed path IS the symlink, and when one is found while
+  walking a directory's children during a subtree resync, e.g. a rename); a path's removal (or a
+  removed directory's whole subtree) drops any manifest entries at or under it; `restoreFromOpfs`
+  replays every manifest entry as a real `vfs.symlink()` call once the normal file/directory walk
+  finishes (directories/files must already exist for a symlink to usefully point at) - a symlink
+  whose own path is somehow already occupied (a theoretical case, not a real npm one) is logged and
+  skipped rather than failing the whole restore. Verified: `fs/opfsPersistence.test.ts`'s 3 new
+  cases (a real npm-bin-shaped symlink survives a fresh restore, byte-for-byte target and
+  `lstat().kind`; removing a symlink drops it from what's restored; renaming a directory carries
+  its nested symlink to the new location, not the old one) plus the existing "does not mirror a
+  symlink as an OPFS file entry" test (still true - only the wording changed, since it's now
+  tracked separately rather than not tracked at all). 1 new Playwright test (opt-in,
+  `WCVM_E2E_VITE=1`): a real `npm install` of a package with a real bin, confirmed to be a symlink,
+  survives a real reload, and the bin file GENUINELY RUNS afterward (through `sh`, the same way
+  `npm run <script>` would reach it) - not just that `lstat()` still reports "symlink". A full,
+  clean `pnpm exec playwright test` run (122 passed, 9 opt-in skipped) and `vitest run` (910/910)
+  confirm no regressions.
+- OPFS persistence's write-behind mirror was slow: `wc.fs.sync()` after a real npm install could
+  take many seconds. Found and fixed in two layers, each confirmed with real before/after timing
+  (not just "should be faster" - 33 files installed by a real `npm install cowsay is-odd chalk`):
+  - **Cross-path concurrency (`createOpfsMirror`'s own queue)**: the mirror used ONE global
+    `chain`, so every changed path - across entirely unrelated files/packages - was mirrored to
+    OPFS strictly one at a time, even though only repeated changes to the EXACT SAME path actually
+    need that ordering (two quick writes to `/a.txt` racing could otherwise leave OPFS with an
+    older result than the vfs's own current one - the ONLY reason the ordering guarantee exists).
+    Replaced the single `chain` with a `Map<path, Promise>` (`pathChains`) - each path gets its own
+    small serial queue, dropped once it drains; different paths now mirror concurrently. The
+    symlink manifest (a SINGLE shared file every symlink-affecting path reads-modifies-writes) is
+    the one exception: it keeps its own separate serial queue (`manifestChain`) regardless of how
+    many different paths trigger it now, or two concurrent updates could each read the same stale
+    manifest and clobber each other. 33 files: 11.8s -> 5.4s (~2.2x).
+  - **Directory-handle caching (`createDirHandleCache`)**: even with cross-path concurrency, 33
+    files 3 directories deep (the realistic npm shape - many files sharing a few package
+    directories) took over 20x longer than the same 33 files flat at the root, everything else
+    identical - confirmed directly, not assumed. Root cause: every single file mirror re-walked
+    (`getDirectoryHandle` round trip per segment) its own FULL ancestor path from the OPFS root,
+    even though sibling files under the same directory redundantly re-resolve the exact same
+    handles over and over. Fixed with a small in-memory cache, scoped to one mirror's lifetime,
+    memoizing the PROMISE (not just the eventually-resolved handle) per directory path - real npm
+    installs fire many concurrent top-level `notify()` calls (a `mkdir` plus several sibling
+    files' own writes) that all need the same shared ancestor AT ONCE, so caching only the settled
+    value would still let every one of them race to resolve it before any had cached it (confirmed
+    directly: with a settled-value-only cache, one shared directory was still resolved 3 separate
+    times for 3 concurrent callers - fixed by caching the in-flight promise itself, so the second
+    concurrent caller reuses the first's own request). `invalidate(path)` drops a removed
+    directory's cache entries (and everything nested under it) so a later `ensureDir` for the same
+    name can't hand back a handle to something OPFS no longer has - a narrower case (removing and
+    IMMEDIATELY recreating the identical directory path, not a realistic npm shape) isn't fully
+    closed and is documented in the code as a known, low-risk edge case (worst case: a
+    caught-and-logged write failure, not silent corruption) rather than chasing full generality.
+    33 files, 3 directories deep: 5.4s -> 1.7s on top of the concurrency fix (~3.1x further, ~6.8x
+    total from the original 11.8s). A real `npm create vite@latest --template react-ts` install
+    (its real dependency tree, wasm-swapped esbuild/rollup) now syncs in ~3.5s.
+  Verified: `fs/opfsPersistence.test.ts`'s 4 new cases (unrelated paths mirror concurrently, not
+  one at a time - confirmed to actually fail with a single shared chain, the same "verified to
+  fail without the fix" rigor as the write-ordering regression test; a shared directory is
+  `getDirectoryHandle`-resolved exactly once across several sibling writes; the SAME, resolved only
+  once even when several concurrent top-level changes race for it at the same time - confirmed to
+  actually fail with a settled-value-only cache (3 calls instead of 1) before switching to
+  promise-level memoization; a removed-then-recreated directory's new content is what survives a
+  restore, not the old). All pre-existing OPFS persistence Playwright tests (including the two
+  `wc.fs.sync()`/symlink regression tests above, which depend on `flush()` correctly waiting for
+  the now-concurrent, now-cached work) still pass unchanged. A full, clean
+  `pnpm exec playwright test` run (122 passed, 9 opt-in skipped) and `vitest run` (914/914) confirm
+  no regressions.
+- **A real, self-inflicted regression from the symlink-manifest fix above, found from a live bug
+  report** (`Uncaught WcvmError: Kernel did not become ready within 10000ms`): `loadSymlinkManifest`
+  only ever caught `NotFoundError` (an absent manifest - a fresh root, treated as "no symlinks
+  yet") - any OTHER failure, including `JSON.parse` throwing on a manifest a page reload had
+  interrupted mid-write (a real, easy way to hit given how often OPFS-persisted sessions get
+  reloaded), propagated straight up, UNCAUGHT, through `restoreFromOpfs` and the FS Worker's own
+  `boot()`. Since that FS Worker `boot()` has no top-level catch of its own, the exception meant it
+  never reached its own `self.postMessage({type: "ready"})` line - so the FS Worker never sent
+  "ready", the KERNEL's own boot handshake (which awaits exactly that message) hung forever waiting
+  for it, and 10 seconds later the HOST's own unrelated `ERR_BOOT_TIMEOUT` fired instead - nothing
+  in that error pointed anywhere near the real cause. Reproduced directly in real Chromium (not
+  just inferred): wrote real OPFS content, corrupted `__wcvm_symlinks__.json` with truncated JSON
+  (exactly what an interrupted write leaves behind), reloaded - confirmed the kernel never became
+  ready. Fixed by making `loadSymlinkManifest` treat ANY read/parse failure the same way a missing
+  manifest already was: log it and return `{}` (best-effort persistence, matching the philosophy
+  every other part of this write-behind mirror already follows - never able to block booting
+  itself). Verified: `fs/opfsPersistence.test.ts`'s new case (a truncated manifest resolves
+  `restoreFromOpfs` normally instead of rejecting, logs the failure, and the REST of the tree still
+  restores correctly) - confirmed to actually reproduce the original uncaught rejection before the
+  fix, the same "verified to actually fail without the fix" rigor used elsewhere in this file. 1
+  new Playwright test: a real corrupted manifest written directly to real OPFS, followed by a real
+  `page.reload()`, boots well under the old 10s hang (the real regression) with the rest of the
+  filesystem intact. A full, clean `pnpm exec playwright test` run (123 passed, 9 opt-in skipped)
+  and `vitest run` (915/915) confirm no regressions.
+- **The SAME `ERR_BOOT_TIMEOUT` class of bug persisted after the fix above, from a live follow-up
+  report** - because it was only half the fix: `loadSymlinkManifest` was made resilient, but
+  `restoreFromOpfs`'s own MAIN loop (restoring ordinary files/directories, not just the symlink
+  manifest) had no error handling at all. Any single unreadable OPFS entry - the exact same root
+  cause (a page reload interrupting some OTHER file's own write, not necessarily the manifest) -
+  threw uncaught out of the same `restoreFromOpfs` call, out of the FS Worker's own `boot()`, past
+  its `postMessage({type:"ready"})` line, hanging the kernel's boot the identical way. Fixed at two
+  layers this time, not one: (1) `restoreFromOpfs`'s own loop now wraps EACH entry's own
+  restoration in its own try/catch - a single bad file/directory is logged and skipped, and
+  everything else in the tree still restores normally, rather than losing the whole thing over one
+  bad entry; (2) `workers/fs/worker.ts`'s `boot()` now ALSO wraps the entire
+  `getOpfsRoot`+`restoreFromOpfs`+`createOpfsMirror` sequence in a top-level try/catch, as a final
+  safety net for anything even (1) doesn't anticipate (`getOpfsRoot` itself failing - a genuine
+  quota/permission error, say) - `mirror` simply stays `undefined` (booting without persistence
+  for that session, same as `persist` never being set) rather than the FS Worker failing to boot at
+  all. The invariant going forward: this worker must ALWAYS eventually reach "ready", no matter
+  what OPFS is holding - booting with an incomplete (even entirely empty) filesystem is always
+  better than a 10-second timeout with no indication of why. Verified:
+  `fs/opfsPersistence.test.ts`'s new case (one corrupted file among several is skipped and logged,
+  the rest of the tree - including a nested, unrelated directory - restores correctly) - confirmed
+  to actually reproduce the original uncaught rejection before the fix, same rigor as the manifest
+  regression test. `vitest run` (916/916) and a full, clean `pnpm exec playwright test` run (123
+  passed, 9 opt-in skipped) confirm no regressions.
 - `zlib` (Phase 7's third piece, and the first of real npm's two missing-builtin blockers resolved
   - see PLAN.md's "Real npm: feasibility findings"): Node's real vendored `lib/zlib.js`, unmodified,
   over `internalBinding('zlib')` (`runtime/bindings/zlib.ts`) backed by the browser's real, native
@@ -1205,16 +1367,78 @@ Done and verified in real Chromium:
     page does - both worked around in the test itself, not fixed).
   A full, clean `pnpm exec playwright test` run (120 passed, 6 opt-in skipped) and `vitest run`
   (895/895) confirm no regressions.
-- Tests: 895 Vitest + 126 Playwright (Chromium; 6 of them opt-in, needing the real npm registry:
+- A fourth playground example, plain Node + Express (`src/expressExample.ts`) - the other side of
+  "dev server templates" from the Vite examples (React/Vue): no bundler or dev server at all,
+  proving the "install from the real registry, run entirely in this tab" pipeline isn't
+  Vite-specific either. `npm start` deliberately has no `"start"` script in its `package.json` -
+  it exercises wcvm's own real fallback (`npm run`'s documented "no `start` script + a `server.js`
+  file at the root -> `node server.js`" behavior, matching real npm) instead of a hand-written
+  `"dev"` script. Since a plain server has no HMR, editing `server.js` restarts the whole process
+  from scratch (`server.kill()` then a fresh `npm start`) rather than writing the file and waiting
+  for a watcher to pick it up - the shared preview pane needed no new code for this at all:
+  `preview.ts`'s existing `onListen()` wiring already blanks the iframe to `about:blank` on
+  `unlisten` and points it at the new listener on the next `listen`, so a restart just looks like
+  an ordinary page reload from the outside. The example's own page has zero client JS: its counter
+  increments via a real `<form method="post" action="/count">`, a genuine full-navigation POST the
+  server redirects back to `/` - proving the preview relay/absolute-routing pipeline built for
+  Vite/HMR works just as well for a server with no client-side JavaScript at all, and (since the
+  counter is plain in-memory server state) that restarting on edit genuinely resets it, not just
+  cosmetically. `collect`/`buildTree` (`viteExample.ts`'s own small helpers for streaming a
+  process's output and turning a flat file map into a `FileSystemTree`) were exported and reused
+  rather than duplicated, since neither one was ever actually Vite-specific. Shares the one preview
+  pane with the other three examples, extending their mutual exclusion to four-way. Verified: an
+  always-on Playwright test for the page wiring, and an opt-in one (`WCVM_E2E_VITE=1`, real
+  registry) for the full flow - install, the counter incrementing via plain HTML form POSTs with no
+  JS, an edit restarting the server and genuinely resetting the counter, and the four-way mutual
+  exclusion. A full, clean `pnpm exec playwright test` run (122 passed, 7 opt-in skipped) and
+  `vitest run` (898/898) confirm no regressions.
+- **Svelte was attempted as a fifth example and PARKED - a real, structural blocker in wcvm's own
+  ESM loader, not a version-pinning issue.** Wired up exactly like the Vue example
+  (`@sveltejs/vite-plugin-svelte@^6.2.4`, the last major compatible with vite@7 - 7.x needs vite@8+
+  - `svelte@^5.0.0`, the same wasm `overrides` the other examples use), but Vite's dev server
+  failed before ever serving a single request - it couldn't even load its own config:
+  `EsmResolveError: Circular static ESM import involving
+  ".../svelte/src/compiler/utils/ast.js" is not supported yet (use a dynamic import() to break the
+  cycle)`. Confirmed by reading Svelte's real published source directly, not assumed:
+  `compiler/utils/ast.js` imports `#compiler/builders` (a package.json `"imports"` self-reference
+  resolving to `builders.js`), and `builders.js` imports straight back `./ast.js` (for
+  `has_await_expression`) - a genuine, static, mutual circular ESM import inside Svelte's own
+  compiler, not anything about this example's own project files. Real Node's native ESM linker
+  handles this without issue (real circular-module support: live bindings across the cycle, and
+  function declarations - hoisted - are usable before the rest of the cycle finishes
+  initializing). wcvm's own ESM loader can't, by design: it creates one `blob:` URL per module up
+  front (`esm/loader.ts`'s `prepare()`, dependency-first), and a `Blob`'s content is fixed at the
+  moment it's constructed - so two modules that each need to embed the other's URL in their own
+  rewritten source can never both be created first. This is the exact same constraint
+  `ERR_CIRCULAR_ESM_NOT_SUPPORTED` already documents (see "ES modules" above and PLAN.md's "Known
+  differences") - the first time it's been hit by a real, widely-used package's own internals
+  rather than a hand-written circular-import test case. **Confirmed version-independent, not a
+  pinning problem, before giving up on it**: even `svelte@5.0.0` (the oldest published 5.x, which
+  predates the `ast.js`/`builders.js` cycle above entirely - checked directly, `builders.js` at
+  that version doesn't import `ast.js` at all) still fails, on a DIFFERENT genuine cycle deeper in
+  the compiler (`compiler/phases/3-transform/client/utils.js`) - Svelte's compiler module graph has
+  more than one real cycle, structurally, across its whole published history, not one fixable spot.
+  A real fix would need the ESM loader to detect strongly-connected components in the static import
+  graph and merge each one into a single blob (the same thing a real bundler's own chunking already
+  does to resolve cycles) - genuine runtime work on the order of the Rolldown/worker-pool platform
+  investigations elsewhere in this file, not something that belongs in a template-adding task.
+  Asked the user how to proceed (park it vs. invest in real circular-ESM support vs. ship it
+  committed-but-non-functional); parked, in favor of the Express example above. The Svelte
+  template/wiring/tests written while investigating this were reverted, not left half-committed -
+  revisit only if circular-ESM support becomes a priority for its own sake, and re-verify against
+  Svelte's then-current source rather than assuming this writeup is still accurate (the ecosystem
+  moves; the exact cycle location already changed once between 5.0.0 and 5.57.1).
+- Tests: 898 Vitest + 122 Playwright (Chromium; 7 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): more dev-server templates (Svelte, plain Node/Express -
-Vite+React and Vite+Vue exist), npm workspaces and the rest of `npm exec` (arbitrary local/registry
-commands, not just `create`), DNS (`dns.lookup()` is a fixed-address shim, low-value in a single
-virtual host with no real network to resolve a name against), real `npm` (investigated and
-DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
-a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's
-"Real npm: feasibility findings"), Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): a Svelte dev-server template (PARKED - a real, structural
+circular-ESM limitation in Svelte's own compiler, not a version-pinning issue; Vite+React,
+Vite+Vue and plain Node+Express templates exist), npm workspaces and the rest of `npm exec`
+(arbitrary local/registry commands, not just `create`), DNS (`dns.lookup()` is a fixed-address
+shim, low-value in a single virtual host with no real network to resolve a name against), real
+`npm` (investigated and DEFERRED - its fetch stack has no path to a real network from inside
+wcvm's virtual `net`/`http`; a minimal built-in `npm install`/`npm run`/`npm create` exists
+instead - see above and PLAN.md's "Real npm: feasibility findings"), Python/Bun, Studio UI.
 
 ## Architecture in one page
 
@@ -1439,6 +1663,17 @@ fs call while all Node tests passed). Run `pnpm build` first: the playground use
   OPFS's own tree in a fresh Vfs is itself a sequence of mutations, and if the mirror were already
   listening, it would immediately write everything it just read straight back to OPFS, a pointless
   (though not incorrect) round trip on every single boot.
+- Being ORDERED (the gotcha above) doesn't mean being CAUGHT UP: the write-behind mirror answers a
+  syscall before its own OPFS write finishes, and had no way to tell a caller "everything so far has
+  actually landed" - so a real reload right after a big write (an `npm install`'s many small files,
+  say) could lose whatever was still mid-flight, with nothing to indicate it. Found from a real
+  Studio bug report ("packages aren't installed anymore after a reload"), then reproduced directly
+  (not just inferred): a two-file npm install followed by an immediate `page.reload()` lost one of
+  the two files. Fixed with `wc.fs.sync()` (see "Status") - not a delay, a real completion signal
+  the mirror's own queue can report. Lesson: "answers immediately, mirrors in the background" is a
+  correct design, but it's only actually safe for a caller to walk away if there's also a way to
+  ask "are you done yet" - fire-and-forget with no way to wait for the fire is a real gap, not a
+  simplification, the moment anything outside the process (a reload, a tab close) can race it.
 - The real global `FileSystemDirectoryHandle`/`FileSystemFileHandle` (OPFS) don't structurally
   satisfy a hand-picked subset interface typed against them: `entries()`'s real declared return
   type isn't narrowed to file/dir handles specifically, and `write()`'s real param type doesn't

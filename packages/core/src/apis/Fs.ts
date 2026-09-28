@@ -32,6 +32,14 @@ interface IFs {
    * create `path`'s parent directories.
    */
   fetch(url: string, path: string): Promise<{ status: number; headers: [string, string][] }>;
+  /**
+   * Resolves once every fs change so far has actually reached OPFS, when `boot({ persist })` is
+   * enabled (a no-op, resolving immediately, otherwise). Persistence is write-behind - a syscall
+   * answers before its own OPFS mirror finishes - so a real reload/close right after a big write
+   * (an `npm install`'s many files, say) can otherwise lose whatever hadn't landed yet. Call this
+   * before any point where losing very recent writes would matter.
+   */
+  sync(): Promise<void>;
 }
 
 const createFsApi = (
@@ -65,6 +73,7 @@ const createFsApi = (
     mount: (tree, basePath = "/") => call("fs:mount", { tree, basePath }),
     reset: () => call("fs:reset"),
     fetch: (url, path) => call("fetcher:fetch", { url, path }),
+    sync: () => call("fs:sync"),
   };
 };
 
