@@ -216,7 +216,7 @@ describe("restoreFromOpfsLazy", () => {
     const vfs = new Vfs();
     const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
     // Simulates what OP_RENAME's own peeked path would trigger for the ancestor of both projects -
-    // see FsServer.peekPendingPaths and this file's own comment on why this direction matters.
+    // see FsServer.peekPendingRequest and this file's own comment on why this direction matters.
     await lazy.ensureRestored(["/home/user/projects"]);
 
     expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
@@ -251,7 +251,7 @@ describe("restoreFromOpfsLazy", () => {
 
     // The real handler is restored afterward - a genuinely new change still reports normally.
     vfs.writeFile("/home/user/projects/a/new.txt", new TextEncoder().encode("new"));
-    expect(onChange).toHaveBeenCalledWith("/home/user/projects/a/new.txt", "rename", true);
+    expect(onChange).toHaveBeenCalledWith("/home/user/projects/a/new.txt", "rename", true, false);
   });
 
   it("skips a corrupted/unreadable file during a project's own materialization, same per-entry resilience as restoreFromOpfs", async () => {
@@ -322,7 +322,11 @@ describe("createOpfsMirror", () => {
     const vfs = new Vfs();
     const root = createFakeOpfsDir();
     const mirror = createOpfsMirror(vfs, root);
-    vfs.onChange = mirror.notify;
+    // Same adaptation FsServer's own constructor does for real: onPersist only cares about
+    // contentChanged and subtreeIsOnlyAnnouncement, not kind (that's watch dispatch's own concern).
+    vfs.onChange = (path, _kind, contentChanged, subtreeIsOnlyAnnouncement) => {
+      if (contentChanged) mirror.notify(path, subtreeIsOnlyAnnouncement);
+    };
     return { vfs, root, mirror };
   };
 
@@ -574,5 +578,31 @@ describe("createOpfsMirror", () => {
 
     await expect(mirror.flush()).resolves.toBeUndefined();
     spy.mockRestore();
+  });
+
+  it("caps how many OPFS writes run concurrently, even when every onChange fires in one synchronous burst (cp()'s own shape)", async () => {
+    const { vfs, root, mirror } = setup();
+    const originalGetFileHandle = root.getFileHandle.bind(root);
+    let active = 0;
+    let peak = 0;
+    root.getFileHandle = async (name, options) => {
+      active++;
+      peak = Math.max(peak, active);
+      // Long enough that a real burst of concurrent calls would overlap and be observed, short
+      // enough the test stays fast.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const handle = await originalGetFileHandle(name, options);
+      active--;
+      return handle;
+    };
+
+    // Mirrors cp()'s own shape: many onChange events fired in one synchronous loop, no per-file
+    // pacing at all - exactly the burst that used to drive unbounded concurrency.
+    for (let i = 0; i < 40; i++) vfs.writeFile(`/f${i}.txt`, new TextEncoder().encode("x"));
+    await mirror.flush();
+
+    expect(peak).toBeLessThanOrEqual(16);
+    expect(peak).toBeGreaterThan(1); // still genuinely concurrent, not accidentally serialized
+    for (let i = 0; i < 40; i++) expect(root.readFileAt(`/f${i}.txt`)).toBeDefined();
   });
 });

@@ -13,6 +13,7 @@ import {
   FLAG_RECURSIVE,
   OP_CHMOD,
   OP_CLOSE,
+  OP_CP,
   OP_EXISTS,
   OP_FD_READ,
   OP_FD_WRITE,
@@ -62,10 +63,11 @@ const at = (fields: Uint8Array[], index: number): Uint8Array => {
   return field;
 };
 
-/** Opcodes whose request carries two independent paths (rename's from/to, link's existing/new) -
- *  every other opcode with a path uses field 0 only. Peeked by `peekPendingPaths` below, not by
- *  any handler - the handlers already know their own shape via `path(f, i)` calls. */
-const TWO_PATH_OPCODES: ReadonlySet<number> = new Set([OP_RENAME, OP_LINK]);
+/** Opcodes whose request carries two independent paths (rename's from/to, link's existing/new,
+ *  cp's from/to) - every other opcode with a path uses field 0 only. Peeked by
+ *  `peekPendingRequest` below, not by any handler - the handlers already know their own shape
+ *  via `path(f, i)` calls. */
+const TWO_PATH_OPCODES: ReadonlySet<number> = new Set([OP_RENAME, OP_LINK, OP_CP]);
 /** Opcodes with no path at all: fd-based, already resolved by a prior OP_OPEN. */
 const NO_PATH_OPCODES: ReadonlySet<number> = new Set([
   OP_CLOSE, OP_FD_READ, OP_FD_WRITE, OP_FSTAT, OP_FTRUNCATE, OP_FUTIMES,
@@ -122,15 +124,18 @@ class FsServer {
    *  OPFS, it's the same "forwards what the vfs already told us" principle applied to a signal
    *  the vfs itself already computed - FsServer stays exactly as OPFS-agnostic either way. Watch
    *  dispatch is NOT filtered the same way: real fs.watch() reports a 'change' for a bare
-   *  chmod/utimes too, so guest scripts must keep seeing it regardless of what OPFS needs. */
-  constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}, onPersist?: (path: string) => void) {
+   *  chmod/utimes too, so guest scripts must keep seeing it regardless of what OPFS needs.
+   *  `onPersist`'s second argument is Vfs.ts's own `subtreeIsOnlyAnnouncement` - see its doc
+   *  comment - passed straight through unchanged, same "forward what the vfs already computed"
+   *  principle. */
+  constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}, onPersist?: (path: string, subtreeIsOnlyAnnouncement: boolean) => void) {
     this.vfs = vfs;
     this.onWatchEvent = onWatchEvent;
-    vfs.onChange = (path, kind, contentChanged) => {
+    vfs.onChange = (path, kind, contentChanged, subtreeIsOnlyAnnouncement) => {
       for (const [watchId, watch] of this.watches) {
         if (watchMatches(watch, path)) this.onWatchEvent(watch.clientId, watchId, kind, watchRelativeName(watch, path));
       }
-      if (contentChanged) onPersist?.(path);
+      if (contentChanged) onPersist?.(path, subtreeIsOnlyAnnouncement);
     };
     const path = (fields: Uint8Array[], i = 0) => decodeBytes(at(fields, i));
 
@@ -179,6 +184,13 @@ class FsServer {
         OP_RENAME,
         (f) => {
           vfs.rename(path(f, 0), path(f, 1));
+          return EMPTY;
+        },
+      ],
+      [
+        OP_CP,
+        (f) => {
+          vfs.cp(path(f, 0), path(f, 1));
           return EMPTY;
         },
       ],

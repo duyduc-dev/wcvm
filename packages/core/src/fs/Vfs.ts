@@ -95,8 +95,25 @@ export type VfsChangeKind = "rename" | "change";
  *  always re-writing the exact same bytes already correctly there for nothing: confirmed as a
  *  real, measured cost - a real npm install's own `programs/npm/install.ts` `extract()` calls
  *  `fs.chmod()` right after every single `fs.writeFile()`, so every extracted file was being
- *  mirrored to OPFS TWICE (once for its real content, once - uselessly - for the chmod). */
-export type VfsChangeReporter = (path: string, kind: VfsChangeKind, contentChanged: boolean) => void;
+ *  mirrored to OPFS TWICE (once for its real content, once - uselessly - for the chmod).
+ *
+ *  `subtreeIsOnlyAnnouncement` is true ONLY for rename()'s own two calls: a directory rename
+ *  fires exactly ONE event for the moved directory's own new path (matching real Node's own
+ *  fs.watch, which reports a rename atomically too, not one event per descendant) - it is the
+ *  ONLY announcement the mirror will EVER get about anything that moved with it, so mirroring it
+ *  (fs/opfsPersistence.ts's `resyncSubtree`) must walk its whole subtree to find out what that
+ *  actually is. Every OTHER operation that can create/populate a directory (mkdir, and Vfs.cp()'s
+ *  own recursive copy) instead fires its own SEPARATE event for every entry it creates - so for
+ *  those, walking a directory's subtree on ITS OWN event would be pure, redundant duplicate work:
+ *  confirmed as a severe, real, measured cost, not a theoretical one - by the time the mirror
+ *  gets around to processing a big new directory's own event, everything under it may already
+ *  exist (cp()'s own copy is fully synchronous - nothing yields between creating a directory and
+ *  populating it), so walking it re-mirrors every descendant AGAIN on top of each one's own
+ *  separate event - and every ANCESTOR directory along the way does the same, so one deeply
+ *  nested file can get mirrored several times over. Cloning a real, ~683-file cached project via
+ *  cp() took over 10s to sync before this distinction existed, against ~1.5s for the same file
+ *  count arriving through a real install's own per-file events. */
+export type VfsChangeReporter = (path: string, kind: VfsChangeKind, contentChanged: boolean, subtreeIsOnlyAnnouncement: boolean) => void;
 
 interface IResolved {
   parent: IDirInode | null;
@@ -333,7 +350,7 @@ export class Vfs {
       const { parent, name, node } = this.walk(path, false);
       if (node || !parent) throw new VfsError("EEXIST", path);
       this.link_(parent, name, this.newDir(mode));
-      this.onChange(path, "rename", true);
+      this.onChange(path, "rename", true, false);
       return;
     }
 
@@ -350,7 +367,7 @@ export class Vfs {
         return;
       }
       this.link_(parent as IDirInode, name, this.newDir(mode));
-      this.onChange(current, "rename", true);
+      this.onChange(current, "rename", true, false);
     });
   }
 
@@ -372,14 +389,14 @@ export class Vfs {
       if (node.kind !== "file") throw new VfsError("EINVAL", path);
       this.setSize(node, 0);
       this.putBytes(node, 0, data);
-      this.onChange(path, "change", true);
+      this.onChange(path, "change", true, false);
       return;
     }
     if (!parent) throw new VfsError("EISDIR", path);
     const file = this.newFile(options.mode ?? 0o644);
     this.putBytes(file, 0, data);
     this.link_(parent, name, file);
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
   }
 
   unlink(path: string) {
@@ -387,7 +404,7 @@ export class Vfs {
     if (!node) throw new VfsError("ENOENT", path);
     if (node.kind === "dir") throw new VfsError("EISDIR", path);
     this.unlinkEntry(parent as IDirInode, name);
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
   }
 
   rmdir(path: string) {
@@ -397,7 +414,7 @@ export class Vfs {
     if (!parent) throw new VfsError("EBUSY", path);
     if (node.entries.size > 0) throw new VfsError("ENOTEMPTY", path);
     this.unlinkEntry(parent, name);
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
   }
 
   rm(path: string, options: { recursive?: boolean } = {}) {
@@ -408,7 +425,7 @@ export class Vfs {
       throw new VfsError("EISDIR", path);
     }
     this.unlinkEntry(parent, name);
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
   }
 
   rename(from: string, to: string) {
@@ -438,8 +455,8 @@ export class Vfs {
     this.touch(source.parent);
     this.link_(target.parent, target.name, source.node);
     source.node.ctimeMs = Date.now();
-    this.onChange(from, "rename", true);
-    this.onChange(to, "rename", true);
+    this.onChange(from, "rename", true, true);
+    this.onChange(to, "rename", true, true);
   }
 
   /** True when `needle` is `dir` itself or lives anywhere beneath it. */
@@ -455,7 +472,7 @@ export class Vfs {
     const { parent, name, node } = this.walk(path, false);
     if (node || !parent) throw new VfsError("EEXIST", path);
     this.link_(parent, name, this.newSymlink(target));
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
   }
 
   readlink(path: string): string {
@@ -468,7 +485,7 @@ export class Vfs {
     const node = this.lookup(path, true);
     node.mode = mode & 0o7777;
     node.ctimeMs = Date.now();
-    this.onChange(path, "change", false);
+    this.onChange(path, "change", false, false);
   }
 
   /** Hard link: `path` becomes another name for the same file. Directories cannot be linked. */
@@ -479,19 +496,59 @@ export class Vfs {
     if (node || !parent) throw new VfsError("EEXIST", path);
     source.nlink++;
     this.link_(parent, name, source);
-    this.onChange(path, "rename", true);
+    this.onChange(path, "rename", true, false);
+  }
+
+  /**
+   * Recursive copy of a file, symlink, or whole directory subtree, entirely within this Vfs - no
+   * syscall-per-file round trip the way a host-side loop of readFile+writeFile calls would need.
+   * `to` must not already exist (no fs.cp()-style force/overwrite mode - nothing needs it yet).
+   *
+   * Built out of mkdir/writeFile/symlink themselves rather than a bespoke fast path, so it
+   * inherits their exact onChange-firing (and validation) for free: OPFS write-behind mirroring
+   * sees a copy exactly as if it were a real, if fast, sequence of ordinary writes - nothing
+   * about the mirror needs to know cp() exists at all. Existing mode bits are preserved;
+   * timestamps are not (mkdir/writeFile's own "now", same as any other real write gets) - and
+   * unlike extract()'s own writeFile-then-chmod pattern (Vfs.ts's own VfsChangeReporter doc
+   * comment), mode travels in the SAME writeFile/mkdir call here, so a copy never pays that
+   * double-mirror cost either.
+   *
+   * The one real caller today: Studio's template cache. The first time a given template+pin
+   * combination is created, its final, fully-installed result is cached once; every later
+   * creation of the same template clones the cache instead of re-running a real npm install, so
+   * creating a project's own file content is bounded by how fast this can copy bytes, not by the
+   * npm registry's own network latency.
+   */
+  cp(from: string, to: string) {
+    if (this.exists(to)) throw new VfsError("EEXIST", to);
+    this.copyNode(this.lookup(from, false), to);
+  }
+
+  private copyNode(node: Inode, to: string) {
+    if (node.kind === "symlink") {
+      this.symlink(node.target, to);
+      return;
+    }
+    if (node.kind === "file") {
+      this.writeFile(to, node.data.slice(0, node.size), { mode: node.mode });
+      return;
+    }
+    this.mkdir(to, { mode: node.mode });
+    for (const [name, child] of node.entries) {
+      this.copyNode(child, `${to}/${name}`);
+    }
   }
 
   /** Sets access and modification times (milliseconds since the epoch). */
   utimes(path: string, atimeMs: number, mtimeMs: number, followLink = true) {
     this.setTimes(this.lookup(path, followLink), atimeMs, mtimeMs);
-    this.onChange(path, "change", false);
+    this.onChange(path, "change", false, false);
   }
 
   futimes(fd: number, atimeMs: number, mtimeMs: number) {
     const entry = this.entry(fd);
     this.setTimes(entry.node, atimeMs, mtimeMs);
-    this.onChange(entry.path, "change", false);
+    this.onChange(entry.path, "change", false, false);
   }
 
   private setTimes(node: Inode, atimeMs: number, mtimeMs: number) {
@@ -551,7 +608,7 @@ export class Vfs {
       const file = this.newFile(mode & 0o7777);
       this.link_(parent, name, file);
       target = file;
-      this.onChange(realPath, "rename", true);
+      this.onChange(realPath, "rename", true, false);
     }
 
     let fd = 3;
@@ -599,7 +656,7 @@ export class Vfs {
     if (position < 0 || entry.flags & O_APPEND) {
       entry.position = start + bytes.length;
     }
-    this.onChange(entry.path, "change", true);
+    this.onChange(entry.path, "change", true, false);
     return bytes.length;
   }
 
@@ -612,6 +669,6 @@ export class Vfs {
     if (!isWritable(entry.flags)) throw new VfsError("EBADF");
     if (entry.node.kind !== "file") throw new VfsError("EINVAL");
     this.setSize(entry.node, length);
-    this.onChange(entry.path, "change", true);
+    this.onChange(entry.path, "change", true, false);
   }
 }

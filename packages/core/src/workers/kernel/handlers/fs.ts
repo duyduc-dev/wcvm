@@ -23,6 +23,7 @@ const fsRequests: Record<string, FsRequest> = {
   "fs:rm": (fs, d) =>
     fs.rm(str(d, "path"), { recursive: d.recursive === true }),
   "fs:rename": (fs, d) => fs.rename(str(d, "from"), str(d, "to")),
+  "fs:cp": (fs, d) => fs.cp(str(d, "from"), str(d, "to")),
   "fs:symlink": (fs, d) => fs.symlink(str(d, "target"), str(d, "path")),
   "fs:readlink": (fs, d) => fs.readlink(str(d, "path")),
   "fs:realpath": (fs, d) => fs.realpath(str(d, "path")),

@@ -12,6 +12,12 @@ interface IFs {
   lstat(path: string): Promise<IStatResult>;
   rm(path: string, options?: { recursive?: boolean }): Promise<void>;
   rename(from: string, to: string): Promise<void>;
+  /**
+   * Recursive copy of a file, symlink, or whole directory subtree - entirely within the Vfs, no
+   * per-file round trip the way a host-side loop of readFile+writeFile calls would need (see
+   * Vfs.ts's own `cp()` doc comment). `to` must not already exist.
+   */
+  cp(from: string, to: string): Promise<void>;
   symlink(target: string, path: string): Promise<void>;
   readlink(path: string): Promise<string>;
   realpath(path: string): Promise<string>;
@@ -66,6 +72,7 @@ const createFsApi = (
     rm: (path, options) =>
       call("fs:rm", { path, recursive: options?.recursive === true }),
     rename: (from, to) => call("fs:rename", { from, to }),
+    cp: (from, to) => call("fs:cp", { from, to }),
     symlink: (target, path) => call("fs:symlink", { target, path }),
     readlink: (path) => call("fs:readlink", { path }),
     realpath: (path) => call("fs:realpath", { path }),

@@ -493,18 +493,26 @@ const removeSymlinksUnder = async (root: IOpfsDirHandle, path: string): Promise<
   if (changed) await saveSymlinkManifest(root, manifest);
 };
 
-/** Mirrors `path` and, if it's a directory, its whole subtree - needed for a directory rename:
- *  the vfs fires one onChange for the moved directory's own new path, not one per descendant. A
- *  symlink can't be mirrored as an OPFS entry (OPFS has none) - recorded in the manifest instead
- *  (through `queueManifestOp` - see `createOpfsMirror`, which is the only real caller of this;
- *  the shared manifest file needs its own serialization independent of per-path mirroring),
- *  restored separately (see `restoreFromOpfs`). */
+/** Mirrors `path` - and, if `walkChildren`, its WHOLE subtree too. `walkChildren` is Vfs.ts's own
+ *  `subtreeIsOnlyAnnouncement` (see its doc comment), true ONLY for a directory rename: its own
+ *  onChange is the ONLY announcement the mirror will EVER get about anything that moved with it,
+ *  so finding out what that is means walking it. Every OTHER directory-creating operation (mkdir,
+ *  Vfs.cp()) instead fires its own SEPARATE event for every entry it creates - so for those,
+ *  walking children here too would just re-mirror them AGAIN, redundantly, on top of each one's
+ *  own event (severe for a big, deep tree: one deeply nested file can get mirrored once per
+ *  ancestor directory, plus its own - see Vfs.ts's own doc comment for the measured cost). The
+ *  directory itself still gets created either way (ensureDirCached) - only the recursive WALK
+ *  into children is conditional. A symlink can't be mirrored as an OPFS entry (OPFS has none) -
+ *  recorded in the manifest instead (through `queueManifestOp` - see `createOpfsMirror`, the only
+ *  real caller of this; the shared manifest file needs its own serialization independent of
+ *  per-path mirroring), restored separately (see `restoreFromOpfs`). */
 const resyncSubtree = async (
   vfs: Vfs,
   root: IOpfsDirHandle,
   ensureDirCached: (dirPath: string) => Promise<IOpfsDirHandle>,
   path: string,
   queueManifestOp: (op: () => Promise<void>) => Promise<void>,
+  walkChildren: boolean,
 ): Promise<void> => {
   const stat = vfs.lstat(path);
   if (stat.kind === "symlink") {
@@ -516,13 +524,14 @@ const resyncSubtree = async (
     return;
   }
   await ensureDirCached(path);
+  if (!walkChildren) return;
   for (const [name, kind] of vfs.readdirKinds(path)) {
     const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
     if (kind === "symlink") {
       await queueManifestOp(() => recordSymlink(root, childPath, vfs.readlink(childPath)));
       continue;
     }
-    await resyncSubtree(vfs, root, ensureDirCached, childPath, queueManifestOp);
+    await resyncSubtree(vfs, root, ensureDirCached, childPath, queueManifestOp, walkChildren);
   }
 };
 
@@ -530,9 +539,11 @@ const resyncSubtree = async (
  *  to be assigned straight to `Vfs.onChange`), `flush` resolves once every `notify()` call queued
  *  so far has actually landed in OPFS - the only way a caller (a real reload/close is about to
  *  happen, or a host wants to know a big write like an npm install is truly durable first) can
- *  know write-behind has caught up, since otherwise it's entirely invisible from the outside. */
+ *  know write-behind has caught up, since otherwise it's entirely invisible from the outside.
+ *  `subtreeIsOnlyAnnouncement` is Vfs.ts's own flag of the same name - forwarded straight through
+ *  to `resyncSubtree`, see its own doc comment. */
 export interface IOpfsMirror {
-  notify(path: string): void;
+  notify(path: string, subtreeIsOnlyAnnouncement: boolean): void;
   flush(): Promise<void>;
 }
 
@@ -557,18 +568,50 @@ export interface IOpfsMirror {
  * A failed write is logged and does not stop later ones (write-behind is inherently best-effort:
  * the vfs itself is already the source of truth for the running session either way) - and does not
  * fail `flush()` either, for the same reason.
+ *
+ * Per-path independence (above) is about ORDERING, not throughput - it doesn't bound how many
+ * paths' own resync() calls can be doing REAL OPFS I/O at the same instant, and that turned out to
+ * matter a lot more than the per-path queues alone: a genuinely large, synchronous burst of
+ * onChange events - Vfs.ts's own `cp()` fires one per copied entry, all in one JS tick, with none
+ * of a real npm install's natural per-file sync-bridge pacing - drove mirroring MUCH slower than
+ * the same file count arriving gradually (confirmed directly: cloning a cached, ~683-file project
+ * via cp() took over 10s to sync, against ~1.5s for the same file count from a real install) - and
+ * at high enough burst size, OPFS itself can outright fail (confirmed directly: an unbounded burst
+ * of ~2000 concurrent createWritable() calls threw "AbortError: Failed to create swap file" in
+ * real Chromium, not just run slowly). `acquireWriteSlot` bounds how many resync() calls are
+ * ACTUALLY doing OPFS I/O at once, GLOBALLY, regardless of how many different paths' own
+ * independent chains all became ready at the same instant - ordering is unaffected (it gates
+ * inside a chain link, not across them), only how many of them run concurrently.
  */
 export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror => {
   const pathChains = new Map<string, Promise<void>>();
   const dirCache = createDirHandleCache(root);
   let manifestChain: Promise<void> = Promise.resolve();
 
+  const WRITE_CONCURRENCY = 16;
+  let activeWrites = 0;
+  const writeQueue: (() => void)[] = [];
+  /** Resolves once a slot is free, with a release callback - `await`ed inside notify()'s own
+   *  per-path chain link, so it gates concurrency without reordering anything within one path. */
+  const acquireWriteSlot = (): Promise<() => void> =>
+    new Promise((resolve) => {
+      const grant = () => {
+        activeWrites++;
+        resolve(() => {
+          activeWrites--;
+          writeQueue.shift()?.();
+        });
+      };
+      if (activeWrites < WRITE_CONCURRENCY) grant();
+      else writeQueue.push(grant);
+    });
+
   const queueManifestOp = (op: () => Promise<void>): Promise<void> => {
     manifestChain = manifestChain.finally(op);
     return manifestChain;
   };
 
-  const resync = async (path: string): Promise<void> => {
+  const resync = async (path: string, subtreeIsOnlyAnnouncement: boolean): Promise<void> => {
     if (!vfs.exists(path)) {
       await removeMirrored(root, path);
       dirCache.invalidate(path);
@@ -576,7 +619,7 @@ export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror =>
       return;
     }
     try {
-      await resyncSubtree(vfs, root, dirCache.ensureDir, path, queueManifestOp);
+      await resyncSubtree(vfs, root, dirCache.ensureDir, path, queueManifestOp, subtreeIsOnlyAnnouncement);
     } catch (error) {
       // A path can legitimately be gone again by the time this runs (e.g. a write immediately
       // followed by an rm) - the NEXT onChange for the same path already queued its own removal.
@@ -586,13 +629,18 @@ export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror =>
   };
 
   return {
-    notify(path: string): void {
+    notify(path: string, subtreeIsOnlyAnnouncement: boolean): void {
       const previous = pathChains.get(path) ?? Promise.resolve();
-      const next = previous.finally(() =>
-        resync(path).catch((error) => {
+      const next = previous.finally(async () => {
+        const release = await acquireWriteSlot();
+        try {
+          await resync(path, subtreeIsOnlyAnnouncement);
+        } catch (error) {
           console.error(`wcvm: OPFS persistence failed for ${path}:`, error);
-        }),
-      );
+        } finally {
+          release();
+        }
+      });
       pathChains.set(path, next);
       // Drop this path's own entry once it settles, UNLESS something newer has already replaced
       // it in the map (another notify() for the same path queued behind this one).

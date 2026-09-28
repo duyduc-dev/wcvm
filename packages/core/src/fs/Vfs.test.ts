@@ -182,6 +182,64 @@ describe("Vfs rename", () => {
   });
 });
 
+describe("Vfs cp", () => {
+  it("copies a single file, leaving the original in place (unlike rename)", () => {
+    vfs.writeFile("/a", bytes("x"));
+    vfs.cp("/a", "/b");
+    expect(text(vfs.readFile("/a"))).toBe("x");
+    expect(text(vfs.readFile("/b"))).toBe("x");
+  });
+
+  it("copies bytes, not a shared reference - editing the copy leaves the original untouched", () => {
+    vfs.writeFile("/a", bytes("x"));
+    vfs.cp("/a", "/b");
+    vfs.writeFile("/b", bytes("changed"));
+    expect(text(vfs.readFile("/a"))).toBe("x");
+    expect(text(vfs.readFile("/b"))).toBe("changed");
+  });
+
+  it("preserves mode without a separate chmod (no double onChange the way extract()'s writeFile+chmod pattern has)", () => {
+    vfs.writeFile("/a", bytes("x"), { mode: 0o600 });
+    const seen: Array<[string, string, boolean]> = [];
+    vfs.onChange = (path, kind, contentChanged) => seen.push([path, kind, contentChanged]);
+    vfs.cp("/a", "/b");
+    expect(vfs.stat("/b").mode & 0o777).toBe(0o600);
+    expect(seen).toEqual([["/b", "rename", true]]); // one event, not writeFile+chmod's two
+  });
+
+  it("recursively copies a directory tree, including nested symlinks with their relative targets intact", () => {
+    vfs.mkdir("/proj/node_modules/.bin", { recursive: true });
+    vfs.mkdir("/proj/node_modules/vite/bin", { recursive: true });
+    vfs.writeFile("/proj/node_modules/vite/bin/vite.js", bytes("real"));
+    vfs.symlink("../vite/bin/vite.js", "/proj/node_modules/.bin/vite");
+
+    vfs.cp("/proj", "/clone");
+
+    expect(text(vfs.readFile("/clone/node_modules/vite/bin/vite.js"))).toBe("real");
+    expect(vfs.lstat("/clone/node_modules/.bin/vite").kind).toBe("symlink");
+    expect(vfs.readlink("/clone/node_modules/.bin/vite")).toBe("../vite/bin/vite.js");
+    // The relative symlink resolves correctly at its NEW location too, not just the old one.
+    expect(text(vfs.readFile("/clone/node_modules/.bin/vite"))).toBe("real");
+    // The original is untouched.
+    expect(text(vfs.readFile("/proj/node_modules/vite/bin/vite.js"))).toBe("real");
+  });
+
+  it("rejects when the destination already exists, and when the source doesn't", () => {
+    vfs.writeFile("/a", bytes("x"));
+    vfs.writeFile("/b", bytes("y"));
+    expect(code(() => vfs.cp("/a", "/b"))).toBe("EEXIST");
+    expect(code(() => vfs.cp("/nope", "/c"))).toBe("ENOENT");
+  });
+
+  it("copying a symlink itself (not following it) copies the link, not its target's content", () => {
+    vfs.writeFile("/real", bytes("x"));
+    vfs.symlink("/real", "/link");
+    vfs.cp("/link", "/link2");
+    expect(vfs.lstat("/link2").kind).toBe("symlink");
+    expect(vfs.readlink("/link2")).toBe("/real");
+  });
+});
+
 describe("Vfs symlinks", () => {
   it("follows absolute and relative links, and readlink returns the raw target", () => {
     vfs.mkdir("/real");
