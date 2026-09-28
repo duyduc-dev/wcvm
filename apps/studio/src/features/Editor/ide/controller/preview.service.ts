@@ -2,11 +2,11 @@ import type { IPreviewApi } from "wcvm";
 import type { PreviewTab } from "./types";
 
 export function createPreviewTab(id: string, port: number, path = "/"): PreviewTab {
-  return { id, port, path, url: `localhost:${port}${path}`, nonce: 0 };
+  return { id, port, path, url: `localhost:${port}${path}` };
 }
 
 export function createEmptyPreviewTab(id: string): PreviewTab {
-  return { id, port: null, path: "/", url: "", nonce: 0 };
+  return { id, port: null, path: "/", url: "" };
 }
 
 export const previewSrc = (preview: IPreviewApi, tab: PreviewTab): string =>

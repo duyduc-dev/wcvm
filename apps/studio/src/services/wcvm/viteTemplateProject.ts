@@ -70,6 +70,11 @@ const createViteTemplateProject = async (
     };
   }
 
+  // OPFS persistence (boot({persist})) is write-behind - without this, a reload right after
+  // "created" reports success could still lose files npm install just wrote but hadn't finished
+  // mirroring yet (see wc.fs.sync()'s own doc comment). A no-op when persistence isn't enabled.
+  await wc.fs.sync();
+
   return { isFailure: false, message: "ok" };
 };
 
