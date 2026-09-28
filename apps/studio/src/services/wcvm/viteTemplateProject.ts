@@ -1,5 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { collectText } from "./processUtils";
+import { populateCache, tryCloneFromCache } from "./templateCache";
 import { pinVitePackage } from "./vitePins";
 
 export interface ViteTemplateCreationResult {
@@ -22,6 +23,11 @@ const createViteTemplateProject = async (
       message: `A project already exists at ${projectPath}`,
       type: "projectName",
     };
+  }
+
+  onProgress?.("Checking the local template cache…");
+  if (await tryCloneFromCache(template, projectPath)) {
+    return { isFailure: false, message: "ok" };
   }
 
   onProgress?.(
@@ -74,6 +80,10 @@ const createViteTemplateProject = async (
   // "created" reports success could still lose files npm install just wrote but hadn't finished
   // mirroring yet (see wc.fs.sync()'s own doc comment). A no-op when persistence isn't enabled.
   await wc.fs.sync();
+
+  // Fire-and-forget, AFTER the real project is already synced and reported - see
+  // populateCache's own comment for why folding this into the sync() above would be wrong.
+  void populateCache(template, projectPath);
 
   return { isFailure: false, message: "ok" };
 };
