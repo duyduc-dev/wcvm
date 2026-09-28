@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFakeOpfsDir } from "../testing/fakeOpfs";
 import { Vfs } from "./Vfs";
-import { createOpfsMirror, restoreFromOpfs } from "./opfsPersistence";
+import { createOpfsMirror, restoreFromOpfs, restoreFromOpfsLazy } from "./opfsPersistence";
 
 const decode = (bytes: Uint8Array | undefined): string | undefined => (bytes === undefined ? undefined : new TextDecoder().decode(bytes));
 
@@ -88,6 +88,232 @@ describe("restoreFromOpfs", () => {
     expect(decode(vfs.readFile("/good.txt"))).toBe("fine");
     expect(decode(vfs.readFile("/dir/also-good.txt"))).toBe("still here");
     expect(vfs.exists("/bad.txt")).toBe(false);
+  });
+
+  it("prunes an orphaned symlink manifest entry (its own project is genuinely gone) so it doesn't re-log forever, but leaves a merely-occupied one alone", async () => {
+    // Reproduces the actual reported bug: wc.fs.reset() ("Clear All") deletes a project via
+    // fs.rm(), whose own manifest cleanup (createOpfsMirror's removeSymlinksUnder) runs on the
+    // write-behind mirror's own async queue - a reload landing before that queue drains can leave
+    // the project's real files gone while its manifest entries survive, orphaned. Before this fix,
+    // every future boot re-attempted (and re-logged) the same dead entry forever.
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/other/real.txt", "still here");
+    root.seedFile(
+      "/__wcvm_symlinks__.json",
+      JSON.stringify({
+        // "n" doesn't exist at all - deleted, but its manifest entry survived (the actual bug).
+        "/home/user/projects/n/node_modules/.bin/vite": "../vite/bin/vite.js",
+        // A real, currently-occupied conflict (not orphaning) - must NOT be pruned.
+        "/home/user/projects/other/real.txt": "/home/user/projects/other/somewhere-else",
+      }),
+    );
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const vfs = new Vfs();
+    await expect(restoreFromOpfs(vfs, root)).resolves.toBeUndefined();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("pruning 1 orphaned symlink"), ["/home/user/projects/n/node_modules/.bin/vite"]);
+    spy.mockRestore();
+
+    // Restoring again (a later boot) doesn't re-log anything - the orphan was actually removed
+    // from the persisted manifest, not just skipped this one time.
+    const spy2 = vi.spyOn(console, "error").mockImplementation(() => {});
+    const vfs2 = new Vfs();
+    await restoreFromOpfs(vfs2, root);
+    expect(spy2).not.toHaveBeenCalledWith(expect.stringContaining("pruning"), expect.anything());
+    spy2.mockRestore();
+
+    // The other, merely-occupied entry is untouched - still a real file, still in the manifest,
+    // still (correctly) not a symlink.
+    expect(decode(vfs.readFile("/home/user/projects/other/real.txt"))).toBe("still here");
+    expect(vfs.lstat("/home/user/projects/other/real.txt").kind).toBe("file");
+  });
+});
+
+describe("restoreFromOpfsLazy", () => {
+  // Studio's own convention: /home/user/projects/<name> - 4 segments, so each project becomes
+  // its own lazy unit.
+  const LAZY_DEPTH = 4;
+
+  it("restores directory structure eagerly but defers file content past the lazy boundary", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+    root.seedFile("/home/user/projects/b/file.txt", "hello b");
+
+    const vfs = new Vfs();
+    await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+
+    // The shallow structure (down to, and including, each project directory) exists...
+    expect(vfs.stat("/home/user/projects/a").kind).toBe("dir");
+    expect(vfs.stat("/home/user/projects/b").kind).toBe("dir");
+    // ...but nothing under a project has been materialized yet.
+    expect(vfs.readdir("/home/user/projects/a")).toEqual([]);
+    expect(vfs.exists("/home/user/projects/a/file.txt")).toBe(false);
+  });
+
+  it("ensureRestored materializes exactly the project a touched path belongs to, not others", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+    root.seedFile("/home/user/projects/b/file.txt", "hello b");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+
+    expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
+    // b is untouched - still deferred.
+    expect(vfs.readdir("/home/user/projects/b")).toEqual([]);
+  });
+
+  it("ensureRestored on the project root itself (not a path under it) also materializes it", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    await lazy.ensureRestored(["/home/user/projects/a"]);
+
+    expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
+  });
+
+  it("a path outside every pending root is a no-op", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    await expect(lazy.ensureRestored(["/some/unrelated/path"])).resolves.toBeUndefined();
+    expect(vfs.readdir("/home/user/projects/a")).toEqual([]); // still deferred
+  });
+
+  it("materializing a project a second time (concurrently, or after the fact) never re-reads OPFS and so never clobbers an in-memory edit made since", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    // Three concurrent callers, two different paths under the same root - all three must settle
+    // on the one real materialization, not three independent ones.
+    await Promise.all([
+      lazy.ensureRestored(["/home/user/projects/a/file.txt"]),
+      lazy.ensureRestored(["/home/user/projects/a/file.txt"]),
+      lazy.ensureRestored(["/home/user/projects/a"]),
+    ]);
+    expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
+
+    // Simulates the user editing the file after it was materialized - OPFS itself still has the
+    // OLD content (the write-behind mirror is what would normally catch this up, not modeled
+    // here). A naive non-memoized ensureRestored would re-read OPFS and clobber this edit.
+    vfs.writeFile("/home/user/projects/a/file.txt", new TextEncoder().encode("edited"));
+    await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+    expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("edited");
+  });
+
+  it("a mutation whose OWN path CONTAINS pending roots materializes all of them (rename data-loss guard)", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+    root.seedFile("/home/user/projects/b/file.txt", "hello b");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    // Simulates what OP_RENAME's own peeked path would trigger for the ancestor of both projects -
+    // see FsServer.peekPendingPaths and this file's own comment on why this direction matters.
+    await lazy.ensureRestored(["/home/user/projects"]);
+
+    expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
+    expect(decode(vfs.readFile("/home/user/projects/b/file.txt"))).toBe("hello b");
+  });
+
+  it("replays a lazy project's own symlinks only once it materializes, not at boot", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/real.txt", "real");
+    root.seedFile("/__wcvm_symlinks__.json", JSON.stringify({ "/home/user/projects/a/link.txt": "/home/user/projects/a/real.txt" }));
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    expect(vfs.exists("/home/user/projects/a/link.txt")).toBe(false); // deferred, not a broken restore
+
+    await lazy.ensureRestored(["/home/user/projects/a"]);
+    expect(vfs.lstat("/home/user/projects/a/link.txt").kind).toBe("symlink");
+    expect(decode(vfs.readFile("/home/user/projects/a/link.txt"))).toBe("real");
+  });
+
+  it("materializing a project does not re-trigger vfs.onChange for its own restored entries (no pointless OPFS round trip, no spurious watch events)", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    const onChange = vi.fn();
+    vfs.onChange = onChange;
+
+    await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // The real handler is restored afterward - a genuinely new change still reports normally.
+    vfs.writeFile("/home/user/projects/a/new.txt", new TextEncoder().encode("new"));
+    expect(onChange).toHaveBeenCalledWith("/home/user/projects/a/new.txt", "rename", true);
+  });
+
+  it("skips a corrupted/unreadable file during a project's own materialization, same per-entry resilience as restoreFromOpfs", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/a/good.txt", "fine");
+    root.seedFailingFile("/home/user/projects/a/bad.txt");
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+    await expect(lazy.ensureRestored(["/home/user/projects/a"])).resolves.toBeUndefined();
+    spy.mockRestore();
+
+    expect(decode(vfs.readFile("/home/user/projects/a/good.txt"))).toBe("fine");
+    expect(vfs.exists("/home/user/projects/a/bad.txt")).toBe(false);
+  });
+
+  describe("discardPending", () => {
+    it("drops a still-pending root; a later ensureRestored for a path under it is then a no-op instead of resurrecting it", async () => {
+      const root = createFakeOpfsDir();
+      root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+      const vfs = new Vfs();
+      const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+      lazy.discardPending(["/home/user/projects/a"]);
+
+      // Nothing left to materialize, so the project simply doesn't exist in the vfs - matching
+      // what fs.rm() would do next (this is exactly the sequence handler.ts's own discardPending
+      // call is followed immediately by: service() running the real vfs.rm()).
+      await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+      expect(vfs.exists("/home/user/projects/a/file.txt")).toBe(false);
+    });
+
+    it("matches the SAME both-directions reach as ensureRestored - an ancestor of many pending roots discards all of them at once", async () => {
+      const root = createFakeOpfsDir();
+      root.seedFile("/home/user/projects/a/file.txt", "hello a");
+      root.seedFile("/home/user/projects/b/file.txt", "hello b");
+
+      const vfs = new Vfs();
+      const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+      // Simulates OP_RM("/home", recursive) sweeping every project under it - resetFs's own
+      // real-world shape (wc.fs.reset(), "Clear All").
+      lazy.discardPending(["/home"]);
+
+      await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+      await lazy.ensureRestored(["/home/user/projects/b/file.txt"]);
+      expect(vfs.exists("/home/user/projects/a/file.txt")).toBe(false);
+      expect(vfs.exists("/home/user/projects/b/file.txt")).toBe(false);
+    });
+
+    it("is a safe no-op for a path that isn't (or doesn't contain) any pending root", async () => {
+      const root = createFakeOpfsDir();
+      root.seedFile("/home/user/projects/a/file.txt", "hello a");
+
+      const vfs = new Vfs();
+      const lazy = await restoreFromOpfsLazy(vfs, root, LAZY_DEPTH);
+      expect(() => lazy.discardPending(["/some/unrelated/path"])).not.toThrow();
+
+      // "a" is still pending and still restores normally - discardPending touched nothing here.
+      await lazy.ensureRestored(["/home/user/projects/a/file.txt"]);
+      expect(decode(vfs.readFile("/home/user/projects/a/file.txt"))).toBe("hello a");
+    });
   });
 });
 

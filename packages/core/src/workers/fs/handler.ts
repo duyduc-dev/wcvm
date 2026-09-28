@@ -22,8 +22,12 @@ export interface IFsWorkerBoot {
   type: "boot";
   /** OPFS persistence: false (the default) for a purely in-memory Vfs; a root name to restore
    *  from and write-behind mirror to (fs/opfsPersistence.ts) - namespaced so unrelated wcvm
-   *  instances on the same origin don't share storage by accident. */
-  persist: false | { root: string };
+   *  instances on the same origin don't share storage by accident. `lazyDepth`, if set, restores
+   *  only directory structure down to that many path segments eagerly and defers each directory
+   *  found there until something actually touches a path under it (fs/opfsPersistence.ts's
+   *  `restoreFromOpfsLazy`) - omitted (the default), every persisted file is restored eagerly on
+   *  boot, exactly as before. */
+  persist: false | { root: string; lazyDepth?: number };
 }
 
 /** File System Worker -> kernel: unprompted (not a syscall response), so it's its own
@@ -48,10 +52,17 @@ export interface FlushPersistenceDone {
  * (and be tested) anywhere. A doorbell means "this client has a request parked
  * on its SAB". `persistence`, if given, backs "flushPersistence" - omitted (the default) when
  * `boot({persist})` isn't enabled, in which case it's answered immediately (nothing to flush).
+ * `lazyRestore`, if given, backs OPFS lazy restore (fs/opfsPersistence.ts's
+ * `restoreFromOpfsLazy`) - omitted (the default) when `boot({persist})` isn't using `lazyDepth`,
+ * in which case a doorbell is serviced immediately, exactly as before.
  */
 const createFsWorkerHandler = (
   server: FsServer,
-  persistence?: { flush: () => Promise<void>; reply: (message: FlushPersistenceDone) => void },
+  options?: {
+    flush?: () => Promise<void>;
+    reply?: (message: FlushPersistenceDone) => void;
+    lazyRestore?: { ensureRestored: (paths: string[]) => Promise<void>; discardPending: (paths: string[]) => void };
+  },
 ) => {
   const ports = new Map<number, MessagePort>();
 
@@ -63,6 +74,27 @@ const createFsWorkerHandler = (
     ports.delete(clientId);
   };
 
+  // The one real place a doorbell actually gets serviced, whichever of the two ways it arrived
+  // (a MessagePort's own onmessage - every real client, see kernel/index.ts's attachFsClient - or
+  // the "doorbell" postMessage case below, used only by the kernel's own fs client). Without
+  // routing BOTH through here, lazy restore would only ever fire for the kernel's own requests,
+  // missing the actual common case entirely: a spawned process reading a just-opened project's
+  // files.
+  const service = (clientId: number) => {
+    const lazyRestore = options?.lazyRestore;
+    const pending = lazyRestore ? server.peekPendingRequest(clientId) : undefined;
+    if (!pending || pending.paths.length === 0) {
+      server.service(clientId);
+    } else if (pending.isRecursiveRemove) {
+      // Safe to skip materializing entirely for a recursive remove - see discardPending's own
+      // comment for why. Synchronous bookkeeping only, so the request can be serviced right away.
+      lazyRestore!.discardPending(pending.paths);
+      server.service(clientId);
+    } else {
+      void lazyRestore!.ensureRestored(pending.paths).then(() => server.service(clientId));
+    }
+  };
+
   return (message: FsWorkerMessage) => {
     switch (message.type) {
       case "register":
@@ -70,7 +102,7 @@ const createFsWorkerHandler = (
         server.registerClient(message.clientId, message.sab);
         if (message.port) {
           const { clientId, port } = message;
-          port.onmessage = () => server.service(clientId);
+          port.onmessage = () => service(clientId);
           ports.set(clientId, port);
         }
         break;
@@ -79,11 +111,11 @@ const createFsWorkerHandler = (
         server.unregisterClient(message.clientId);
         break;
       case "doorbell":
-        server.service(message.clientId);
+        service(message.clientId);
         break;
       case "flushPersistence": {
         const { id } = message;
-        void (persistence?.flush() ?? Promise.resolve()).then(() => persistence?.reply({ type: "flushPersistence:done", id }));
+        void (options?.flush?.() ?? Promise.resolve()).then(() => options?.reply?.({ type: "flushPersistence:done", id }));
         break;
       }
     }

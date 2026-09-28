@@ -62,6 +62,15 @@ const at = (fields: Uint8Array[], index: number): Uint8Array => {
   return field;
 };
 
+/** Opcodes whose request carries two independent paths (rename's from/to, link's existing/new) -
+ *  every other opcode with a path uses field 0 only. Peeked by `peekPendingPaths` below, not by
+ *  any handler - the handlers already know their own shape via `path(f, i)` calls. */
+const TWO_PATH_OPCODES: ReadonlySet<number> = new Set([OP_RENAME, OP_LINK]);
+/** Opcodes with no path at all: fd-based, already resolved by a prior OP_OPEN. */
+const NO_PATH_OPCODES: ReadonlySet<number> = new Set([
+  OP_CLOSE, OP_FD_READ, OP_FD_WRITE, OP_FSTAT, OP_FTRUNCATE, OP_FUTIMES,
+]);
+
 type Handler = (fields: Uint8Array[], flags: number, clientId: number) => Uint8Array;
 
 /** clientId owning a watch, the eventType a change was reported as, and filename relative to the watched path. */
@@ -107,16 +116,21 @@ class FsServer {
    *  whichever client is watching - see workers/fs/worker.ts. Defaults to a no-op so FsServer
    *  stays directly testable (service() driven) without one. `onPersist`, if given, is called
    *  with every changed path too (write-behind OPFS mirroring - see workers/fs/worker.ts and
-   *  fs/opfsPersistence.ts's createOpfsMirror); FsServer itself knows nothing about OPFS, it just
-   *  forwards the same raw change events watch dispatch already receives. */
+   *  fs/opfsPersistence.ts's createOpfsMirror) - but only when `contentChanged` (Vfs.ts's own
+   *  VfsChangeReporter doc comment): a chmod/utimes-only event has no new bytes for OPFS to ever
+   *  persist, so skipping onPersist for it isn't a correctness call FsServer is making about
+   *  OPFS, it's the same "forwards what the vfs already told us" principle applied to a signal
+   *  the vfs itself already computed - FsServer stays exactly as OPFS-agnostic either way. Watch
+   *  dispatch is NOT filtered the same way: real fs.watch() reports a 'change' for a bare
+   *  chmod/utimes too, so guest scripts must keep seeing it regardless of what OPFS needs. */
   constructor(vfs: Vfs = new Vfs(), onWatchEvent: WatchEventReporter = () => {}, onPersist?: (path: string) => void) {
     this.vfs = vfs;
     this.onWatchEvent = onWatchEvent;
-    vfs.onChange = (path, kind) => {
+    vfs.onChange = (path, kind, contentChanged) => {
       for (const [watchId, watch] of this.watches) {
         if (watchMatches(watch, path)) this.onWatchEvent(watch.clientId, watchId, kind, watchRelativeName(watch, path));
       }
-      onPersist?.(path);
+      if (contentChanged) onPersist?.(path);
     };
     const path = (fields: Uint8Array[], i = 0) => decodeBytes(at(fields, i));
 
@@ -287,6 +301,34 @@ class FsServer {
       }
     }
     this.openFds.delete(clientId);
+  }
+
+  /**
+   * What `clientId`'s currently pending request is about - `undefined` if there's no pending
+   * request at all. A read-only peek: `readRequest` only ever reads the SAB (the request is only
+   * actually consumed once `service()` itself calls it and writes a reply), so this can run any
+   * number of times, from anywhere, before `service()` eventually answers the same request -
+   * `service()`'s own later `readRequest` call just re-reads the identical bytes.
+   *
+   * FsServer stays OPFS-agnostic either way (same principle as `onPersist` in the constructor,
+   * see its own comment) - this only exposes WHAT a pending request touches and its shape, never
+   * what to do about it. The one real caller today is OPFS lazy restore (`fs/opfsPersistence.ts`'s
+   * `restoreFromOpfsLazy`, wired in via `workers/fs/handler.ts`): before letting a doorbell
+   * actually run, it checks whether the request's own path(s) still need materializing from OPFS
+   * - and, for `isRecursiveRemove`, whether they can safely skip that (see its own doc comment).
+   */
+  peekPendingRequest(clientId: number): { paths: string[]; isRecursiveRemove: boolean } | undefined {
+    const views = this.clients.get(clientId);
+    if (!views || !hasPendingRequest(views)) return undefined;
+    try {
+      const { opcode, flags, fields } = readRequest(views);
+      if (!isFsOpcode(opcode) || NO_PATH_OPCODES.has(opcode)) return { paths: [], isRecursiveRemove: false };
+      const indices = TWO_PATH_OPCODES.has(opcode) ? [0, 1] : [0];
+      const paths = indices.map((i) => decodeBytes(at(fields, i)));
+      return { paths, isRecursiveRemove: opcode === OP_RM && (flags & FLAG_RECURSIVE) !== 0 };
+    } catch {
+      return { paths: [], isRecursiveRemove: false }; // malformed - service()'s own later readRequest() will report the real error
+    }
   }
 
   /** Answers `clientId`'s pending request, if it still has one. */

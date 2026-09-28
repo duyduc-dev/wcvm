@@ -172,6 +172,106 @@ const saveSymlinkManifest = async (root: IOpfsDirHandle, manifest: Record<string
   await writable.close();
 };
 
+/**
+ * Replays one manifest entry as a real `vfs.symlink()` call. Returns "orphaned" for the one
+ * specific failure that means the manifest entry itself is stale, not just not-yet-restored:
+ * `Vfs.walk()` throws ENOENT (as opposed to `Vfs.symlink()`'s own EEXIST, thrown when the path
+ * already has SOMETHING there) exactly when an intermediate path segment - the symlink's own
+ * parent directory - doesn't exist. If that parent will never exist (its owning project is
+ * genuinely gone, not just deferred), this entry is dead weight: every future boot would
+ * re-attempt it and re-log the same failure forever, since nothing ever removes it on its own.
+ * Confirmed as a real, reproduced case: `wc.fs.reset()` (Studio's "Clear All") deletes projects
+ * via `fs.rm()`, whose own manifest cleanup (`createOpfsMirror`'s `removeSymlinksUnder`) runs on
+ * the SAME write-behind queue as everything else - if a reload lands before that queue drains,
+ * a project's real files can be gone while its manifest entries survive, orphaned. Any OTHER
+ * failure is logged and left alone, exactly as before - it isn't proof of staleness, just an
+ * ordinary restore hiccup (see this function's callers' own comments). */
+const replaySymlink = (vfs: Vfs, linkPath: string, target: string): "ok" | "orphaned" => {
+  try {
+    vfs.symlink(target, linkPath);
+    return "ok";
+  } catch (error) {
+    if (error instanceof VfsError && error.code === "ENOENT") return "orphaned";
+    console.error(`wcvm: failed to restore symlink ${linkPath} -> ${target}:`, error);
+    return "ok";
+  }
+};
+
+/** Runs `replaySymlink` over every `[linkPath, target]` in `entries`, then - only if any turned
+ *  out orphaned - removes exactly those keys from `manifest` and persists the result, so the
+ *  same dead entries don't keep resurfacing on every future boot. `manifest` is mutated in
+ *  place: safe even if a DIFFERENT still-pending root's own materialization is concurrently
+ *  pruning other keys out of the same shared object (independent map keys, no conflict) - the
+ *  resave itself isn't strictly ordered against a concurrent one, but that's harmless here, see
+ *  this module's own `withSuppressedOnChange` for the one place ordering actually matters. */
+const replaySymlinksAndPruneOrphans = async (
+  vfs: Vfs,
+  root: IOpfsDirHandle,
+  manifest: Record<string, string>,
+  entries: [string, string][],
+): Promise<void> => {
+  const orphaned: string[] = [];
+  for (const [linkPath, target] of entries) {
+    if (replaySymlink(vfs, linkPath, target) === "orphaned") orphaned.push(linkPath);
+  }
+  if (orphaned.length === 0) return;
+  console.error(`wcvm: pruning ${orphaned.length} orphaned symlink manifest entr${orphaned.length === 1 ? "y" : "ies"} (their own project is gone, not just not-yet-restored):`, orphaned);
+  for (const linkPath of orphaned) delete manifest[linkPath];
+  await saveSymlinkManifest(root, manifest);
+};
+
+/** Runs `fn` over `items` with at most `limit` in flight at once - same shape as
+ *  `programs/npm/install.ts`'s own `mapLimit` (kept local rather than shared: it's four lines,
+ *  and the two call sites want different failure handling - this one's `fn` never rejects, it
+ *  logs and swallows internally, same as every other per-entry restore error). */
+const mapLimit = async <T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> => {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+};
+
+// A real npm-installed node_modules tree is many thousands of small files. Reading them back one
+// at a time (one getFile()+arrayBuffer() round trip, awaited before starting the next) made
+// restoring a handful of such projects on one boot take well over the host's own default 10s
+// ERR_BOOT_TIMEOUT - confirmed directly: with ~10 persisted React/Vite projects each with a full
+// install, boot() timed out outright, not just felt slow. Unlike createOpfsMirror's own dir-
+// handle-cache fix (this file's own comment on it: redundant ANCESTOR re-resolution, not raw
+// per-file I/O, was that path's dominant cost), restoreFromOpfs never re-resolves a directory - it
+// already walks down via entries() and holds each handle once - so there's no analogous ancestor
+// cost to fix here; the files themselves are the bulk of the work, and they don't depend on each
+// other, so reading them concurrently is a straightforward, safe win.
+const RESTORE_CONCURRENCY = 32;
+
+/** Walks `root`'s structure into `vfs` (mkdir'ing every directory, so a file's parent always
+ *  exists by the time anything needs it) and collects every file into `files` rather than reading
+ *  its content yet - restoreFromOpfs reads all of those concurrently afterward, see its own doc
+ *  comment for why. Directory walking itself stays sequential: it's cheap relative to file
+ *  content (see RESTORE_CONCURRENCY's own comment), and staying sequential is what guarantees a
+ *  directory's own mkdir has already happened before anything below it is even considered. */
+const collectOpfsTree = async (
+  vfs: Vfs,
+  root: IOpfsDirHandle,
+  path: string,
+  files: { path: string; handle: IOpfsFileHandle }[],
+): Promise<void> => {
+  for await (const [name, handle] of root.entries()) {
+    if (path === "/" && name === SYMLINK_MANIFEST_NAME) continue; // not part of the vfs's own tree
+    const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
+    try {
+      if (handle.kind === "directory") {
+        vfs.mkdir(childPath);
+        await collectOpfsTree(vfs, handle, childPath, files);
+      } else {
+        files.push({ path: childPath, handle });
+      }
+    } catch (error) {
+      console.error(`wcvm: failed to restore ${childPath} from OPFS, skipping it:`, error);
+    }
+  }
+};
+
 /** Recreates OPFS's tree inside `vfs` (called once, before the FS Worker serves anything), then
  *  replays every recorded symlink on top of it (directories/files must already exist for a
  *  symlink to usefully point at). Each entry is restored independently - a single corrupted or
@@ -182,33 +282,170 @@ const saveSymlinkManifest = async (root: IOpfsDirHandle, manifest: Record<string
  *  its `postMessage({type: "ready"})` line - hanging the entire kernel's boot until the host's own
  *  unrelated `ERR_BOOT_TIMEOUT` fires 10 seconds later, for a problem localized to one bad file. */
 export const restoreFromOpfs = async (vfs: Vfs, root: IOpfsDirHandle, path = "/"): Promise<void> => {
-  for await (const [name, handle] of root.entries()) {
-    if (path === "/" && name === SYMLINK_MANIFEST_NAME) continue; // not part of the vfs's own tree
-    const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
+  const files: { path: string; handle: IOpfsFileHandle }[] = [];
+  await collectOpfsTree(vfs, root, path, files);
+
+  await mapLimit(files, RESTORE_CONCURRENCY, async ({ path: filePath, handle }) => {
     try {
-      if (handle.kind === "directory") {
-        vfs.mkdir(childPath);
-        await restoreFromOpfs(vfs, handle, childPath);
-      } else {
-        const file = await handle.getFile();
-        vfs.writeFile(childPath, new Uint8Array(await file.arrayBuffer()));
-      }
+      const file = await handle.getFile();
+      vfs.writeFile(filePath, new Uint8Array(await file.arrayBuffer()));
     } catch (error) {
-      console.error(`wcvm: failed to restore ${childPath} from OPFS, skipping it:`, error);
+      console.error(`wcvm: failed to restore ${filePath} from OPFS, skipping it:`, error);
     }
-  }
+  });
 
   if (path !== "/") return; // symlinks are only ever replayed once, at the top-level call
-  for (const [linkPath, target] of Object.entries(await loadSymlinkManifest(root))) {
-    try {
-      vfs.symlink(target, linkPath);
-    } catch (error) {
-      // The path could legitimately already be occupied by a real, correctly-restored file if a
-      // symlink at that exact path was later replaced by one in some earlier session (not a real
-      // npm scenario, but not worth failing the whole restore over) - log and move on.
-      console.error(`wcvm: failed to restore symlink ${linkPath} -> ${target}:`, error);
+  const manifest = await loadSymlinkManifest(root);
+  await replaySymlinksAndPruneOrphans(vfs, root, manifest, Object.entries(manifest));
+};
+
+/** True when `path` is `root` itself, or (recursively) beneath it. */
+const isUnderOrEqual = (path: string, root: string): boolean =>
+  path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
+
+/** OPFS lazy restore: `boot({persist})`'s opt-in `lazyDepth` (see IFsWorkerBoot) instead of
+ *  eagerly reading every persisted project's full content on every boot (restoreFromOpfs above -
+ *  still what runs when lazyDepth isn't set, so nothing changes for an existing consumer that
+ *  never opts in). Only directory STRUCTURE down to `lazyDepth` path segments is restored eagerly
+ *  (mkdir only - cheap, and Studio's own /home/user/projects/<name> convention has no files at
+ *  those shallow levels anyway); each directory found AT that depth becomes its own independently
+ *  deferred unit, fully restored only once something actually touches a path under it - see
+ *  `ensureRestored`. */
+export interface ILazyOpfsRestore {
+  /** Resolves once every still-pending lazy root that any of `paths` touches - as an ancestor
+   *  (the normal "reading into this project" case) or as a DESCENDANT (see below) - has been
+   *  fully restored. A no-op for a path that was never lazy, or whose owning root is already done. */
+  ensureRestored(paths: string[]): Promise<void>;
+  /**
+   * Drops any still-pending root that `paths` touches (ancestor, equal, or containing
+   * descendant - same reach as `ensureRestored`) WITHOUT ever materializing it. Safe ONLY for a
+   * recursive remove: `createOpfsMirror`'s own delete handling (`removeMirrored`) is purely
+   * path-based OPFS `removeEntry`, independent of vfs state, so the real OPFS data under a
+   * still-pending root gets correctly, fully removed by `vfs.rm()`'s own (empty-placeholder)
+   * mirror event either way - materializing first was always pure waste for this one case, never
+   * a safety requirement (unlike rename, which genuinely needs it - see `ensureRestored`'s own
+   * comment).
+   *
+   * This matters more than the wasted-work framing alone suggests: `wc.fs.reset()` (Studio's
+   * "Clear All") recursively removes a single shared ancestor (`/home`) that CONTAINS every
+   * still-pending project at once - without this, that one call had to fully materialize the
+   * ENTIRE persisted history (774MB / ~6s in the field, for one real user's accumulated projects)
+   * before it could even start deleting. That's a wide window for a page reload to land mid-
+   * flight and leave OPFS partially cleaned: project directories gone, but their own symlink
+   * manifest entries never reached (a separate, serialized queue - `createOpfsMirror`'s own
+   * `manifestChain` comment) - orphaned forever after, since nothing ever revisits a deleted
+   * project to retry its cleanup. `replaySymlinksAndPruneOrphans` self-heals that half after the
+   * fact; this is the other half - make the actual deletion fast and safe enough that the race
+   * window barely exists in the first place. */
+  discardPending(paths: string[]): void;
+}
+
+export const restoreFromOpfsLazy = async (vfs: Vfs, root: IOpfsDirHandle, lazyDepth: number): Promise<ILazyOpfsRestore> => {
+  const pending = new Map<string, { handle: IOpfsDirHandle; promise?: Promise<void> }>();
+
+  const walkShallow = async (dir: IOpfsDirHandle, path: string, depth: number): Promise<void> => {
+    for await (const [name, handle] of dir.entries()) {
+      if (path === "/" && name === SYMLINK_MANIFEST_NAME) continue;
+      const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
+      try {
+        if (handle.kind === "directory") {
+          vfs.mkdir(childPath);
+          if (depth + 1 >= lazyDepth) pending.set(childPath, { handle });
+          else await walkShallow(handle, childPath, depth + 1);
+        } else {
+          // A file at or above the lazy boundary itself - restored eagerly, same as
+          // restoreFromOpfs always has: laziness only applies to a DIRECTORY'S deferred content.
+          const file = await handle.getFile();
+          vfs.writeFile(childPath, new Uint8Array(await file.arrayBuffer()));
+        }
+      } catch (error) {
+        console.error(`wcvm: failed to restore ${childPath} from OPFS, skipping it:`, error);
+      }
     }
-  }
+  };
+  await walkShallow(root, "/", 0);
+
+  // Loaded once, up front - it's one small JSON file, not the bulk of restore's own cost (that's
+  // real file content, see restoreFromOpfs's own comment). A symlink whose path isn't under any
+  // still-pending root can be replayed immediately; the rest wait for their owning root.
+  const manifest = await loadSymlinkManifest(root);
+  await replaySymlinksAndPruneOrphans(
+    vfs,
+    root,
+    manifest,
+    Object.entries(manifest).filter(([linkPath]) => ![...pending.keys()].some((r) => isUnderOrEqual(linkPath, r))),
+  );
+
+  // Unlike the top-level restore above (run BEFORE the mirror is ever wired up - see its own
+  // comment), a lazy root is materialized on demand, well after FsServer has already pointed
+  // vfs.onChange at the real mirror+watch dispatcher. Left alone, every mkdir/writeFile this does
+  // would round-trip straight back out to OPFS as if each restored file were a brand new write -
+  // wasted I/O for data already correctly there - and could fire spurious watch events for files
+  // nothing actually created or changed this session, only just paged into memory. A plain
+  // save-swap-restore of vfs.onChange isn't enough: two DIFFERENT lazy roots can legitimately
+  // materialize concurrently (nothing serializes ensureRestored callers), and whichever one
+  // finishes first would restore the real handler while the other is still mid-restore, letting
+  // ITS remaining writes leak through. A depth counter makes this correct regardless of overlap -
+  // only the outermost suppress/restore pair actually touches vfs.onChange.
+  let suppressDepth = 0;
+  let realOnChange: typeof vfs.onChange | undefined;
+  const withSuppressedOnChange = async (fn: () => Promise<void>): Promise<void> => {
+    if (suppressDepth === 0) {
+      realOnChange = vfs.onChange;
+      vfs.onChange = () => {};
+    }
+    suppressDepth++;
+    try {
+      await fn();
+    } finally {
+      suppressDepth--;
+      if (suppressDepth === 0) vfs.onChange = realOnChange!;
+    }
+  };
+
+  /** Fully restores one still-pending root: reuses restoreFromOpfs itself (a non-"/" `path` makes
+   *  it skip ITS OWN symlink-manifest handling - see its own doc comment - so this is exactly the
+   *  same concurrent directory+file restore boot() uses, just scoped to one subtree), then replays
+   *  whichever symlinks belong under it from the manifest already loaded above. */
+  const materialize = async (rootPath: string, handle: IOpfsDirHandle): Promise<void> => {
+    await withSuppressedOnChange(async () => {
+      await restoreFromOpfs(vfs, handle, rootPath);
+      const own = Object.entries(manifest).filter(([linkPath]) => isUnderOrEqual(linkPath, rootPath));
+      await replaySymlinksAndPruneOrphans(vfs, root, manifest, own);
+    });
+  };
+
+  const ensureOne = async (rootPath: string): Promise<void> => {
+    const entry = pending.get(rootPath);
+    if (!entry) return; // already materialized (or never was a lazy root)
+    entry.promise ??= materialize(rootPath, entry.handle).finally(() => pending.delete(rootPath));
+    await entry.promise;
+  };
+
+  // Shared by ensureRestored and discardPending: which still-pending roots any of `paths`
+  // touches, checked in BOTH directions - not just "is this path under some pending root", but
+  // also "does this path CONTAIN one or more pending roots" (renaming or removing
+  // /home/user/projects itself, say, sweeps every project under it at once). See ensureRestored's
+  // own comment for why rename specifically needs the materialized data either way, and
+  // discardPending's own comment for why a recursive remove specifically does NOT.
+  const matchingRoots = (paths: string[]): string[] => {
+    const roots = new Set<string>();
+    for (const path of paths) {
+      for (const rootPath of pending.keys()) {
+        if (isUnderOrEqual(path, rootPath) || isUnderOrEqual(rootPath, path)) roots.add(rootPath);
+      }
+    }
+    return [...roots];
+  };
+
+  return {
+    ensureRestored: async (paths: string[]): Promise<void> => {
+      await Promise.all(matchingRoots(paths).map((r) => ensureOne(r)));
+    },
+    discardPending: (paths: string[]): void => {
+      for (const rootPath of matchingRoots(paths)) pending.delete(rootPath);
+    },
+  };
 };
 
 const mirrorFile = async (ensureDirCached: (dirPath: string) => Promise<IOpfsDirHandle>, path: string, data: Uint8Array): Promise<void> => {

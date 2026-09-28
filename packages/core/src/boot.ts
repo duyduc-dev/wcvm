@@ -18,8 +18,17 @@ interface IBootOptions {
    * instances on the same origin (different demos, or just two tabs) from sharing storage unless
    * they deliberately choose the same one. OPFS has no symlinks, so a script's own symlinks are
    * not persisted (see fs/opfsPersistence.ts).
+   *
+   * `lazyDepth`, if set, changes restore from eager (every persisted file read back into memory
+   * before `ready` - the default) to lazy: only directory structure down to `lazyDepth` path
+   * segments is restored up front, and each directory found there is fully restored only once
+   * something actually touches a path under it (fs/opfsPersistence.ts's `restoreFromOpfsLazy`).
+   * Meant for a host whose own persisted paths group naturally into independent units at a fixed
+   * depth (a project manager keeping every project under `/<base>/<name>`, say, with `lazyDepth`
+   * set to `<name>`'s own segment count) - boot then no longer pays for every OLD unit's own data
+   * on every single boot, only the ones actually opened this session.
    */
-  persist?: boolean | { root: string };
+  persist?: boolean | { root?: string; lazyDepth?: number };
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 10_000;

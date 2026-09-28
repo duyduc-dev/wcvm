@@ -56,9 +56,11 @@ interface IKernelHostParams {
   /** Sends events (`process:stdout`, `process:exit`, ...) to the host. */
   emit: (message: KernelMessage) => void;
   /** OPFS persistence (fs/opfsPersistence.ts): omitted/false for a purely in-memory Vfs (the
-   *  default), true for the default root name, or an explicit one - see DEFAULT_PERSIST_ROOT.
-   *  Must be decided at boot: restoring happens before the fs worker ever serves a syscall. */
-  persist?: boolean | { root: string };
+   *  default), true for the default root name, or an object for an explicit root name and/or
+   *  `lazyDepth` (fs/opfsPersistence.ts's `restoreFromOpfsLazy` - omitted, every persisted file
+   *  is restored eagerly on boot, exactly as before). Must be decided at boot: restoring happens
+   *  before the fs worker ever serves a syscall. */
+  persist?: boolean | { root?: string; lazyDepth?: number };
 }
 
 const KERNEL_FS_CLIENT_ID = 0;
@@ -107,7 +109,12 @@ const createKernelHost = async ({
     };
     fsWorker.postMessage({
       type: "boot",
-      persist: persist ? { root: typeof persist === "object" ? persist.root : DEFAULT_PERSIST_ROOT } : false,
+      persist: persist
+        ? {
+            root: (typeof persist === "object" ? persist.root : undefined) ?? DEFAULT_PERSIST_ROOT,
+            lazyDepth: typeof persist === "object" ? persist.lazyDepth : undefined,
+          }
+        : false,
     });
   });
 

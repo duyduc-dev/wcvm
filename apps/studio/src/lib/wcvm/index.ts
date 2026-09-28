@@ -11,7 +11,13 @@ const bootWcvm = (): Promise<void> => {
 
   bootPromise = (async () => {
     WcvmInstance = boot({
-      persist: true,
+      // lazyDepth 4 matches DEFAULT_PROJECTS_DIR (/home/user/projects/<name> - home/user/projects
+      // is 3 segments, so each project's own directory, the 4th, becomes its own lazy-restored
+      // unit). Without this, boot restores every persisted project's full node_modules on every
+      // single page load - confirmed directly to hit ERR_BOOT_TIMEOUT outright with enough
+      // projects accumulated (~10 real React/Vite installs, 774MB/27k files). Lazy restore defers
+      // a project's content until something actually opens it instead.
+      persist: { lazyDepth: 4 },
     });
 
     if (import.meta.env.DEV) {

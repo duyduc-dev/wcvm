@@ -19,7 +19,7 @@ const createBootHandler =
       createProcessWorker,
       createFetcherWorker,
       emit: onPostMessage,
-      persist: event.data.persist as boolean | { root: string } | undefined,
+      persist: event.data.persist as boolean | { root?: string; lazyDepth?: number } | undefined,
     });
     stateManager.setState({ kernel });
     onPostMessage({ type: "ready" });
