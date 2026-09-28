@@ -51,16 +51,18 @@ const createBlankTemplateProject = async (
       },
       "README.md": {
         file: {
-          contents: `
-      # ${projectName}
-
-A blank project created.
+          contents: `# ${projectName}\n\nA blank project created.
         `,
         },
       },
     },
     projectPath,
   );
+
+  // OPFS persistence (boot({persist})) is write-behind - without this, a reload right after
+  // "created" reports success could still lose files that hadn't finished mirroring yet (see
+  // wc.fs.sync()'s own doc comment). A no-op when persistence isn't enabled.
+  await wc.fs.sync();
 
   return {
     isFailure: false,

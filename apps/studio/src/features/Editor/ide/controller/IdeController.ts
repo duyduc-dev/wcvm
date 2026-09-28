@@ -108,7 +108,17 @@ export class IdeController {
 
   dispose(): void {
     this.stopPreviewListener?.();
-    for (const handle of this.terminals.values()) handle.dispose();
+    // Kill each terminal's own process, not just its UI - the wcvm instance itself is a singleton
+    // that outlives this editor (see @/lib/wcvm), so leaving this page (Home, or back into a
+    // different project) would otherwise leave every shell - and anything it spawned, like a
+    // `npm run dev` typed into it - running invisibly in the background forever, still holding
+    // its port (confirmed directly: a killed shell's own child_process is gone too, freeing the
+    // port immediately - wcvm's own documented subtree-kill). Mirrors what closeTerminal() already
+    // does for one terminal at a time, just for all of them at once on a full teardown.
+    for (const handle of this.terminals.values()) {
+      handle.process.kill();
+      handle.dispose();
+    }
     for (const model of this.models.values()) model.dispose();
     for (const url of this.imageUrls.values()) URL.revokeObjectURL(url);
     this.editor?.dispose();
@@ -438,13 +448,19 @@ export class IdeController {
       port: parsed.port,
       path: parsed.path,
       url: `localhost:${parsed.port}${parsed.path}`,
-      nonce: (this.snap.previewTabs.find((t) => t.id === id)?.nonce ?? 0) + 1,
     });
   }
 
+  /** Unlike `navigatePreview` (which changes the iframe's own `src` and so always renavigates it
+   *  - see `PreviewFrame`'s own effect), reloading the SAME url needs a real, explicit reload:
+   *  the frame is same-origin (the preview Service Worker relay needs that), so this reaches
+   *  into it directly, the same way `previewBack`/`previewForward` already do. */
   reloadPreviewTab(id: string): void {
-    const tab = this.snap.previewTabs.find((t) => t.id === id);
-    if (tab) this.updatePreviewTab(id, { nonce: tab.nonce + 1 });
+    try {
+      this.previewFrames.get(id)?.contentWindow?.location.reload();
+    } catch {
+      /* cross-origin — nothing to do */
+    }
   }
 
   setPreviewFrame(id: string, el: HTMLIFrameElement | null): void {

@@ -17,7 +17,6 @@ export interface PreviewTab {
   port: number | null;
   path: string;
   url: string;
-  nonce: number;
   title?: string;
 }
 
