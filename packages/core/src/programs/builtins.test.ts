@@ -77,6 +77,13 @@ describe("echo / pwd / true / false", () => {
   });
 });
 
+describe("clear", () => {
+  it("writes the ANSI erase-display/home-cursor sequence", async () => {
+    const r = await t.run("clear", []);
+    expect(r).toMatchObject({ status: 0, out: "\x1b[2J\x1b[3J\x1b[H" });
+  });
+});
+
 describe("cat", () => {
   it("prints files in order, resolving relative paths against cwd", async () => {
     t.fs.mkdir("/w");

@@ -6,10 +6,11 @@ import {
   createSyscallClient,
   makeViews,
 } from "../protocols/syscall";
-import type { FsWatchEvent, FsWorkerMessage, IFsWorkerBoot } from "../workers/fs/handler";
+import type { FlushPersistenceDone, FsWatchEvent, FsWorkerMessage, IFsWorkerBoot } from "../workers/fs/handler";
 import type { FetcherEvent, FetcherRequest } from "../workers/fetcher/messages";
 import { createFetcher, type IFetcher } from "./fetcher";
 import { createNetServer } from "./netServer";
+import { createPersistenceFlusher } from "./persistenceFlusher";
 import { createPreviewRelay, PREVIEW_PID, type IPreviewRelay } from "./previewRelay";
 import { createPreviewWebSockets, PREVIEW_WS_PID, type IPreviewWebSockets } from "./previewWebSocket";
 import {
@@ -42,6 +43,9 @@ export interface IKernelHost {
   preview: IPreviewRelay;
   previewWebSockets: IPreviewWebSockets;
   fetcher: IFetcher;
+  /** Resolves once OPFS persistence (if enabled) has caught up with every fs change so far - see
+   *  kernel/persistenceFlusher.ts and apis/Fs.ts's `sync()`. */
+  flushPersistence(): Promise<void>;
   dispose(): void;
 }
 
@@ -107,13 +111,16 @@ const createKernelHost = async ({
     });
   });
 
-  // Reassigned once the fs worker is up: the only unprompted (non-ready, non-syscall-response)
-  // message it ever sends is a watch event, to be routed to whichever process registered that
-  // watch. `processes` isn't assigned until below - fine, this only ever runs later, once some
-  // process's fs.watch/watchFile actually fires (see kernel/processes.ts's notifyWatch).
+  // Reassigned once the fs worker is up: its only unprompted (non-ready, non-syscall-response)
+  // messages are a watch event, routed to whichever process registered that watch, and a
+  // flushPersistence reply, routed to whichever wc.fs.sync() call is waiting on it. `processes`
+  // isn't assigned until below - fine, this only ever runs later (once some process's fs.watch/
+  // watchFile fires, or a sync() call actually happens).
+  const persistenceFlusher = createPersistenceFlusher({ postMessage: (message) => fsWorker.postMessage(message) });
   fsWorker.onmessage = (event) => {
-    const data = event.data as FsWatchEvent;
+    const data = event.data as FsWatchEvent | FlushPersistenceDone;
     if (data?.type === "watchEvent") processes.notifyWatch(data.clientId, data.watchId, data.eventType, data.filename);
+    else if (data?.type === "flushPersistence:done") persistenceFlusher.dispatch(data);
   };
 
   const sab = createSyscallBuffer();
@@ -286,6 +293,7 @@ const createKernelHost = async ({
     preview,
     previewWebSockets,
     fetcher,
+    flushPersistence: () => persistenceFlusher.flush(),
     dispose: () => {
       fsWorker.terminate();
       fetcherWorker.terminate();

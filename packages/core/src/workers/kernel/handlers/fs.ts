@@ -41,6 +41,13 @@ const registerFsHandlers = (router: Router): void => {
       return run(kernel.fs, event.data);
     });
   }
+  // Not an IFsClient operation (there's no such syscall) - kernel.flushPersistence() is its own
+  // async round trip to the FS Worker's OPFS mirror, same shape as kernel.fetcher.fetch().
+  router.handle("fs:sync", ({ stateManager }) => {
+    const { kernel } = stateManager.getState();
+    if (!kernel) throw new WcvmError("ERR_WORKER", "Kernel isn't ready");
+    return kernel.flushPersistence();
+  });
 };
 
 export { registerFsHandlers };

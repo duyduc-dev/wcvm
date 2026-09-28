@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { IKernelHost } from "../../../kernel";
 import { createState } from "../../../protocols/state";
 import { createLoopbackFs } from "../../../testing/loopbackFs";
@@ -6,10 +6,10 @@ import { createRouter } from "../router";
 import { IWorkerState } from "../models";
 import { registerFsHandlers } from "./fs";
 
-const setup = (ready = true) => {
+const setup = (ready = true, flushPersistence = vi.fn().mockResolvedValue(undefined)) => {
   const { fs, vfs } = createLoopbackFs();
   const stateManager = createState<IWorkerState>({
-    kernel: ready ? ({ fs, dispose() {} } as IKernelHost) : null,
+    kernel: ready ? ({ fs, flushPersistence, dispose() {} } as unknown as IKernelHost) : null,
   });
   const router = createRouter();
   registerFsHandlers(router);
@@ -19,7 +19,7 @@ const setup = (ready = true) => {
       stateManager,
       onPostMessage: () => {},
     });
-  return { send, vfs };
+  return { send, vfs, flushPersistence };
 };
 
 describe("kernel fs handlers", () => {
@@ -81,6 +81,12 @@ describe("kernel fs handlers", () => {
     await send("fs:mkdir", { path: "/p/q", recursive: true });
     await send("fs:reset");
     expect(vfs.readdir("/")).toEqual([]);
+  });
+
+  it("fs:sync waits on the kernel's own flushPersistence, not an IFsClient call", async () => {
+    const { send, flushPersistence } = setup();
+    await send("fs:sync");
+    expect(flushPersistence).toHaveBeenCalledTimes(1);
   });
 
   it("rejects with the errno code, and before the kernel is ready", async () => {

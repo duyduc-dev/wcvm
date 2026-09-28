@@ -28,21 +28,28 @@
     </div>
     <div id="terminal"></div>
     <div id="example" class="example">
-      <div id="example-label" class="example-label">Example: a Vite + React + TypeScript app - installed from npm and run entirely in this tab, sharing the one preview pane below with the Vue example</div>
+      <div id="example-label" class="example-label">Example: a Vite + React + TypeScript app - installed from npm and run entirely in this tab, sharing the one preview pane below with the other examples</div>
       <button id="example-run">run React example</button>
       <div id="example-status" class="example-status">Not running.</div>
       <div id="example-hint" class="example-hint">src/App.tsx - edit it while the app runs; changes hot-reload in the preview (React Fast Refresh keeps its state).</div>
       <textarea id="example-editor" class="example-editor" spellcheck="false" aria-label="src/App.tsx"></textarea>
     </div>
     <div id="example-vue" class="example">
-      <div id="example-vue-label" class="example-label">Example: a Vite + Vue app - installed from npm and run entirely in this tab, sharing the one preview pane below with the other two examples (starting one stops the others)</div>
+      <div id="example-vue-label" class="example-label">Example: a Vite + Vue app - installed from npm and run entirely in this tab, sharing the one preview pane below with the other examples (starting one stops the others)</div>
       <button id="example-vue-run">run Vue example</button>
       <div id="example-vue-status" class="example-status">Not running.</div>
       <div id="example-vue-hint" class="example-hint">src/App.vue - edit it while the app runs; changes hot-reload in the preview.</div>
       <textarea id="example-vue-editor" class="example-editor" spellcheck="false" aria-label="src/App.vue"></textarea>
     </div>
+    <div id="example-express" class="example">
+      <div id="example-express-label" class="example-label">Example: a plain Node + Express server, no bundler or client JS at all - installed from npm and run entirely in this tab, sharing the one preview pane below with the other examples (starting one stops the others)</div>
+      <button id="example-express-run">run Express example</button>
+      <div id="example-express-status" class="example-status">Not running.</div>
+      <div id="example-express-hint" class="example-hint">server.js - edit it while the app runs; there's no HMR for a plain server, so every edit restarts it (the preview reloads).</div>
+      <textarea id="example-express-editor" class="example-editor" spellcheck="false" aria-label="server.js"></textarea>
+    </div>
     <div id="example-create" class="example">
-      <div id="example-create-label" class="example-label">Example: `npm create vite@latest` scaffolds a REAL project here (not a hand-written template) - installed from npm and run entirely in this tab, sharing the one preview pane below with the other two examples (starting one stops the others)</div>
+      <div id="example-create-label" class="example-label">Example: `npm create vite@latest` scaffolds a REAL project here (not a hand-written template) - installed from npm and run entirely in this tab, sharing the one preview pane below with the other examples (starting one stops the others)</div>
       <button id="example-create-run">run Create Vite example</button>
       <label class="example-interactive-label"><input type="checkbox" id="example-create-interactive" /> interactive (answer create-vite's own real prompts yourself, arrow keys and all)</label>
       <div id="example-create-terminal" class="example-interactive-terminal"></div>

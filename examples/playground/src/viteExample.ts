@@ -48,13 +48,14 @@ export interface IViteExampleConfig {
       };
 }
 
-type Process = Awaited<ReturnType<IWcvm["spawn"]>>;
+export type Process = Awaited<ReturnType<IWcvm["spawn"]>>;
 
 /** Everything a process writes, as text, as it arrives - also mirrored into the shared terminal
  *  pane (if one's attached), interleaved with whatever that session is doing, so npm install's
  *  and Vite's own output (including its ongoing HMR log lines) are visible somewhere in full,
- *  not just the one-line status text derived from them. */
-const collect = (proc: Process, onText: (text: string) => void, writeToTerminal?: (text: string) => void) => {
+ *  not just the one-line status text derived from them. Exported: expressExample.ts reuses it too
+ *  (a plain `node server.js` process, not just Vite's). */
+export const collect = (proc: Process, onText: (text: string) => void, writeToTerminal?: (text: string) => void) => {
   for (const stream of [proc.stdout, proc.stderr]) {
     void (async () => {
       const reader = stream.getReader();
@@ -83,8 +84,9 @@ const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;]*m/g, "");
 /** Turns a flat "relative/path": "contents" map (much simpler for a framework's own example to
  *  author than a nested tree literal) into the nested `FileSystemTree` `wc.fs.mount()` needs -
  *  one call that writes the whole project in a single round trip, instead of a
- *  mkdir()+writeFile() pair per file each going through the host<->kernel bridge on its own. */
-const buildTree = (files: Record<string, string>): FileSystemTree => {
+ *  mkdir()+writeFile() pair per file each going through the host<->kernel bridge on its own.
+ *  Exported: expressExample.ts reuses it too. */
+export const buildTree = (files: Record<string, string>): FileSystemTree => {
   const root: FileSystemTree = {};
   for (const [path, contents] of Object.entries(files)) {
     const parts = path.split("/");

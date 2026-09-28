@@ -157,6 +157,18 @@ const sleep: Program = async ({ args, sleep: wait, stderr }) => {
   return 0;
 };
 
+// Real `clear` (via ncurses/terminfo) doesn't clear a real screen buffer itself - it writes the
+// terminal's own escape sequence for "erase display, then home the cursor" and lets the terminal
+// emulator on the other end interpret it. There's no TTY/terminfo database here, so this writes
+// the widely-supported sequence directly: `\x1b[2J` erases the visible screen, `\x1b[3J` (an xterm
+// extension real `clear` on modern terminfo also sends) erases scrollback too, `\x1b[H` homes the
+// cursor - any ANSI-compatible terminal consuming stdout (xterm.js included) renders this as a
+// real clear, harmlessly ignoring `\x1b[3J` if it doesn't support clearing scrollback.
+const clear: Program = ({ stdout }) => {
+  stdout("\x1b[2J\x1b[3J\x1b[H");
+  return 0;
+};
+
 // Captured now, at module load: a `node` program run later in this same worker installs Node's own
 // globals over the platform's (see CLAUDE.md's "never call a global by its bare name" gotcha).
 const nativeFetch: typeof fetch =
@@ -176,6 +188,7 @@ const builtins: Record<string, Program> = {
   mkdir,
   rm,
   sleep,
+  clear,
   node,
   npm,
   // `sh` resolves other builtins (including itself) by name, so this module

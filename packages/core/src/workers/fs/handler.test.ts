@@ -77,4 +77,28 @@ describe("fs worker handler", () => {
     expect(Atomics.load(ctrl, I_STATE)).toBe(STATE_REQUEST);
     port2.close();
   });
+
+  it("flushPersistence replies once the given flush() resolves, carrying the same id", async () => {
+    const server = new FsServer();
+    let resolveFlush!: () => void;
+    const replies: unknown[] = [];
+    const handle = createFsWorkerHandler(server, {
+      flush: () => new Promise((resolve) => (resolveFlush = resolve)),
+      reply: (m) => replies.push(m),
+    });
+
+    handle({ type: "flushPersistence", id: 7 });
+    expect(replies).toEqual([]); // not yet - flush() hasn't resolved
+
+    resolveFlush();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(replies).toEqual([{ type: "flushPersistence:done", id: 7 }]);
+  });
+
+  it("flushPersistence with no persistence configured is a silent no-op (no reply, no throw)", () => {
+    const server = new FsServer();
+    const handle = createFsWorkerHandler(server);
+    expect(() => handle({ type: "flushPersistence", id: 1 })).not.toThrow();
+  });
 });

@@ -9,7 +9,8 @@ type FsWorkerMessage =
       port?: MessagePort;
     }
   | { type: "unregister"; clientId: number }
-  | { type: "doorbell"; clientId: number };
+  | { type: "doorbell"; clientId: number }
+  | { type: "flushPersistence"; id: number };
 
 /**
  * Kernel -> FS Worker, sent once, before any `FsWorkerMessage` - handled directly by
@@ -35,12 +36,23 @@ export interface FsWatchEvent {
   filename: string;
 }
 
+/** File System Worker -> kernel: the reply to one `{type: "flushPersistence", id}` request, once
+ *  OPFS persistence (if enabled at all) has actually caught up - see kernel/persistenceFlusher.ts. */
+export interface FlushPersistenceDone {
+  type: "flushPersistence:done";
+  id: number;
+}
+
 /**
  * The File System Worker's message loop, separated from `self` so it can run
  * (and be tested) anywhere. A doorbell means "this client has a request parked
- * on its SAB".
+ * on its SAB". `persistence`, if given, backs "flushPersistence" - omitted (the default) when
+ * `boot({persist})` isn't enabled, in which case it's answered immediately (nothing to flush).
  */
-const createFsWorkerHandler = (server: FsServer) => {
+const createFsWorkerHandler = (
+  server: FsServer,
+  persistence?: { flush: () => Promise<void>; reply: (message: FlushPersistenceDone) => void },
+) => {
   const ports = new Map<number, MessagePort>();
 
   const release = (clientId: number) => {
@@ -69,6 +81,11 @@ const createFsWorkerHandler = (server: FsServer) => {
       case "doorbell":
         server.service(message.clientId);
         break;
+      case "flushPersistence": {
+        const { id } = message;
+        void (persistence?.flush() ?? Promise.resolve()).then(() => persistence?.reply({ type: "flushPersistence:done", id }));
+        break;
+      }
     }
   };
 };

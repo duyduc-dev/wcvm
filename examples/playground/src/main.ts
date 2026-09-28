@@ -1,5 +1,6 @@
 import { boot } from "wcvm";
 import { attachCreateViteExample } from "./createViteExample";
+import { attachExpressExample, type IExpressExampleHandle } from "./expressExample";
 import { attachPreview } from "./preview";
 import { attachReactExample } from "./reactExample";
 import { attachTerminal } from "./terminal";
@@ -49,12 +50,13 @@ try {
     attachPreview(wc, { enableButton: previewEnable, status: previewStatus, frame: previewFrame });
   }
 
-  // All three examples share the one preview pane above, so only one of their dev servers should
-  // ever be listening at a time - starting any one of them stops the other two first
+  // All four examples share the one preview pane above, so only one of their dev servers should
+  // ever be listening at a time - starting any one of them stops the other three first
   // (`onBeforeStart`); `stop()` itself is a no-op for one that isn't running.
   let reactExample: IViteExampleHandle | undefined;
   let vueExample: IViteExampleHandle | undefined;
   let createExample: IViteExampleHandle | undefined;
+  let expressExample: IExpressExampleHandle | undefined;
 
   const exampleRun = document.querySelector<HTMLButtonElement>("#example-run");
   const exampleStatus = document.querySelector<HTMLElement>("#example-status");
@@ -68,6 +70,7 @@ try {
       onBeforeStart: () => {
         vueExample?.stop("Stopped (switched to the React example).");
         createExample?.stop("Stopped (switched to the React example).");
+        expressExample?.stop("Stopped (switched to the React example).");
       },
     });
   }
@@ -84,6 +87,7 @@ try {
       onBeforeStart: () => {
         reactExample?.stop("Stopped (switched to the Vue example).");
         createExample?.stop("Stopped (switched to the Vue example).");
+        expressExample?.stop("Stopped (switched to the Vue example).");
       },
     });
   }
@@ -104,6 +108,24 @@ try {
       onBeforeStart: () => {
         reactExample?.stop("Stopped (switched to the Create Vite example).");
         vueExample?.stop("Stopped (switched to the Create Vite example).");
+        expressExample?.stop("Stopped (switched to the Create Vite example).");
+      },
+    });
+  }
+
+  const exampleExpressRun = document.querySelector<HTMLButtonElement>("#example-express-run");
+  const exampleExpressStatus = document.querySelector<HTMLElement>("#example-express-status");
+  const exampleExpressEditor = document.querySelector<HTMLTextAreaElement>("#example-express-editor");
+  if (exampleExpressRun && exampleExpressStatus && exampleExpressEditor) {
+    expressExample = attachExpressExample(wc, {
+      runButton: exampleExpressRun,
+      status: exampleExpressStatus,
+      editor: exampleExpressEditor,
+      writeToTerminal: (text) => session?.write(text),
+      onBeforeStart: () => {
+        reactExample?.stop("Stopped (switched to the Express example).");
+        vueExample?.stop("Stopped (switched to the Express example).");
+        createExample?.stop("Stopped (switched to the Express example).");
       },
     });
   }
