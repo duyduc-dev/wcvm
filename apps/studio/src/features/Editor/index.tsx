@@ -9,7 +9,7 @@ interface IProps {
 const Editor = ({ project }: IProps) => {
   return (
     <div className="h-screen w-screen overflow-hidden">
-      <IdeProvider rootPath={project.path}>
+      <IdeProvider rootPath={project.path} projectId={project.id}>
         <AppShell />
       </IdeProvider>
     </div>

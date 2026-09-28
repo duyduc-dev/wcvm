@@ -1,5 +1,6 @@
 import {
   AtomIcon,
+  FileJsIcon,
   SquareIcon,
   TriangleIcon,
   type Icon,
@@ -34,6 +35,13 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     label: "Vue",
     description: "TypeScript",
     icon: TriangleIcon,
+    category: "Frontend",
+  },
+  {
+    id: "vanilla",
+    label: "Vanilla",
+    description: "JavaScript",
+    icon: FileJsIcon,
     category: "Frontend",
   },
   {

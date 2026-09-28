@@ -5,13 +5,14 @@ import { IdeContext } from "./useIde";
 
 interface IProps {
   rootPath: string;
+  projectId: string;
   children: ReactNode;
 }
 
-export function IdeProvider({ rootPath, children }: IProps) {
+export function IdeProvider({ rootPath, projectId, children }: IProps) {
   const controller = useMemo(
-    () => new IdeController(getWcvmInstance(), rootPath),
-    [rootPath],
+    () => new IdeController(getWcvmInstance(), rootPath, projectId),
+    [rootPath, projectId],
   );
 
   useEffect(() => {

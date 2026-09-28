@@ -116,7 +116,7 @@ const CreateTemplateDialog = () => {
             </div>
           </DialogTitle>
           <DialogDescription>
-            Scaffolding a real Vite + {selected.label} + TypeScript project —
+            Scaffolding a real Vite + {selected.label} + {selected.description} project —
             this can take up to a minute the first time.
           </DialogDescription>
         </DialogHeader>
