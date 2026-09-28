@@ -7,9 +7,11 @@ import {
   ClockCounterClockwiseIcon,
   FileDashedIcon,
   FolderDashedIcon,
+  SpinnerIcon,
   TrashIcon,
 } from "@phosphor-icons/react";
 import { useNavigate } from "@tanstack/react-router";
+import { useState } from "react";
 import { useShallow } from "zustand/shallow";
 
 /** "blank" has no entry in FRAMEWORK_OPTIONS (it isn't a create-vite template) - everything else
@@ -29,6 +31,16 @@ const RecentProjects = () => {
         removeProjectByPath: s.removeProjectByPath,
       })),
     );
+  const [isClearing, setIsClearing] = useState(false);
+
+  const handleClearAll = async () => {
+    setIsClearing(true);
+    try {
+      await clearAllProject();
+    } finally {
+      setIsClearing(false);
+    }
+  };
 
   return (
     <div className="mt-8">
@@ -39,11 +51,16 @@ const RecentProjects = () => {
         </div>
         {projects.length > 0 && (
           <button
-            onClick={clearAllProject}
-            className="flex items-center gap-2 text-muted-foreground cursor-pointer hover:text-foreground transition-all hover:underline"
+            onClick={handleClearAll}
+            disabled={isClearing}
+            className="flex items-center gap-2 text-muted-foreground cursor-pointer hover:text-foreground transition-all hover:underline disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:no-underline"
           >
-            <BroomIcon size={20} />
-            <p className="text-sm">Clear All</p>
+            {isClearing ? (
+              <SpinnerIcon size={20} className="animate-spin" />
+            ) : (
+              <BroomIcon size={20} />
+            )}
+            <p className="text-sm">{isClearing ? "Clearing…" : "Clear All"}</p>
           </button>
         )}
       </div>
