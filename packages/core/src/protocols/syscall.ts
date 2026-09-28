@@ -318,6 +318,9 @@ export const OP_FUTIMES = 24;
 export const OP_READDIR_KINDS = 25;
 export const OP_WATCH_START = 26;
 export const OP_WATCH_STOP = 27;
+/** Recursive copy, entirely within the Vfs - see Vfs.ts's own `cp()` doc comment for why this
+ *  exists as its own opcode rather than a host-side loop of individual syscalls. */
+export const OP_CP = 28;
 
 export const FS_OPCODE_MAX = 63;
 export const KERNEL_OPCODE_MIN = 64;

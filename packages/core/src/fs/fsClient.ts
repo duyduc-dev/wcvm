@@ -15,6 +15,7 @@ import {
   FLAG_RECURSIVE,
   OP_CHMOD,
   OP_CLOSE,
+  OP_CP,
   OP_EXISTS,
   OP_FD_READ,
   OP_FD_WRITE,
@@ -83,6 +84,9 @@ export interface IFsClient {
   rmdir(path: string): void;
   rm(path: string, options?: { recursive?: boolean }): void;
   rename(from: string, to: string): void;
+  /** Recursive copy, entirely within the Vfs - see Vfs.ts's own `cp()` doc comment. `to` must
+   *  not already exist. */
+  cp(from: string, to: string): void;
   symlink(target: string, path: string): void;
   readlink(path: string): string;
   realpath(path: string): string;
@@ -236,6 +240,9 @@ export const createFsClient = ({ call }: ISyscallClient): IFsClient => {
     },
     rename: (from, to) => {
       call(OP_RENAME, encodeRequest([b(from), b(to)]));
+    },
+    cp: (from, to) => {
+      call(OP_CP, encodeRequest([b(from), b(to)]));
     },
     symlink: (target, path) => {
       call(OP_SYMLINK, encodeRequest([b(target), b(path)]));

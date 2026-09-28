@@ -40,13 +40,15 @@ describe("kernel fs handlers", () => {
     );
   });
 
-  it("covers rename, symlink, readlink, realpath, chmod and lstat", async () => {
-    const { send } = setup();
+  it("covers rename, cp, symlink, readlink, realpath, chmod and lstat", async () => {
+    const { send, vfs } = setup();
     await send("fs:writeFile", { path: "/a", contents: "x" });
     await send("fs:rename", { from: "/a", to: "/b" });
+    await send("fs:cp", { from: "/b", to: "/c" });
     await send("fs:symlink", { target: "/b", path: "/l" });
     await send("fs:chmod", { path: "/b", mode: 0o600 });
 
+    expect(new TextDecoder().decode(vfs.readFile("/c"))).toBe("x");
     expect(await send("fs:readlink", { path: "/l" })).toBe("/b");
     expect(await send("fs:realpath", { path: "/l" })).toBe("/b");
     expect(await send("fs:lstat", { path: "/l" })).toMatchObject({
