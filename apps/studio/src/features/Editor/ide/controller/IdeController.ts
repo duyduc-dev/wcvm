@@ -12,6 +12,7 @@ import { EditorStatus } from "./editorStatus";
 import { basename, mimeTypeFor, readTextFile, tabKindFor, writeTextFile } from "./fs.service";
 import { STATUS_MESSAGE_TIMEOUT_MS } from "./constants";
 import { applyTheme, getInitialIsDark } from "@/lib/theme";
+import { useWcvmProjectStore } from "@/stores/useWcvmProjectStore";
 import {
   createEmptyPreviewTab,
   createPreviewTab,
@@ -48,9 +49,11 @@ export class IdeController {
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly wc: IWcvm;
+  private readonly projectId: string;
 
-  constructor(wc: IWcvm, rootPath: string) {
+  constructor(wc: IWcvm, rootPath: string, projectId: string) {
     this.wc = wc;
+    this.projectId = projectId;
     this.snap = {
       rootPath,
       projectTitle: basename(rootPath),
@@ -90,6 +93,9 @@ export class IdeController {
   }
 
   start(): void {
+    // Marks the project "opened" even if nothing ends up being edited this session - saveFile()
+    // below bumps it again on an actual edit, so this is just a floor, not the only signal.
+    useWcvmProjectStore.getState().touchProject(this.projectId);
     // The `.dark` class itself is already applied app-wide at boot (see __root.tsx) — nothing
     // theme-specific to do here.
     void this.wc.preview.enable();
@@ -290,6 +296,7 @@ export class IdeController {
     this.savedContents.set(path, contents);
     this.set({ dirty: this.snap.dirty.filter((p) => p !== path) });
     this.status(`Saved ${basename(path)}`);
+    useWcvmProjectStore.getState().touchProject(this.projectId);
   }
 
   saveActiveFile(): void {

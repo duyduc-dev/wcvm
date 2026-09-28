@@ -24,6 +24,9 @@ interface IWcvmProjectStore {
   ) => Promise<BlankTemplateCreationResult & { project?: IWcvmProject }>;
   clearAllProject: () => Promise<void>;
   removeProjectByPath: (path: string) => void;
+  /** Bumps `updatedAt` to now - called when a project is opened AND whenever a file in it is
+   *  saved (see IdeController), so "last edit time" reflects whichever happened more recently. */
+  touchProject: (id: string) => void;
 }
 
 export const useWcvmProjectStore = create<IWcvmProjectStore>()(
@@ -48,10 +51,12 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
               : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
+          const now = Date.now();
           const project: IWcvmProject = {
             path: input,
             id,
-            createdAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
             type,
           };
           set((state) => ({ projects: [project, ...state.projects] }));
@@ -73,6 +78,12 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
         removeFolderByPath(path);
         set((prev) => ({
           projects: prev.projects.filter((p) => p.path !== path),
+        }));
+      },
+
+      touchProject(id: string) {
+        set((prev) => ({
+          projects: prev.projects.map((p) => (p.id === id ? { ...p, updatedAt: Date.now() } : p)),
         }));
       },
     }),
