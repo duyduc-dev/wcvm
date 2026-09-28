@@ -1,5 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { collectText } from "./processUtils";
+import { populateCache, tryCloneFromCache } from "./templateCache";
 import { pinVitePackage } from "./vitePins";
 
 export interface RectifyTemplateCreationResult {
@@ -217,6 +218,11 @@ const createRectifyTemplateProject = async (
     };
   }
 
+  onProgress?.("Checking the local template cache…");
+  if (await tryCloneFromCache("rectify", projectPath)) {
+    return { isFailure: false, message: "ok" };
+  }
+
   onProgress?.("Scaffolding a Vite + Rectify + TypeScript base…");
   const created = await wc.spawn(
     "npm",
@@ -275,6 +281,10 @@ const createRectifyTemplateProject = async (
   // "created" reports success could still lose files npm install just wrote but hadn't finished
   // mirroring yet (see wc.fs.sync()'s own doc comment). A no-op when persistence isn't enabled.
   await wc.fs.sync();
+
+  // Fire-and-forget, AFTER the real project is already synced and reported - see
+  // populateCache's own comment for why folding this into the sync() above would be wrong.
+  void populateCache("rectify", projectPath);
 
   return { isFailure: false, message: "ok" };
 };
