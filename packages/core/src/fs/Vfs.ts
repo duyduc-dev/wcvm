@@ -86,7 +86,17 @@ interface IFdEntry {
  *  attributes changed (writeFile/write/ftruncate on existing content, chmod, utimes). Mirrors
  *  the two event kinds real fs.watch delivers (inotify's many event types, coalesced). */
 export type VfsChangeKind = "rename" | "change";
-export type VfsChangeReporter = (path: string, kind: VfsChangeKind) => void;
+/** `contentChanged` is false ONLY for chmod/utimes/futimes: real byte content is exactly what it
+ *  says, unaffected - and it's what OPFS write-behind mirroring (fs/opfsPersistence.ts) actually
+ *  moves. fs.watch() dispatch (FsServer's own onChange wiring) still fires for every kind
+ *  regardless - real Node's fs.watch DOES report a 'change' for a bare chmod/utimes too - this
+ *  only tells the MIRROR "there is no new byte content to re-persist here". OPFS has no notion of
+ *  Unix mode bits or custom atime/mtime at all, so mirroring in response to one of these was
+ *  always re-writing the exact same bytes already correctly there for nothing: confirmed as a
+ *  real, measured cost - a real npm install's own `programs/npm/install.ts` `extract()` calls
+ *  `fs.chmod()` right after every single `fs.writeFile()`, so every extracted file was being
+ *  mirrored to OPFS TWICE (once for its real content, once - uselessly - for the chmod). */
+export type VfsChangeReporter = (path: string, kind: VfsChangeKind, contentChanged: boolean) => void;
 
 interface IResolved {
   parent: IDirInode | null;
@@ -323,7 +333,7 @@ export class Vfs {
       const { parent, name, node } = this.walk(path, false);
       if (node || !parent) throw new VfsError("EEXIST", path);
       this.link_(parent, name, this.newDir(mode));
-      this.onChange(path, "rename");
+      this.onChange(path, "rename", true);
       return;
     }
 
@@ -340,7 +350,7 @@ export class Vfs {
         return;
       }
       this.link_(parent as IDirInode, name, this.newDir(mode));
-      this.onChange(current, "rename");
+      this.onChange(current, "rename", true);
     });
   }
 
@@ -362,14 +372,14 @@ export class Vfs {
       if (node.kind !== "file") throw new VfsError("EINVAL", path);
       this.setSize(node, 0);
       this.putBytes(node, 0, data);
-      this.onChange(path, "change");
+      this.onChange(path, "change", true);
       return;
     }
     if (!parent) throw new VfsError("EISDIR", path);
     const file = this.newFile(options.mode ?? 0o644);
     this.putBytes(file, 0, data);
     this.link_(parent, name, file);
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   unlink(path: string) {
@@ -377,7 +387,7 @@ export class Vfs {
     if (!node) throw new VfsError("ENOENT", path);
     if (node.kind === "dir") throw new VfsError("EISDIR", path);
     this.unlinkEntry(parent as IDirInode, name);
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   rmdir(path: string) {
@@ -387,7 +397,7 @@ export class Vfs {
     if (!parent) throw new VfsError("EBUSY", path);
     if (node.entries.size > 0) throw new VfsError("ENOTEMPTY", path);
     this.unlinkEntry(parent, name);
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   rm(path: string, options: { recursive?: boolean } = {}) {
@@ -398,7 +408,7 @@ export class Vfs {
       throw new VfsError("EISDIR", path);
     }
     this.unlinkEntry(parent, name);
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   rename(from: string, to: string) {
@@ -428,8 +438,8 @@ export class Vfs {
     this.touch(source.parent);
     this.link_(target.parent, target.name, source.node);
     source.node.ctimeMs = Date.now();
-    this.onChange(from, "rename");
-    this.onChange(to, "rename");
+    this.onChange(from, "rename", true);
+    this.onChange(to, "rename", true);
   }
 
   /** True when `needle` is `dir` itself or lives anywhere beneath it. */
@@ -445,7 +455,7 @@ export class Vfs {
     const { parent, name, node } = this.walk(path, false);
     if (node || !parent) throw new VfsError("EEXIST", path);
     this.link_(parent, name, this.newSymlink(target));
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   readlink(path: string): string {
@@ -458,7 +468,7 @@ export class Vfs {
     const node = this.lookup(path, true);
     node.mode = mode & 0o7777;
     node.ctimeMs = Date.now();
-    this.onChange(path, "change");
+    this.onChange(path, "change", false);
   }
 
   /** Hard link: `path` becomes another name for the same file. Directories cannot be linked. */
@@ -469,19 +479,19 @@ export class Vfs {
     if (node || !parent) throw new VfsError("EEXIST", path);
     source.nlink++;
     this.link_(parent, name, source);
-    this.onChange(path, "rename");
+    this.onChange(path, "rename", true);
   }
 
   /** Sets access and modification times (milliseconds since the epoch). */
   utimes(path: string, atimeMs: number, mtimeMs: number, followLink = true) {
     this.setTimes(this.lookup(path, followLink), atimeMs, mtimeMs);
-    this.onChange(path, "change");
+    this.onChange(path, "change", false);
   }
 
   futimes(fd: number, atimeMs: number, mtimeMs: number) {
     const entry = this.entry(fd);
     this.setTimes(entry.node, atimeMs, mtimeMs);
-    this.onChange(entry.path, "change");
+    this.onChange(entry.path, "change", false);
   }
 
   private setTimes(node: Inode, atimeMs: number, mtimeMs: number) {
@@ -541,7 +551,7 @@ export class Vfs {
       const file = this.newFile(mode & 0o7777);
       this.link_(parent, name, file);
       target = file;
-      this.onChange(realPath, "rename");
+      this.onChange(realPath, "rename", true);
     }
 
     let fd = 3;
@@ -589,7 +599,7 @@ export class Vfs {
     if (position < 0 || entry.flags & O_APPEND) {
       entry.position = start + bytes.length;
     }
-    this.onChange(entry.path, "change");
+    this.onChange(entry.path, "change", true);
     return bytes.length;
   }
 
@@ -602,6 +612,6 @@ export class Vfs {
     if (!isWritable(entry.flags)) throw new VfsError("EBADF");
     if (entry.node.kind !== "file") throw new VfsError("EINVAL");
     this.setSize(entry.node, length);
-    this.onChange(entry.path, "change");
+    this.onChange(entry.path, "change", true);
   }
 }

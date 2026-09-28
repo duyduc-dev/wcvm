@@ -3,7 +3,7 @@ import type { IOpfsDirHandle, IOpfsFileHandle } from "../fs/opfsPersistence";
 const notFound = (): Error => Object.assign(new Error("NotFoundError"), { name: "NotFoundError" });
 const typeMismatch = (): Error => Object.assign(new Error("TypeMismatchError"), { name: "TypeMismatchError" });
 
-type FileNode = { kind: "file"; bytes: Uint8Array };
+type FileNode = { kind: "file"; bytes: Uint8Array; failOnRead?: boolean };
 type DirNode = { kind: "directory"; children: Map<string, FileNode | DirNode> };
 type Node = FileNode | DirNode;
 
@@ -29,7 +29,10 @@ const walk = (root: DirNode, path: string, create: boolean): DirNode | undefined
 
 const wrapFile = (node: FileNode): IOpfsFileHandle => ({
   kind: "file",
-  getFile: async () => ({ arrayBuffer: async () => node.bytes.slice().buffer }),
+  getFile: async () => {
+    if (node.failOnRead) throw new Error("boom");
+    return { arrayBuffer: async () => node.bytes.slice().buffer };
+  },
   createWritable: async () => {
     let buffer = new Uint8Array(0);
     return {
@@ -93,6 +96,12 @@ export interface IFakeOpfsDir extends IOpfsDirHandle {
   readFileAt(path: string): Uint8Array | undefined;
   /** Test helper: true if a directory (empty or not) exists at `path`. */
   hasDirAt(path: string): boolean;
+  /** Test helper: seeds a file whose own `getFile()` throws - a corrupted/unreadable OPFS entry,
+   *  reachable through a NESTED directory's own `entries()` too (unlike patching `entries()`
+   *  directly on one handle, which only ever affects that exact handle object - `wrapDir`/
+   *  `wrapFile` hand back a fresh object every call, so a handle obtained by walking further down
+   *  is never the one that got patched). */
+  seedFailingFile(path: string): void;
 }
 
 export const createFakeOpfsDir = (): IFakeOpfsDir => {
@@ -104,6 +113,11 @@ export const createFakeOpfsDir = (): IFakeOpfsDir => {
       const dir = walk(root, path.slice(0, slash) || "/", true)!;
       const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
       dir.children.set(path.slice(slash + 1), { kind: "file", bytes });
+    },
+    seedFailingFile: (path) => {
+      const slash = path.lastIndexOf("/");
+      const dir = walk(root, path.slice(0, slash) || "/", true)!;
+      dir.children.set(path.slice(slash + 1), { kind: "file", bytes: new Uint8Array(0), failOnRead: true });
     },
     readFileAt: (path) => {
       const slash = path.lastIndexOf("/");

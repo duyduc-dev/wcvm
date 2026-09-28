@@ -5,7 +5,12 @@ import {
   I_REQ_LEN,
   I_RES_LEN,
   I_STATE,
+  OP_CLOSE,
+  OP_MKDIR,
   OP_READ_FILE,
+  OP_RENAME,
+  OP_RM,
+  OP_RMDIR,
   OP_WATCH_START,
   OP_WATCH_STOP,
   STATE_REQUEST,
@@ -21,6 +26,7 @@ import {
 } from "../protocols/syscall";
 import { spawnFixtureWorker } from "../testing/spawnFixtureWorker";
 import { FsServer, type WatchEventReporter } from "./FsServer";
+import { O_RDWR } from "./Vfs";
 
 // Publishes a request the way a parked client would, without a second thread,
 // so the server's behavior can be checked in isolation.
@@ -344,5 +350,141 @@ describe("FsServer fs.watch registry", () => {
     server.vfs.writeFile("/a.txt", encodeString("x"));
     expect(events).toEqual([[2, idB, "change", "a.txt"]]);
     expect(idA).not.toBe(idB);
+  });
+});
+
+describe("FsServer onPersist vs fs.watch dispatch (contentChanged)", () => {
+  // A chmod/utimes-only change has no new bytes for OPFS write-behind mirroring to ever persist
+  // (fs/opfsPersistence.ts) - real npm installs chmod every single file right after writing it
+  // (programs/npm/install.ts's own extract()), so mirroring on THAT too was silently doubling
+  // real OPFS write traffic for no benefit. fs.watch() dispatch must NOT be filtered the same
+  // way: real Node's fs.watch() reports a plain 'change' for a bare chmod/utimes too.
+  const makeServer = () => {
+    const watchEvents: unknown[] = [];
+    const persisted: string[] = [];
+    const server = new FsServer(
+      undefined,
+      (clientId, watchId, eventType, filename) => watchEvents.push([clientId, watchId, eventType, filename]),
+      (path) => persisted.push(path),
+    );
+    return { server, watchEvents, persisted };
+  };
+
+  it("chmod fires the watcher but does NOT call onPersist", () => {
+    const { server, watchEvents, persisted } = makeServer();
+    server.vfs.writeFile("/a.txt", encodeString("hi"));
+    persisted.length = 0; // clear the writeFile's own (legitimate) persist call
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    publish(sab, OP_WATCH_START, [encodeString("/a.txt")]);
+    server.service(1);
+
+    server.vfs.chmod("/a.txt", 0o755);
+    expect(watchEvents).toEqual([[1, bytesToU32(outcome(sab).payload), "change", "a.txt"]]);
+    expect(persisted).toEqual([]);
+  });
+
+  it("utimes and futimes also fire the watcher but not onPersist", () => {
+    const { server, watchEvents, persisted } = makeServer();
+    server.vfs.writeFile("/a.txt", encodeString("hi"));
+    persisted.length = 0;
+
+    server.vfs.utimes("/a.txt", Date.now(), Date.now());
+    const fd = server.vfs.open("/a.txt", 0);
+    server.vfs.futimes(fd, Date.now(), Date.now());
+
+    expect(persisted).toEqual([]);
+  });
+
+  it("writeFile, write(fd) and ftruncate all still call onPersist - only chmod/utimes/futimes are skipped", () => {
+    const { persisted, server } = makeServer();
+    persisted.length = 0;
+
+    server.vfs.writeFile("/a.txt", encodeString("hi"));
+    expect(persisted).toEqual(["/a.txt"]);
+
+    const fd = server.vfs.open("/a.txt", O_RDWR);
+    server.vfs.write(fd, encodeString("bye"), 0);
+    expect(persisted).toEqual(["/a.txt", "/a.txt"]);
+
+    server.vfs.ftruncate(fd, 1);
+    expect(persisted).toEqual(["/a.txt", "/a.txt", "/a.txt"]);
+  });
+});
+
+describe("FsServer.peekPendingRequest", () => {
+  it("returns undefined when the client has no pending request", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    expect(server.peekPendingRequest(1)).toBeUndefined();
+  });
+
+  it("returns undefined for an unregistered client", () => {
+    const server = new FsServer();
+    expect(server.peekPendingRequest(1)).toBeUndefined();
+  });
+
+  it("returns the single path for an ordinary opcode, isRecursiveRemove false", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    publish(sab, OP_READ_FILE, [encodeString("/a/b.txt")]);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a/b.txt"], isRecursiveRemove: false });
+  });
+
+  it("returns both paths for rename (from and to), isRecursiveRemove false", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    publish(sab, OP_RENAME, [encodeString("/old"), encodeString("/new")]);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/old", "/new"], isRecursiveRemove: false });
+  });
+
+  it("returns no paths for an fd-based opcode - already resolved by a prior open()", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    publish(sab, OP_CLOSE, [u32ToBytes(3)]);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: [], isRecursiveRemove: false });
+  });
+
+  it("returns empty rather than throwing for an unknown opcode", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    publish(sab, 999);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: [], isRecursiveRemove: false });
+  });
+
+  it("is read-only: peeking doesn't consume the request, service() answers it normally afterward", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+    server.vfs.mkdir("/a");
+    publish(sab, OP_MKDIR, [encodeString("/a/b")], FLAG_RECURSIVE);
+
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a/b"], isRecursiveRemove: false });
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a/b"], isRecursiveRemove: false }); // peeking twice changes nothing
+
+    server.service(1);
+    expect(outcome(sab).state).toBe(STATE_RESPONSE_OK);
+    expect(server.vfs.stat("/a/b").kind).toBe("dir");
+    expect(server.peekPendingRequest(1)).toBeUndefined(); // now actually consumed
+  });
+
+  it("isRecursiveRemove is true only for OP_RM with FLAG_RECURSIVE set - not a plain rm, not rmdir/unlink", () => {
+    const server = new FsServer();
+    const sab = createSyscallBuffer();
+    server.registerClient(1, sab);
+
+    publish(sab, OP_RM, [encodeString("/a")], FLAG_RECURSIVE);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a"], isRecursiveRemove: true });
+
+    publish(sab, OP_RM, [encodeString("/a")]); // no FLAG_RECURSIVE
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a"], isRecursiveRemove: false });
+
+    publish(sab, OP_RMDIR, [encodeString("/a")], FLAG_RECURSIVE);
+    expect(server.peekPendingRequest(1)).toEqual({ paths: ["/a"], isRecursiveRemove: false });
   });
 });
