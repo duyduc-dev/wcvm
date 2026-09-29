@@ -4,8 +4,8 @@ import { parseModule } from "./ast";
 import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 
 const acorn = createTestLoader().require("internal/deps/acorn/acorn/dist/acorn");
-const rewrite = (source: string, resolveStatic: (s: string) => string = (s) => `blob:${s}`, selfUrl = "/self.mjs") =>
-  rewriteModule(source, parseModule(acorn, source, "/test.mjs"), resolveStatic, selfUrl);
+const rewrite = (source: string, resolveStatic: (s: string) => string = (s) => `blob:${s}`, selfUrl = "/self.mjs", withAcorn = false) =>
+  rewriteModule(source, parseModule(acorn, source, "/test.mjs"), resolveStatic, selfUrl, withAcorn ? acorn : undefined);
 
 describe("rewriteModule", () => {
   it("replaces a static import specifier with the resolved URL, leaving the rest of the statement intact", () => {
@@ -55,6 +55,38 @@ describe("rewriteModule", () => {
     expect(rewrite(source, undefined, "/src/entry.mjs")).toBe(
       `await ${DYNAMIC_IMPORT_BRIDGE}(new URL("./x.mjs", ${IMPORT_META_BRIDGE}("/src/entry.mjs").url).href, "/src/entry.mjs");`,
     );
+  });
+
+  it("rewrites @preact/preset-vite's own `new Function(...)` native-dynamic-import idiom, when acorn is passed", () => {
+    const source = `const importEsm = new Function("specifier", "return import(specifier)");`;
+    const out = rewrite(source, undefined, "/pkg/transform-hook-names.mjs", true);
+    expect(out).toBe(`const importEsm = ((specifier) => ${DYNAMIC_IMPORT_BRIDGE}(specifier, "/pkg/transform-hook-names.mjs"));`);
+  });
+
+  it("does the same for a bare `Function(...)` call (no `new`)", () => {
+    const source = `const f = Function("s", "return import(s)");`;
+    const out = rewrite(source, undefined, "/pkg/x.mjs", true);
+    expect(out).toBe(`const f = ((s) => ${DYNAMIC_IMPORT_BRIDGE}(s, "/pkg/x.mjs"));`);
+  });
+
+  it("leaves `new Function(...)` untouched when acorn isn't passed (no regression for existing callers)", () => {
+    const source = `const importEsm = new Function("specifier", "return import(specifier)");`;
+    expect(rewrite(source, undefined, "/pkg/x.mjs", false)).toBe(source);
+  });
+
+  it("leaves an UNRELATED `new Function(...)` call untouched (no dynamic import inside its body)", () => {
+    const source = `const add = new Function("a", "b", "return a + b");`;
+    expect(rewrite(source, undefined, "/pkg/x.mjs", true)).toBe(source);
+  });
+
+  it("leaves `new Function(...)` untouched when the body imports something OTHER than a declared parameter", () => {
+    const source = `const f = new Function("x", "return import('some-literal-specifier')");`;
+    expect(rewrite(source, undefined, "/pkg/x.mjs", true)).toBe(source);
+  });
+
+  it("leaves `new Function(...)` untouched when a non-string argument is present", () => {
+    const source = `const f = new Function(someVar, "return import(someVar)");`;
+    expect(rewrite(source, undefined, "/pkg/x.mjs", true)).toBe(source);
   });
 });
 

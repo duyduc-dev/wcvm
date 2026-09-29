@@ -39,6 +39,27 @@ export interface IEsmLoaderContext extends IEsmResolveContext {
   globalObject: Record<string, unknown>;
 }
 
+// ECMAScript reserved words, plus strict-mode-only reserved words and "await" (reserved at a
+// module's top level) - every one is a perfectly valid ExportSpecifier/ImportSpecifier NAME (the
+// public name after `as`), just never a bare BINDING identifier. A real CJS module can genuinely
+// have an exported property named one of these - e.g. @babel/types's own `import` builder, for
+// its `Import` AST node type - and real Node's own require()-from-ESM interop handles it fine
+// because it only ever creates a NAMESPACE property, never a top-level `const <name> = ...`.
+// namedReexports() below must do the same: emit those via an aliased local binding + `export {
+// local as name }` rather than `export const <name> = ...`, which is a syntax error for a
+// reserved word (confirmed for real: @babel/types's own `import` property, reached transitively
+// through solid-refresh/babel -> @babel/generator -> @babel/types, produced exactly `export const
+// import = ...` and broke Solid's whole dev server with a bare "SyntaxError: Unexpected token
+// 'import'" - no stack, no indication which module, since the invalid syntax lived in this
+// SYNTHESIZED shim rather than in any real file on disk).
+const RESERVED_WORDS = new Set([
+  "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
+  "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import",
+  "in", "instanceof", "new", "null", "return", "super", "switch", "this", "throw", "true", "try",
+  "typeof", "var", "void", "while", "with", "implements", "interface", "let", "package",
+  "private", "protected", "public", "static", "yield", "await",
+]);
+
 /**
  * One `export const` per enumerable own key, for named-import parity with real Node's facade -
  * which reads every export eagerly, lazy getters included. A getter that THROWS here (a lazily
@@ -46,12 +67,21 @@ export interface IEsmLoaderContext extends IEsmResolveContext {
  * instead of failing every `import { anythingElse } from "node:util"` along with it; the module's
  * default export still throws the real error if that property is ever actually used.
  */
-const namedReexports = (bridgeExpr: string, value: unknown): string => {
+// Exported for direct unit testing (loader.test.ts) - everything else here needs a full
+// fs client/acorn/event-loop context to exercise, but this piece is pure string-in/string-out.
+export const namedReexports = (bridgeExpr: string, value: unknown): string => {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return "";
   const keys = Object.keys(value).filter((key) => IDENTIFIER.test(key) && key !== "default");
   if (keys.length === 0) return "";
   const read = `const __read = (key) => { try { return ${bridgeExpr}[key]; } catch { return undefined; } };`;
-  return [read, ...keys.map((key) => `export const ${key} = __read(${JSON.stringify(key)});`)].join("\n");
+  const lines = keys.map((key, i) => {
+    if (RESERVED_WORDS.has(key)) {
+      const local = `__reserved_export_${i}`;
+      return `const ${local} = __read(${JSON.stringify(key)});\nexport { ${local} as ${key} };`;
+    }
+    return `export const ${key} = __read(${JSON.stringify(key)});`;
+  });
+  return [read, ...lines].join("\n");
 };
 
 export const createEsmLoader = (ctx: IEsmLoaderContext) => {
@@ -150,6 +180,7 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
           return prepare(resolved.key, resolved.format);
         },
         key,
+        ctx.acorn,
       );
       const url = blobFor(rewritten);
       blobUrls.set(key, url);
@@ -194,6 +225,7 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
         throw new Error("a script has no static imports");
       },
       selfPath,
+      ctx.acorn,
     );
   };
 
