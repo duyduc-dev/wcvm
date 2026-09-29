@@ -2,9 +2,17 @@ import type { Icon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import type { IWcvmProjectType } from "@/services/wcvm/model";
 import {
+  BootstrapLogoIcon,
   JsLogoIcon,
+  LitLogoIcon,
+  PreactLogoIcon,
+  QwikLogoIcon,
   ReactLogoIcon,
   RectifyLogoIcon,
+  SolidLogoIcon,
+  StaticLogoIcon,
+  TanstackLogoIcon,
+  TsLogoIcon,
   VueLogoIcon,
   type ITemplateIconProps,
 } from "./templateIcons";
@@ -24,11 +32,22 @@ export interface IFrameworkOption {
   category: ITemplateCategory;
 }
 
+// Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
+// Svelte is deliberately NOT here: PLAN.md/HISTORY.md already document it as PARKED in wcvm
+// specifically - a real circular-ESM limitation in Svelte's own compiler, not a version-pinning
+// issue, hit independently of vivari.
 export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
   {
     id: "react-ts",
     label: "React",
     description: "TypeScript",
+    icon: ReactLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "react",
+    label: "React",
+    description: "JavaScript",
     icon: ReactLogoIcon,
     category: "Frontend",
   },
@@ -40,10 +59,73 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     category: "Frontend",
   },
   {
+    id: "vue",
+    label: "Vue",
+    description: "JavaScript",
+    icon: VueLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "vanilla-ts",
+    label: "Vanilla",
+    description: "TypeScript",
+    icon: TsLogoIcon,
+    category: "Frontend",
+  },
+  {
     id: "vanilla",
     label: "Vanilla",
     description: "JavaScript",
     icon: JsLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "static",
+    label: "Static",
+    description: "JavaScript",
+    icon: StaticLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "bootstrap",
+    label: "Bootstrap 5",
+    description: "TypeScript",
+    icon: BootstrapLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "preact-ts",
+    label: "Preact",
+    description: "TypeScript",
+    icon: PreactLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "lit-ts",
+    label: "Lit",
+    description: "TypeScript",
+    icon: LitLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "solid-ts",
+    label: "Solid",
+    description: "TypeScript",
+    icon: SolidLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "qwik-ts",
+    label: "Qwik",
+    description: "TypeScript",
+    icon: QwikLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "tanstack-router",
+    label: "TanStack Router",
+    description: "TypeScript (experimental)",
+    icon: TanstackLogoIcon,
     category: "Frontend",
   },
   {

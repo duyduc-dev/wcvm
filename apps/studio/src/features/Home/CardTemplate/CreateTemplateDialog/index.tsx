@@ -158,7 +158,7 @@ const CreateTemplateDialog = () => {
                 </TabsList>
                 {TEMPLATE_CATEGORIES.map((category) => (
                   <TabsContent key={category} value={category}>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto pr-1 [scrollbar-width:thin] [scrollbar-color:rgba(127,127,127,0.5)_transparent]">
                       {FRAMEWORK_OPTIONS.filter(
                         (option) => option.category === category,
                       ).map((option) => {

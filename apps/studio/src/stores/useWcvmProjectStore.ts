@@ -6,9 +6,12 @@ import { v6 as uuidv6 } from "uuid";
 import {
   createBlankTemplateProject,
   type BlankTemplateCreationResult,
-} from "@/services/wcvm/blankTemplateProject";
-import { createViteTemplateProject } from "@/services/wcvm/viteTemplateProject";
-import { createRectifyTemplateProject } from "@/services/wcvm/rectifyTemplateProject";
+} from "@/services/wcvm/templateProjects/blankTemplateProject";
+import { createViteTemplateProject } from "@/services/wcvm/templateProjects/viteTemplateProject";
+import { createRectifyTemplateProject } from "@/services/wcvm/templateProjects/rectifyTemplateProject";
+import { createStaticTemplateProject } from "@/services/wcvm/templateProjects/staticTemplateProject";
+import { createBootstrapTemplateProject } from "@/services/wcvm/templateProjects/bootstrapTemplateProject";
+import { createTanstackRouterTemplateProject } from "@/services/wcvm/templateProjects/tanstackRouterTemplateProject";
 import {
   clearAllFileSystem,
   removeFolderByPath,
@@ -40,15 +43,21 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
 
       async addProject(input, type = "blank", onProgress) {
         const id = uuidv6();
-        // "rectify" has its own manual wiring (no official create-vite template for it); any
-        // other non-"blank" type IS a real create-vite `--template` name (see
-        // src/services/wcvm/viteTemplateProject.ts).
+        // "rectify"/"static"/"bootstrap"/"tanstack-router" each have their own manual wiring (none
+        // has an official create-vite template); any other non-"blank" type IS a real create-vite
+        // `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts).
         const newProj =
           type === "blank"
             ? await createBlankTemplateProject(input)
             : type === "rectify"
               ? await createRectifyTemplateProject(input, onProgress)
-              : await createViteTemplateProject(input, type, onProgress);
+              : type === "static"
+                ? await createStaticTemplateProject(input)
+                : type === "bootstrap"
+                  ? await createBootstrapTemplateProject(input, onProgress)
+                  : type === "tanstack-router"
+                    ? await createTanstackRouterTemplateProject(input, onProgress)
+                    : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const now = Date.now();
