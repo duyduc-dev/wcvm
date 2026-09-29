@@ -8,7 +8,14 @@
 // module's own meta object (its real `file://` URL - the browser's own
 // `import.meta` would describe the blob, not the file).
 
-import { dynamicImportCalls, importMetaProperties, staticImportSpecifiers, type AnyNode } from "./ast";
+import {
+  dynamicImportCalls,
+  importMetaProperties,
+  nativeDynamicImportFunctions,
+  staticImportSpecifiers,
+  type AnyNode,
+  type IAcorn,
+} from "./ast";
 
 export const DYNAMIC_IMPORT_BRIDGE = "__wcvm_dynamic_import__";
 export const IMPORT_META_BRIDGE = "__wcvm_import_meta__";
@@ -26,7 +33,7 @@ interface IEdit {
  *   import bridge so it can resolve a relative specifier the same way this
  *   module itself was reached.
  */
-export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (specifierText: string) => string, selfUrl: string): string => {
+export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (specifierText: string) => string, selfUrl: string, acorn?: IAcorn): string => {
   const edits: IEdit[] = [];
 
   for (const spec of staticImportSpecifiers(program, source)) {
@@ -38,6 +45,20 @@ export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (
     // import.meta.url).href)`), which must not overlap these.
     edits.push({ start: call.start, end: call.argStart, replacement: `${DYNAMIC_IMPORT_BRIDGE}(` });
     edits.push({ start: call.argEnd, end: call.end, replacement: `, ${JSON.stringify(selfUrl)})` });
+  }
+  if (acorn) {
+    for (const fn of nativeDynamicImportFunctions(acorn, program)) {
+      // See ast.ts's own doc comment: a `new Function("x", "return import(x)")`-shaped function
+      // hides its import() from this same AST-based rewrite (it's inert text inside a string
+      // literal argument) so it would otherwise reach the browser's native import() completely
+      // unresolved. Replace the whole call with an equivalent arrow function routed through the
+      // same bridge - a bound closure, not a re-parsed string, so nothing is hidden from it.
+      edits.push({
+        start: fn.start,
+        end: fn.end,
+        replacement: `((${fn.params.join(",")}) => ${DYNAMIC_IMPORT_BRIDGE}(${fn.importParam}, ${JSON.stringify(selfUrl)}))`,
+      });
+    }
   }
   for (const meta of importMetaProperties(program)) {
     edits.push({ start: meta.start, end: meta.end, replacement: `${IMPORT_META_BRIDGE}(${JSON.stringify(selfUrl)})` });

@@ -111,6 +111,59 @@ export const dynamicImportCalls = (program: AnyNode): IDynamicImportCall[] => {
   return calls;
 };
 
+export interface INativeDynamicImportFunction {
+  /** Position of the whole `new Function(...)`/`Function(...)` call. */
+  start: number;
+  end: number;
+  /** Declared parameter names, in order (each was a string literal argument). */
+  params: string[];
+  /** Which parameter is passed as the dynamic import's specifier. */
+  importParam: string;
+}
+
+/**
+ * `new Function("specifier", "return import(specifier)")` - a real, common npm-ecosystem idiom
+ * (seen verbatim in multiple packages, e.g. @preact/preset-vite's own transform-hook-names.mjs)
+ * for forcing a REAL dynamic `import()` that survives being bundled to CommonJS, where a bundler
+ * would otherwise statically rewrite a literal `import()` to `require()` - fatal for an ESM-only
+ * dependency. The body is an opaque string to any AST-based rewriter (this sandbox's own
+ * `dynamicImportCalls` included): `import(specifier)` inside it is invisible to a parse of the
+ * ENCLOSING module, so it reaches the browser's native `import()` completely unrewritten - which
+ * can't resolve a bare specifier at all (no import maps here), and fails with exactly the error
+ * this was written to prevent seeing. Recognized by re-parsing the body string itself (as a
+ * function body) and finding a dynamic import whose argument is one of the declared parameters.
+ */
+export const nativeDynamicImportFunctions = (acorn: IAcorn, program: AnyNode): INativeDynamicImportFunction[] => {
+  const found: INativeDynamicImportFunction[] = [];
+  walk(program, (node) => {
+    if (node.type !== "NewExpression" && node.type !== "CallExpression") return;
+    const callee = node.callee as AnyNode;
+    if (callee.type !== "Identifier" || callee.name !== "Function") return;
+    const args = node.arguments as AnyNode[];
+    if (args.length === 0) return;
+    const bodyArg = args[args.length - 1];
+    if (bodyArg.type !== "Literal" || typeof bodyArg.value !== "string") return;
+    const paramArgs = args.slice(0, -1);
+    if (!paramArgs.every((a) => a.type === "Literal" && typeof a.value === "string")) return;
+    const params = paramArgs.map((a) => a.value as string);
+
+    let importParam: string | undefined;
+    try {
+      const wrapped = `(function(${params.join(",")}){${bodyArg.value as string}\n})`;
+      const miniProgram = acorn.Parser.parse(wrapped, { sourceType: "script", ecmaVersion: "latest" });
+      walk(miniProgram, (inner) => {
+        if (importParam || inner.type !== "ImportExpression") return;
+        const src = inner.source as AnyNode;
+        if (src.type === "Identifier" && params.includes(src.name as string)) importParam = src.name as string;
+      });
+    } catch {
+      return; // not parseable as a function body - not this pattern, leave it untouched
+    }
+    if (importParam) found.push({ start: node.start, end: node.end, params, importParam });
+  });
+  return found;
+};
+
 export interface IImportMeta {
   start: number;
   end: number;

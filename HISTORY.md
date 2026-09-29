@@ -60,6 +60,83 @@ Sections, in build order:
   breaks the cycle instead). See PLAN.md "Current state" and "Known differences"
   (`import.meta` is rewritten to the module's REAL `file://` URL/filename/dirname/resolve - see
   the `import.meta` Status entry below).
+  - **Two real ESM-loader bugs found while adding new "Start from template" frameworks to
+    `apps/studio`** (Preact/Lit/Solid/Qwik/TanStack Router/Static/Bootstrap 5, alongside the
+    existing React/Vue/Vanilla/Rectify - a completely different app from `examples/playground`,
+    but the bugs themselves are generic runtime bugs, not Studio-specific, and would hit any app
+    spawning `node`/`vite` against the same real npm packages). Both surfaced as the exact same
+    symptom - a bare, stackless `SyntaxError: Unexpected token 'import'` with no indication of
+    which module - because the invalid syntax lived in a SYNTHESIZED string this sandbox itself
+    builds at runtime, not in any real file on disk, so `parseModule`'s own try/catch (which
+    reports `"<filename>: <message>"`) never got a chance to run and localize it.
+    1. **Preact**: `@preact/preset-vite`'s `transform-hook-names.mjs` loads `zimmerframe` (an
+       ESM-only dep) via `const importEsm = new Function("specifier", "return
+       import(specifier)");` then `importEsm("zimmerframe")` - a real, documented npm-ecosystem
+       idiom (the package's own comment: "Keep zimmerframe loading as a native dynamic import even
+       in the CommonJS build. TypeScript rewrites `import()` to `require()` when compiling CJS").
+       `import(specifier)` inside a string passed to the `Function` constructor is completely
+       invisible to `dynamicImportCalls`'s AST walk of the ENCLOSING file - it's not a syntactic
+       `ImportExpression` there at all - so it reached the browser's own native `import()`
+       entirely unrewritten, which can't resolve a bare specifier with no import map, and threw
+       exactly the error this idiom exists to prevent. Fixed by recognizing this exact shape at
+       parse time (`ast.ts`'s `nativeDynamicImportFunctions`: a `new Function(...)`/`Function(...)`
+       call whose last argument is a string that, RE-PARSED as its own function body, contains a
+       dynamic import of one of the declared parameters) and rewriting the whole call to an arrow
+       function that calls the real dynamic-import bridge directly (`rewrite.ts`) - a bound
+       closure, not a re-parsed string, so nothing stays hidden from it. `rewriteModule` grew an
+       optional `acorn` parameter for this (both `loader.ts` call sites now pass it), so it also
+       covers a CJS module using the same idiom (`rewriteScript`'s existing dynamic-import
+       rewriting shares the same function).
+    2. **Solid**: `vite-plugin-solid`'s own `vite.config.ts` failed even earlier - "failed to load
+       config", not a runtime transform error - tracked down (by patching a debug `fs.writeFile`
+       into vite's own vendored `bundleConfigFile`/`loadConfigFromBundledFile`, then bisecting
+       which single import broke by loading each of `vite-plugin-solid`'s direct dependencies
+       standalone via `node -e "import('<pkg>')"` in a real terminal) to `@babel/types`, reached
+       transitively through `solid-refresh/babel` -> `@babel/generator` -> `@babel/types`.
+       `@babel/types` is CommonJS (no `"exports"` field, `"type": "commonjs"`) and genuinely
+       exports a property named `import` (its real AST-builder for the `Import` node type, e.g.
+       `t.import(...)`) - a real, long-standing part of Babel's public API, confirmed to have zero
+       "import" substring anywhere in its own source tree (the giant list of exported names near
+       the end of a modern `@babel/types` build is what makes this property easy to have and easy
+       to miss). `esm/loader.ts`'s `namedReexports` - the CJS-to-ESM interop shim `prepare()`
+       builds from a REQUIRED module's OWN enumerable keys at runtime, one `export const <key> =
+       ...` per key - filtered candidate keys only by `IDENTIFIER.test(key)` (do the characters
+       LOOK like an identifier), never checking whether `key` is a RESERVED WORD, so it happily
+       emitted `export const import = __read("import");` - a hard syntax error, since `import` is
+       a reserved word as a BINDING identifier even though it's a perfectly legal EXPORTED name
+       (real Node's own require()-from-ESM interop never hits this, since it only ever creates a
+       NAMESPACE property, never a bare top-level binding). Fixed with a static `RESERVED_WORDS`
+       set (every ECMAScript keyword plus the strict-mode-only reserved words and `await`, reserved
+       at a module's own top level): a reserved-word key is now emitted as `const
+       __reserved_export_N = __read("import"); export { __reserved_export_N as import };` instead
+       - same externally-visible name, valid binding underneath. `namedReexports` is now exported
+       from `loader.ts` for direct unit testing (`loader.test.ts`) - everything else in that file
+       needs a full fs-client/acorn/event-loop context to exercise, but this one piece is pure
+       string-in/string-out.
+    Both fixes verified two ways: `rewrite.test.ts`/`loader.test.ts` (Vitest, exact-string
+    assertions on the rewritten output, one round-trip test that re-parses the rewritten shim as
+    real ESM), AND live in real Chromium - a fresh `preact-ts`/`solid-ts` project through the
+    Studio template picker, `npm run dev`, and the real dev-server preview: Preact's own
+    `useState`-based counter and Solid's own signal-based counter both increment for real.
+    - **Qwik was also attempted, hit a different, NOT YET DIAGNOSED problem, and was left for a
+      later session** (unlike Svelte's PARKED writeup above, this one isn't resolved either way
+      yet - revisit before assuming either the symptom or the cause below is still accurate). Its
+      dev server printed `Unable to load native binding qwik.linux-x64-gnu.node. Falling back to
+      wasm build. Invalid or unexpected token`, which LOOKS fatal but isn't: calling
+      `@builder.io/qwik/optimizer`'s own `createOptimizer()` directly (`node -e`, standalone,
+      outside Vite entirely) prints the exact same warning and then still resolves successfully -
+      Qwik's own native-binding-then-wasm-fallback sequence is designed to warn and recover, and
+      does, in this sandbox as much as anywhere else. The dev server's real, fatal error came
+      after: `[plugin:vite-plugin-qwik] context method emitFile() is not supported in serve mode.
+      This plugin is likely not vite-compatible` - `emitFile()` is a real, build-time-only Rollup
+      plugin-context API; Vite's own (real, vendored, unmodified) dev-mode plugin container
+      deliberately doesn't support it, and this warning string is Vite's OWN, not something this
+      sandbox generates. Not yet determined whether `vite-plugin-qwik`'s plain `qwikVite()` calling
+      it during `serve` is a genuine upstream Qwik/Vite dev-mode incompatibility (in which case
+      real Vite outside this sandbox would hit the exact same thing) or something specific to how
+      this sandbox's own Vite dev server invokes plugin hooks - needs checking against a real,
+      non-sandboxed `npm create vite@latest -- --template qwik-ts` + `npm run dev` before doing
+      any more work here.
 - `node` with no script/`-e` is an interactive REPL (`runtime/repl.ts`): built on the vendored,
   TTY-independent `readline`, not Node's real `repl` module (that needs raw-mode TTY/tab-completion
   machinery `tty_wrap` deliberately stubs out). Variables persist across lines via indirect
