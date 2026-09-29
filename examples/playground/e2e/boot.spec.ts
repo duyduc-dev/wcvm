@@ -2051,21 +2051,22 @@ test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik)", () => {
     await stopTemplate(page);
   });
 
-  // KNOWN BROKEN, confirmed (not just suspected): the dev server genuinely hangs forever (ran it
-  // out to 150s - no further output, no crash, nothing). Root-caused by reading the real published
-  // @builder.io/qwik@1.20.0 source (dist/optimizer.mjs's loadPlatformBinding()): it first tries a
-  // native .node binding (expected to fail here - "Unable to load native binding ... Falling back
-  // to wasm build" is a harmless, correctly-caught warning, not the bug), then falls into a
-  // wasm-fallback branch (fs.readFile a .wasm file, WebAssembly.compile it, dynamic-import a
-  // wasm-bindgen glue module, call its init function) that never resolves or rejects inside wcvm -
-  // same broad class of native-binding-loading gap already hit and fixed for Rolldown's own WASM
-  // build (see PLAN.md's Rolldown investigation), not diagnosed further here. test.fail() marks
-  // this as an EXPECTED failure so it stays visible without red-flagging every opt-in run; if a
-  // future wcvm/Qwik change ever makes it start passing, Playwright will flag that as unexpected.
-  test("qwik-ts hangs forever inside @builder.io/qwik/optimizer's wasm-binding fallback", async ({ page }) => {
+  // FIXED (was: hung forever, no error, ever - root-caused to @builder.io/qwik's own optimizer
+  // (dist/optimizer.mjs's loadPlatformBinding()): after its expected, harmless native-binding
+  // failure ("Unable to load native binding ... Falling back to wasm build."), its wasm fallback
+  // calls the real, native `WebAssembly.compile()`/`instantiate()` directly - a Promise wcvm's own
+  // event loop (eventLoop.ts) knew nothing about, since `WebAssembly` reaches guest code completely
+  // unmodified (`globalObject: self`). With nothing else pending, the loop considered itself idle
+  // and the whole process (its underlying Worker) got torn down before that real, independent
+  // Chromium-internal compile ever had a live realm left to deliver its result into - same broad
+  // class of gap already hit for a `uv_tcp_t`/`FSEvent`/`MessagePort` that forgot to `ref()`.
+  // Fixed in runtime/bindings/rawWasm.ts: wraps the real `WebAssembly.compile`/`instantiate`/
+  // `instantiateStreaming`/`compileStreaming` to ref the loop for the duration of each call, the
+  // same shape rawFetch.ts's wrapped `fetch` and zlib.ts's `ctx.loop.ref()` around the real
+  // `CompressionStream` already use).
+  test("qwik-ts really runs (@builder.io/qwik's own optimizer, peer range vite >=5 <8)", async ({ page }) => {
     test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
-    test.fail();
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     await page.click("#preview-enable");
     await runTemplate(page, "qwik-ts", "tpl-qwik", 5202);
     await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });

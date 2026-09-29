@@ -17,6 +17,7 @@ import { createEsmResolver } from "./esm/resolve";
 import { EventLoop, type IEventLoopHost } from "./eventLoop";
 import { createBuiltinLoader } from "./loader";
 import { installRawFetch } from "./bindings/rawFetch";
+import { installRawWasm } from "./bindings/rawWasm";
 import { installRawWorker } from "./bindings/rawWorker";
 import { createPrimordials } from "./primordials";
 import { createProcessObject, NODE_VERSION, ProcessExit } from "./process";
@@ -457,6 +458,13 @@ const createRuntime = (options: IRuntimeOptions) => {
     readFile: (path) => fs.readFile(path),
     globalObject,
   });
+
+  // A guest script's own `WebAssembly.compile()`/`instantiate()` (e.g. a native N-API binding's
+  // wasm fallback loading itself, same category `installRawFetch` above already covers for the
+  // fetch-based variant) - see bindings/rawWasm.ts for why this is needed at all: without it, the
+  // process can exit mid-compile, before the real native promise ever gets a live realm left to
+  // deliver its result into.
+  installRawWasm({ ref: () => loop.ref(), globalObject });
 
   /** Runs the script at `entry` (absolute or cwd-relative). */
   const runMain = (entry: string): Promise<number> => {
