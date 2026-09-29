@@ -6,6 +6,7 @@ import {
   JsLogoIcon,
   LitLogoIcon,
   PreactLogoIcon,
+  QwikLogoIcon,
   ReactLogoIcon,
   RectifyLogoIcon,
   SolidLogoIcon,
@@ -34,16 +35,7 @@ export interface IFrameworkOption {
 // Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
 // Svelte is deliberately NOT here: PLAN.md/HISTORY.md already document it as PARKED in wcvm
 // specifically - a real circular-ESM limitation in Svelte's own compiler, not a version-pinning
-// issue, hit independently of vivari. Qwik is deliberately NOT here either (2026-09-30, confirmed
-// by actually running it, not just suspected as the commit that briefly added a "qwik-ts" entry
-// claimed): its dev server hangs forever with no error at all - root-caused to real published
-// @builder.io/qwik@1.20.0 source (dist/optimizer.mjs's loadPlatformBinding()): the expected
-// native-binding failure ("Unable to load native binding ... Falling back to wasm build.") is
-// harmless, but the wasm fallback it then takes (fs.readFile a .wasm file, WebAssembly.compile it,
-// dynamic-import a wasm-bindgen glue module, call its init function) never resolves or rejects
-// inside wcvm - same broad class of native-binding-loading gap already hit for Rolldown's own WASM
-// build (see PLAN.md), not diagnosed further. A silent infinite hang is worse than just not
-// offering it - see examples/playground/e2e/boot.spec.ts's own (test.fail()-marked) regression test.
+// issue, hit independently of vivari.
 // Angular and Ember aren't here either - vivari's own recipes for both need a Rolldown-WASM binding
 // wcvm doesn't have (vitePins.ts documents why Vite 7 is pinned instead); neither was attempted.
 export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
@@ -125,16 +117,22 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     category: "Frontend",
   },
   {
+    id: "qwik-ts",
+    label: "Qwik",
+    description: "TypeScript",
+    icon: QwikLogoIcon,
+    category: "Frontend",
+  },
+  {
     // Smoke-tested with a real dev server (2026-09-29): it scaffolds and `npm install`s fine, but
     // the dev server itself never starts. Root cause confirmed by reading the real published
     // source, not guessed: @tanstack/router-plugin hard-depends on zod@^4.5.4, and zod v4's own
     // `v4/core/core.js`/`v4/core/util.js` have a genuine, unconditional circular static ESM import
     // (core.js imports util.js's `installMembers`; util.js imports core.js's `globalConfig` right
     // back) - the exact same wcvm ESM-loader limitation Svelte is already PARKED for (see
-    // HISTORY.md), just tripped by a different dependency. Left in the picker (unlike Qwik, which
-    // isn't offered at all - see the module-level comment above) since it fails fast with a clear
-    // error rather than hanging forever, and it's a real Studio feature people may want; labeled
-    // broken rather than "experimental" so nobody mistakes this for merely untested.
+    // HISTORY.md), just tripped by a different dependency. Left in the picker since it fails fast
+    // with a clear error rather than hanging, and it's a real Studio feature people may want;
+    // labeled broken rather than "experimental" so nobody mistakes this for merely untested.
     id: "tanstack-router",
     label: "TanStack Router",
     description: "TypeScript (broken)",
