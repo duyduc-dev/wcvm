@@ -8,10 +8,18 @@ import { KNOWN_PLUGIN_PINS, VITE_PIN, WASM_OVERRIDES } from "./vitePins";
 // lazyDepth: 4) - a cached template nobody has touched yet costs nothing at boot either.
 const CACHE_ROOT = "/home/user/.template-cache";
 
-// Bump only if the SHAPE of what gets cached changes (e.g. a future version needs to store
-// something alongside the project files) - a change to the pin VALUES below doesn't need this,
-// see cacheKeyFor's own comment.
-const CACHE_SCHEMA_VERSION = 1;
+// Bump whenever what a "kind" SHOULD produce changes in a way `cacheKeyFor`'s own pin-signature
+// hash doesn't already capture: either the SHAPE of what gets cached (e.g. a future version needs
+// to store something alongside the project files), or - found for real, not hypothetically, when
+// a template's own hardcoded recipe file content changed (tanstackRouterTemplateProject.ts's
+// MAIN_TSX gained a runtime basepath fix) while its PIN configuration stayed exactly the same: a
+// project cached from BEFORE that fix still matched the unchanged cache key and kept getting
+// cloned as-is, even into a brand-new project, completely masking the fix with no error anywhere -
+// only noticed because a real user hit the exact bug the fix was for, in a project that turned out
+// to be a stale cache clone. A change to the pin VALUES below doesn't need a bump either way (see
+// cacheKeyFor's own comment) - only a change to what's HARDCODED in a specific template's own
+// recipe file(s) does.
+const CACHE_SCHEMA_VERSION = 2;
 
 /** A tiny non-cryptographic string hash (FNV-1a) - this keys a local cache, not a security
  *  boundary, so deterministic + low collision risk for a handful of short config strings is all
