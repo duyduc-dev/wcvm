@@ -13,10 +13,24 @@ export interface TanstackRouterTemplateCreationResult {
 // rectifyTemplateProject.ts/bootstrapTemplateProject.ts - this starts from Vite's own "react-ts"
 // scaffold and replaces its entry files with a router setup (ported from vivari's own
 // "tanstack-router" template, itself shipped marked experimental there too - "Not yet gated by a
-// spike run"). Unlike vivari's preview (which proxies every project under a shared
-// /preview/<port>/ prefix, so its vite.config sets `base` to match), wcvm's preview serves each
-// project's dev server directly (see PLAN.md's "absolute-path routing"), so this needs no base/
-// basepath rewriting - plain defaults.
+// spike run").
+//
+// CORRECTED (2026-09-29, found for real - not just suspected - by actually loading the preview
+// iframe's own URL directly): the ORIGINAL version of this comment claimed wcvm's preview needs
+// no base/basepath handling, unlike vivari's (which proxies every project under a shared
+// /preview/<port>/ prefix and sets Vite's own `base` to match). That's true for every OTHER
+// template here, but wrong for a CLIENT-SIDE ROUTER specifically: wcvm's own preview relay DOES
+// serve each project under a real URL prefix, `/__wcvm_preview__/<port>/` (see PLAN.md's
+// "absolute-path routing") - the iframe's own `src` IS that prefixed URL, so
+// `window.location.pathname` inside it genuinely starts with it. TanStack Router matches routes
+// against that real pathname, so without a matching `basepath`, the app's own root route never
+// matches at all - it 404s ("Not Found") the moment the preview iframe navigates there, even
+// though the exact same app works fine at a plain, unprefixed "/". A build-time Vite `base`
+// config can't fix this either: the PORT isn't known ahead of time (Studio just opens a terminal
+// and the user types `npm run dev` themselves - see IdeController.ts - so Vite picks whatever
+// port is free). `MAIN_TSX` below computes the prefix at RUNTIME instead, from the page's own
+// real `window.location.pathname` - a plain "/" (Vite's own default) when NOT previewed through
+// wcvm's relay at all (e.g. `vite preview`, or any other host).
 const VITE_CONFIG_JS = `import { defineConfig } from "vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
@@ -36,9 +50,19 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
+// wcvm's preview relay serves this project under a /__wcvm_preview__/<port>/ prefix - the router
+// needs to know about it, since it matches routes against the real window.location.pathname,
+// which includes that prefix inside the preview iframe. The port isn't known ahead of time (you
+// start the dev server yourself, on whatever port Vite picks), so this is computed at runtime,
+// not a build-time Vite "base" config. Outside wcvm's preview (e.g. a plain "vite preview"), this
+// is just "/", Vite's own default.
+const segments = window.location.pathname.split("/").filter(Boolean);
+const basepath = segments[0] === "__wcvm_preview__" && segments[1] ? "/" + segments[0] + "/" + segments[1] : "/";
+
 // The @tanstack/router-plugin Vite plugin generates ./routeTree.gen.ts on dev start.
 const router = createRouter({
   routeTree,
+  basepath,
   defaultPreload: "intent",
   scrollRestoration: true,
 });

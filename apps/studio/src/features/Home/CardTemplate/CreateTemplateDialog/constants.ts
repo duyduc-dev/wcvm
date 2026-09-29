@@ -33,9 +33,12 @@ export interface IFrameworkOption {
 }
 
 // Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
-// Svelte is deliberately NOT here: PLAN.md/HISTORY.md already document it as PARKED in wcvm
-// specifically - a real circular-ESM limitation in Svelte's own compiler, not a version-pinning
-// issue, hit independently of vivari.
+// Svelte is deliberately NOT here: PLAN.md/HISTORY.md documented it as PARKED in wcvm specifically
+// for a real circular-ESM limitation in Svelte's own compiler. That underlying wcvm ESM-loader
+// limitation is now FIXED (2026-09-29 - see runtime/esm/loader.ts's and runtime/esm/cyclic.ts's
+// own doc comments; proven against TanStack Router's own real circular dependency below), but
+// Svelte itself hasn't been RE-VERIFIED against the fix yet - still not offered until someone
+// actually checks, not because the original blocker is assumed to still apply.
 // Angular and Ember aren't here either - vivari's own recipes for both need a Rolldown-WASM binding
 // wcvm doesn't have (vitePins.ts documents why Vite 7 is pinned instead); neither was attempted.
 export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
@@ -124,18 +127,24 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     category: "Frontend",
   },
   {
-    // Smoke-tested with a real dev server (2026-09-29): it scaffolds and `npm install`s fine, but
-    // the dev server itself never starts. Root cause confirmed by reading the real published
-    // source, not guessed: @tanstack/router-plugin hard-depends on zod@^4.5.4, and zod v4's own
-    // `v4/core/core.js`/`v4/core/util.js` have a genuine, unconditional circular static ESM import
-    // (core.js imports util.js's `installMembers`; util.js imports core.js's `globalConfig` right
-    // back) - the exact same wcvm ESM-loader limitation Svelte is already PARKED for (see
-    // HISTORY.md), just tripped by a different dependency. Left in the picker since it fails fast
-    // with a clear error rather than hanging, and it's a real Studio feature people may want;
-    // labeled broken rather than "experimental" so nobody mistakes this for merely untested.
+    // FIXED (2026-09-29): was smoke-tested with a real dev server first and found broken - it
+    // scaffolded and `npm install`ed fine, but the dev server itself never started, because
+    // @tanstack/router-plugin hard-depends on zod@^4.5.4, and zod v4's own `v4/core/core.js`/
+    // `v4/core/util.js` have a genuine, unconditional circular static ESM import (core.js imports
+    // util.js's `installMembers`; util.js imports core.js's `globalConfig` right back) - the exact
+    // same wcvm ESM-loader limitation Svelte is PARKED for. Root-caused and fixed at the loader
+    // level (runtime/esm/loader.ts, runtime/esm/cyclic.ts) rather than worked around here - along
+    // the way, also found and fixed a missing `node:vm` builtin (needed by `jiti`, Vite's own
+    // config-loading dependency) and a real gap in the cyclic rewrite itself (a LOCAL re-export of
+    // a cyclic import, hit by a genuine 3-module cycle inside @tanstack/router-core), plus a
+    // preview-relay basepath issue specific to this being the first CLIENT-SIDE-ROUTED template
+    // (TanStack Router matches routes against the real `window.location.pathname`, which includes
+    // wcvm's own `/__wcvm_preview__/<port>/` prefix - see this template's own MAIN_TSX). Verified
+    // end to end in real Chromium against the real npm registry: install, dev server start,
+    // real route rendering, and real client-side navigation between routes.
     id: "tanstack-router",
     label: "TanStack Router",
-    description: "TypeScript (broken)",
+    description: "TypeScript",
     icon: TanstackLogoIcon,
     category: "Frontend",
   },
