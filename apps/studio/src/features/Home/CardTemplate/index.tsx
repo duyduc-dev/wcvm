@@ -30,7 +30,7 @@ const CardTemplate = () => {
                 </Card>
               }
             ></DialogTrigger>
-            <DialogContent>
+            <DialogContent className="sm:max-w-xl">
               <template.dialog />
             </DialogContent>
           </Dialog>

@@ -1,8 +1,24 @@
-/** "blank" is a hand-written empty project; "rectify" is a manually-wired Rectify project (see
- * src/services/wcvm/rectifyTemplateProject.ts — Rectify has no official create-vite template);
- * anything else is a real create-vite `--template` name (see
- * src/services/wcvm/viteTemplateProject.ts) — the project's own persisted "kind". */
-export type IWcvmProjectType = "blank" | "react-ts" | "vue-ts" | "vanilla" | "rectify";
+/** "blank" is a hand-written empty project; "rectify"/"static"/"bootstrap"/"tanstack-router" are
+ * manually-wired projects (see the matching src/services/wcvm/templateProjects/*TemplateProject.ts
+ * — none of them has an official create-vite template); anything else is a real create-vite
+ * `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts) — the
+ * project's own persisted "kind". */
+export type IWcvmProjectType =
+  | "blank"
+  | "react-ts"
+  | "react"
+  | "vue-ts"
+  | "vue"
+  | "vanilla-ts"
+  | "vanilla"
+  | "preact-ts"
+  | "lit-ts"
+  | "solid-ts"
+  | "qwik-ts"
+  | "rectify"
+  | "static"
+  | "bootstrap"
+  | "tanstack-router";
 
 export interface IWcvmProject {
   id: string;
