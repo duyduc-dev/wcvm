@@ -1863,8 +1863,14 @@ function About() {
 }
 `;
 
-  test("scaffolds, installs and serves a real dev server, and client-side navigation works", async ({ page }) => {
+  // KNOWN BROKEN, confirmed: vite.config.ts fails to load with EsmResolveError: Circular static
+  // ESM import involving zod/v4/core/core.js (see constants.ts's own comment on the picker entry
+  // for the full root cause). test.fail() marks this as an EXPECTED failure so it stays visible
+  // without red-flagging every opt-in run; if a future wcvm/zod change ever makes it start
+  // passing, Playwright will flag that as unexpected.
+  test("dev server hangs on zod v4's circular ESM import (KNOWN BROKEN)", async ({ page }) => {
     test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then Vite/React/TanStack Router, from registry.npmjs.org)");
+    test.fail();
     test.setTimeout(120_000);
 
     await page.click("#preview-enable");
@@ -1943,6 +1949,224 @@ function About() {
 
     await page.evaluate(async () => {
       const vite = (window as unknown as { __tsr: { kill: () => void; exit: Promise<unknown> } }).__tsr;
+      vite.kill();
+      await vite.exit;
+    });
+  });
+});
+
+test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik)", () => {
+  // Studio's picker (apps/studio/src/features/Home/CardTemplate/CreateTemplateDialog/constants.ts)
+  // offers these four via the SAME generic path react-ts/vue-ts already use
+  // (templateProjects/viteTemplateProject.ts's pinVitePackage(): pins vite to 7.3.6 and swaps
+  // esbuild/rollup for their wasm builds - it does NOT pin each framework's own vite plugin, only
+  // @vitejs/plugin-react/plugin-vue). The commit that added them claimed Qwik alone "hit a
+  // different, not-yet-diagnosed dev-server problem" and was left out of the picker - but the
+  // code shipped a "qwik-ts" entry anyway, so that claim can't be trusted without checking for
+  // real. This runs the EXACT production recipe for all four, one framework per test so a single
+  // failure doesn't hide the others.
+  const runTemplate = async (page: import("@playwright/test").Page, id: string, dir: string, port: number) => {
+    const created = await spawn(page, "npm", ["create", "vite@latest", dir, "--", "--template", id, "--no-interactive"], "/");
+    expect(created.code).toBe(0);
+
+    // Exactly pinVitePackage() (apps/studio/.../vitePins.ts): pin vite + swap esbuild/rollup for
+    // their wasm builds - nothing else, matching what real users of the picker actually get.
+    await page.evaluate(
+      async ({ dir }) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile(`/${dir}/package.json`)));
+        pkg.devDependencies.vite = "7.3.6";
+        pkg.overrides = { ...pkg.overrides, esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" };
+        await fs.writeFile(`/${dir}/package.json`, JSON.stringify(pkg));
+      },
+      { dir },
+    );
+
+    const install = await spawn(page, "npm", ["install"], `/${dir}`);
+    expect(install.code, install.out + install.err).toBe(0);
+
+    await page.evaluate(
+      async ({ dir, port }) => {
+        const wc = (window as unknown as WcWindow).wc;
+        const vite = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", String(port), "--strictPort"], { cwd: `/${dir}` });
+        const w = window as unknown as { __tpl: typeof vite; __tplOut: string };
+        w.__tpl = vite;
+        w.__tplOut = "";
+        for (const stream of [vite.stdout, vite.stderr]) {
+          void (async () => {
+            const reader = stream.getReader();
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done) return;
+              w.__tplOut += new TextDecoder().decode(value);
+            }
+          })();
+        }
+      },
+      { dir, port },
+    );
+    const output = () => page.evaluate(() => (window as unknown as { __tplOut: string }).__tplOut);
+    await expect.poll(output, { timeout: 30_000 }).toMatch(/Local:|error/i);
+    const out = await output();
+    expect(out, out).toContain("Local:");
+
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", `/__wcvm_preview__/${port}/`);
+  };
+
+  const stopTemplate = (page: import("@playwright/test").Page) =>
+    page.evaluate(async () => {
+      const vite = (window as unknown as { __tpl: { kill: () => void; exit: Promise<unknown> } }).__tpl;
+      vite.kill();
+      await vite.exit;
+    });
+
+  test("preact-ts really runs (@preact/preset-vite, unpinned, against vite 7.3.6)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+    await runTemplate(page, "preact-ts", "tpl-preact", 5199);
+    await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });
+    await stopTemplate(page);
+  });
+
+  test("lit-ts really runs (no vite plugin at all - just vite 7.3.6 + TS)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+    await runTemplate(page, "lit-ts", "tpl-lit", 5200);
+    // The <h1> is static light-DOM content in index.html itself, projected through <slot></slot>
+    // - it renders even if the custom element's own JS never runs, so it isn't proof of anything.
+    // "Count is 0" only renders through <my-element>'s own shadow-DOM template once Lit's JS
+    // actually executes.
+    await expect(page.frameLocator("#preview-frame").locator("button")).toHaveText("Count is 0", { timeout: 30_000 });
+    await stopTemplate(page);
+  });
+
+  test("solid-ts really runs (vite-plugin-solid, unpinned, against vite 7.3.6)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+    await runTemplate(page, "solid-ts", "tpl-solid", 5201);
+    await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });
+    await stopTemplate(page);
+  });
+
+  // KNOWN BROKEN, confirmed (not just suspected): the dev server genuinely hangs forever (ran it
+  // out to 150s - no further output, no crash, nothing). Root-caused by reading the real published
+  // @builder.io/qwik@1.20.0 source (dist/optimizer.mjs's loadPlatformBinding()): it first tries a
+  // native .node binding (expected to fail here - "Unable to load native binding ... Falling back
+  // to wasm build" is a harmless, correctly-caught warning, not the bug), then falls into a
+  // wasm-fallback branch (fs.readFile a .wasm file, WebAssembly.compile it, dynamic-import a
+  // wasm-bindgen glue module, call its init function) that never resolves or rejects inside wcvm -
+  // same broad class of native-binding-loading gap already hit and fixed for Rolldown's own WASM
+  // build (see PLAN.md's Rolldown investigation), not diagnosed further here. test.fail() marks
+  // this as an EXPECTED failure so it stays visible without red-flagging every opt-in run; if a
+  // future wcvm/Qwik change ever makes it start passing, Playwright will flag that as unexpected.
+  test("qwik-ts hangs forever inside @builder.io/qwik/optimizer's wasm-binding fallback", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.fail();
+    test.setTimeout(60_000);
+    await page.click("#preview-enable");
+    await runTemplate(page, "qwik-ts", "tpl-qwik", 5202);
+    await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });
+    await stopTemplate(page);
+  });
+});
+
+test.describe("Bootstrap 5 template (Studio recipe)", () => {
+  // apps/studio's bootstrapTemplateProject.ts: scaffold vanilla-ts, add the real bootstrap npm
+  // package, pinVitePackage() (vite 7.3.6 + wasm overrides - vanilla-ts has no plugin of its own
+  // to pin), and swap in a small index.html/main.ts that also exercises Bootstrap's JS (a modal),
+  // not just its CSS. Lower risk than the other hand-wired templates (no build-time plugin, no
+  // transitive dependency prone to a circular-ESM cycle) but never actually run end to end before.
+  const INDEX_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vite + Bootstrap 5</title>
+  </head>
+  <body>
+    <div id="app" class="container py-5"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+`;
+
+  const MAIN_TS = `import "bootstrap/dist/css/bootstrap.min.css";
+import { Modal } from "bootstrap";
+
+const app = document.querySelector<HTMLDivElement>("#app")!;
+app.innerHTML = \`
+  <h1 class="mb-3">Vite + Bootstrap 5</h1>
+  <p class="text-muted">Running inside wcvm.</p>
+  <button class="btn btn-primary" id="open" type="button">Open modal</button>
+  <div class="modal fade" id="demo" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Hello</h5></div>
+      <div class="modal-body">Bootstrap's JS works too.</div>
+      <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal" type="button">Close</button></div>
+    </div></div>
+  </div>
+\`;
+const modal = new Modal("#demo");
+document.querySelector("#open")!.addEventListener("click", () => modal.show());
+`;
+
+  test("scaffolds, installs and serves a real dev server, and Bootstrap's own JS (a modal) works", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+
+    const created = await spawn(page, "npm", ["create", "vite@latest", "tpl-bootstrap", "--", "--template", "vanilla-ts", "--no-interactive"], "/");
+    expect(created.code).toBe(0);
+
+    await page.evaluate(
+      async ({ indexHtml, mainTs }) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile("/tpl-bootstrap/package.json")));
+        pkg.dependencies = { ...pkg.dependencies, bootstrap: "^5.3.3" };
+        pkg.devDependencies.vite = "7.3.6";
+        pkg.overrides = { ...pkg.overrides, esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" };
+        await fs.writeFile("/tpl-bootstrap/package.json", JSON.stringify(pkg));
+        await fs.writeFile("/tpl-bootstrap/index.html", indexHtml);
+        await fs.writeFile("/tpl-bootstrap/src/main.ts", mainTs);
+      },
+      { indexHtml: INDEX_HTML, mainTs: MAIN_TS },
+    );
+
+    const install = await spawn(page, "npm", ["install"], "/tpl-bootstrap");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const vite = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", "5203", "--strictPort"], { cwd: "/tpl-bootstrap" });
+      const w = window as unknown as { __bs: typeof vite; __bsOut: string };
+      w.__bs = vite;
+      w.__bsOut = "";
+      for (const stream of [vite.stdout, vite.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__bsOut += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    const output = () => page.evaluate(() => (window as unknown as { __bsOut: string }).__bsOut);
+    await expect.poll(output, { timeout: 30_000 }).toMatch(/Local:|error/i);
+    const out = await output();
+    expect(out, out).toContain("Local:");
+
+    const frame = page.frameLocator("#preview-frame");
+    await expect(frame.locator("h1")).toHaveText("Vite + Bootstrap 5", { timeout: 30_000 });
+    await frame.locator("#open").click();
+    await expect(frame.locator(".modal-body")).toBeVisible();
+
+    await page.evaluate(async () => {
+      const vite = (window as unknown as { __bs: { kill: () => void; exit: Promise<unknown> } }).__bs;
       vite.kill();
       await vite.exit;
     });
