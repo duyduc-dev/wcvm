@@ -20,25 +20,19 @@ import {
 export const DYNAMIC_IMPORT_BRIDGE = "__wcvm_dynamic_import__";
 export const IMPORT_META_BRIDGE = "__wcvm_import_meta__";
 
-interface IEdit {
+export interface IEdit {
   start: number;
   end: number;
   replacement: string;
 }
 
-/**
- * @param resolveStatic Maps a static specifier's literal text (as written,
- *   quotes included) to its dependency's already-prepared blob URL.
- * @param selfUrl This module's own resolved path/URL, passed to the dynamic
- *   import bridge so it can resolve a relative specifier the same way this
- *   module itself was reached.
- */
-export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (specifierText: string) => string, selfUrl: string, acorn?: IAcorn): string => {
+/** Every `import(...)` call (literal or computed argument, and the `new Function("x", "return
+ *  import(x)")` idiom when `acorn` is given) and every `import.meta` - shared by `rewriteModule`
+ *  and `cyclic.ts`'s `rewriteCyclicModule`, since a genuinely circular module can use dynamic
+ *  imports and `import.meta` exactly like any other one; only its STATIC imports/exports need
+ *  different treatment. */
+export const dynamicAndMetaEdits = (program: AnyNode, selfUrl: string, acorn?: IAcorn): IEdit[] => {
   const edits: IEdit[] = [];
-
-  for (const spec of staticImportSpecifiers(program, source)) {
-    edits.push({ start: spec.start, end: spec.end, replacement: JSON.stringify(resolveStatic(spec.value)) });
-  }
   for (const call of dynamicImportCalls(program)) {
     // Only the `import(` and the closing `)` (with any options argument before it) are replaced,
     // never the argument itself: it may hold edits of its own (`import(new URL("./x",
@@ -62,6 +56,22 @@ export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (
   }
   for (const meta of importMetaProperties(program)) {
     edits.push({ start: meta.start, end: meta.end, replacement: `${IMPORT_META_BRIDGE}(${JSON.stringify(selfUrl)})` });
+  }
+  return edits;
+};
+
+/**
+ * @param resolveStatic Maps a static specifier's literal text (as written,
+ *   quotes included) to its dependency's already-prepared blob URL.
+ * @param selfUrl This module's own resolved path/URL, passed to the dynamic
+ *   import bridge so it can resolve a relative specifier the same way this
+ *   module itself was reached.
+ */
+export const rewriteModule = (source: string, program: AnyNode, resolveStatic: (specifierText: string) => string, selfUrl: string, acorn?: IAcorn): string => {
+  const edits: IEdit[] = dynamicAndMetaEdits(program, selfUrl, acorn);
+
+  for (const spec of staticImportSpecifiers(program, source)) {
+    edits.push({ start: spec.start, end: spec.end, replacement: JSON.stringify(resolveStatic(spec.value)) });
   }
 
   edits.sort((a, b) => b.start - a.start); // apply back-to-front so earlier offsets stay valid

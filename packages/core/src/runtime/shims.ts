@@ -236,6 +236,43 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
   };
 
   /**
+   * vm.js sits on a real V8 Context/Script C++ binding this sandbox doesn't implement (no real
+   * separate V8 contexts/realms to run code in) - found needed for real (not speculatively):
+   * `jiti` (the TS/ESM-on-the-fly loader Vite 7's own config loader uses internally for
+   * `vite.config.ts` when a plugin - `@tanstack/router-plugin` - needs the config synchronously
+   * required, not just imported) calls exactly one vm API, `vm.runInThisContext(code, options)` -
+   * confirmed by reading jiti's own real published bundle (`dist/jiti.cjs`), not guessed: no
+   * `Script`, `SourceTextModule`, `createContext`, or anything else from `vm` appears anywhere in
+   * it. `runInThisContext` compiles and runs code in the CURRENT realm's global scope only (no
+   * access to the caller's own local variables) - exactly what an INDIRECT `eval()` already does
+   * (`(0, eval)(code)`, the same trick `cjs.ts`'s own `compile()` already uses for the same
+   * reason), so this needs no new capability, just the right name and options handled: `filename`
+   * (a `//# sourceURL=` comment, `cjs.ts`'s own convention, so stack traces still point at the
+   * real file) and `lineOffset` (leading blank lines, so reported line numbers still line up).
+   * Everything else `vm` exports is simply absent - the same honest "not a function"/"not a
+   * constructor" failure shape `crypto`'s own missing ciphers already have - since nothing this
+   * sandbox has actually exercised needs it.
+   */
+  const vmShim: BuiltinFactory = (_exports, _require, module) => {
+    const runInThisContext = (code: string, options?: { filename?: string; lineOffset?: number }) => {
+      const lineOffset = options?.lineOffset ?? 0;
+      const padded = lineOffset > 0 ? "\n".repeat(lineOffset) + code : code;
+      const withSourceUrl = options?.filename ? `${padded}\n//# sourceURL=${options.filename}` : padded;
+      return (0, eval)(withSourceUrl);
+    };
+    class Script {
+      private code: string;
+      constructor(code: string, private options?: { filename?: string; lineOffset?: number }) {
+        this.code = code;
+      }
+      runInThisContext(options?: { filename?: string; lineOffset?: number }) {
+        return runInThisContext(this.code, { ...this.options, ...options });
+      }
+    }
+    module.exports = { runInThisContext, Script };
+  };
+
+  /**
    * cluster.js (real multi-process load balancing over a real fork()) isn't vendored: this
    * sandbox has one process per net.Server, never several sharing a listen port, so there's
    * nothing to balance. net.js's Server.listen() checks `cluster.isPrimary` unconditionally
@@ -534,6 +571,7 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     cluster: clusterShim,
     crypto: cryptoShim,
     v8: v8Shim,
+    vm: vmShim,
     "internal/bootstrap/realm": (_exports, _require, module) => {
       module.exports = {
         BuiltinModule,

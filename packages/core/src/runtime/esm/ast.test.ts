@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestLoader } from "../testing";
-import { dynamicImportCalls, EsmSyntaxError, parseModule, parseScript, staticImportSpecifiers } from "./ast";
+import { dynamicImportCalls, EsmSyntaxError, importBindingsOf, moduleExports, parseModule, parseScript, staticImportSpecifiers } from "./ast";
 import { DYNAMIC_IMPORT_BRIDGE, rewriteModule } from "./rewrite";
 
 const acorn = createTestLoader().require("internal/deps/acorn/acorn/dist/acorn");
@@ -91,6 +91,89 @@ describe("parseScript (CommonJS / node -e source)", () => {
     expect(rewritten).toBe(
       `const load = () => ${DYNAMIC_IMPORT_BRIDGE}("./esm.mjs", "/pkg/index.js");\n${DYNAMIC_IMPORT_BRIDGE}(name, "/pkg/index.js").then(use);\n// import("in a comment") is not a call\n`,
     );
+  });
+});
+
+describe("importBindingsOf", () => {
+  const bindingsOf = (source: string) => importBindingsOf((parse(source).body as { type: string }[])[0] as never);
+
+  it("extracts named imports with their local aliases", () => {
+    expect(bindingsOf(`import { a, b as c } from './x';`)).toEqual({ named: [{ imported: "a", local: "a" }, { imported: "b", local: "c" }] });
+  });
+
+  it("extracts a default import", () => {
+    expect(bindingsOf(`import Foo from './x';`)).toEqual({ defaultLocal: "Foo", named: [] });
+  });
+
+  it("extracts a namespace import", () => {
+    expect(bindingsOf(`import * as ns from './x';`)).toEqual({ namespaceLocal: "ns", named: [] });
+  });
+
+  it("extracts a combined default + named import", () => {
+    expect(bindingsOf(`import Foo, { a } from './x';`)).toEqual({ defaultLocal: "Foo", named: [{ imported: "a", local: "a" }] });
+  });
+
+  it("returns null for a re-export (no import clause of its own)", () => {
+    const node = (parse(`export { a } from './x';`).body as { type: string }[])[0];
+    expect(importBindingsOf(node as never)).toBeNull();
+  });
+});
+
+describe("moduleExports", () => {
+  const exportsOf = (source: string) => moduleExports(parse(source), source);
+
+  it("collects export const/let/function/class as their own local name", () => {
+    expect(exportsOf(`export const a = 1;\nexport function b() {}\nexport class C {}`)).toEqual({
+      named: [
+        { publicName: "a", localExpr: "a" },
+        { publicName: "b", localExpr: "b" },
+        { publicName: "C", localExpr: "C" },
+      ],
+    });
+  });
+
+  it("collects destructured export const names", () => {
+    expect(exportsOf(`export const { a, b: c } = obj;`).named).toEqual([
+      { publicName: "a", localExpr: "a" },
+      { publicName: "c", localExpr: "c" },
+    ]);
+  });
+
+  it("collects a local re-export (export { a, b as c }) by its public name", () => {
+    const source = `const a = 1, b = 2;\nexport { a, b as c };`;
+    expect(exportsOf(source).named).toEqual([
+      { publicName: "a", localExpr: "a" },
+      { publicName: "c", localExpr: "b" },
+    ]);
+  });
+
+  it("ignores a re-export WITH a source (no local binding to close over)", () => {
+    expect(exportsOf(`export { a } from './x.js';`).named).toEqual([]);
+  });
+
+  it("a bare-identifier default export needs no rewrite", () => {
+    const out = exportsOf(`const x = 1;\nexport default x;`);
+    expect(out.defaultExport).toEqual({ localExpr: "x" });
+  });
+
+  it("a named function/class default export needs no rewrite", () => {
+    expect(exportsOf(`export default function foo() {}`).defaultExport).toEqual({ localExpr: "foo" });
+    expect(exportsOf(`export default class Bar {}`).defaultExport).toEqual({ localExpr: "Bar" });
+  });
+
+  it("an anonymous/expression default export is captured under a fresh name, with a real edit", () => {
+    const source = `export default 42;`;
+    const out = exportsOf(source);
+    expect(out.defaultExport?.localExpr).toMatch(/^__wcvm_default_export_\d+__$/);
+    const edit = out.defaultExport!.edit!;
+    expect(source.slice(edit.start, edit.end)).toBe(`export default 42;`);
+    expect(edit.replacement).toBe(`const ${out.defaultExport!.localExpr} = 42;`);
+  });
+
+  it("an anonymous function/class default export's edit keeps it a real expression, unmodified", () => {
+    const source = `export default function() { return 1; }`;
+    const out = exportsOf(source);
+    expect(out.defaultExport!.edit!.replacement).toBe(`const ${out.defaultExport!.localExpr} = function() { return 1; };`);
   });
 });
 
