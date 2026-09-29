@@ -71,6 +71,10 @@ export interface IStaticSpecifier {
   start: number;
   end: number;
   value: string;
+  /** The whole `ImportDeclaration`/`ExportNamedDeclaration`/`ExportAllDeclaration` node this
+   *  specifier belongs to - loader.ts's circular-import support needs the WHOLE statement's own
+   *  range and (for a plain `ImportDeclaration`) its import clause, not just the specifier text. */
+  node: AnyNode;
 }
 
 /** `node.end` includes a written trailing semicolon (unlike ASI); back up over it so callers can splice in a replacement without duplicating or losing it. */
@@ -86,9 +90,114 @@ export const staticImportSpecifiers = (program: AnyNode, source: string): IStati
     if (!specifierSource) continue; // a plain `export { x }` / `export const x = ...` has no specifier
     const attributes = node.attributes as AnyNode[] | undefined;
     const end = attributes && attributes.length > 0 ? beforeTrailingSemicolon(source, node.end) : specifierSource.end;
-    specifiers.push({ start: specifierSource.start, end, value: specifierSource.value as string });
+    specifiers.push({ start: specifierSource.start, end, value: specifierSource.value as string, node });
   }
   return specifiers;
+};
+
+export interface IImportBindings {
+  /** `import Foo from "x"` - the local name bound to the default export. */
+  defaultLocal?: string;
+  /** `import * as ns from "x"` - the local name bound to the whole module namespace. */
+  namespaceLocal?: string;
+  /** `import { a, b as c } from "x"` - each named specifier's exported name (an `Identifier`'s
+   *  `.name`, or a `Literal`'s `.value` for the rare string export-name form) and its local alias. */
+  named: { imported: string; local: string }[];
+}
+
+/** Only a plain `ImportDeclaration` has an import CLAUSE to rebuild (see loader.ts's circular
+ *  fallback) - `null` for `export ... from`/`export * from` (a re-export), which has none. */
+export const importBindingsOf = (node: AnyNode): IImportBindings | null => {
+  if (node.type !== "ImportDeclaration") return null;
+  const bindings: IImportBindings = { named: [] };
+  for (const spec of node.specifiers as AnyNode[]) {
+    const local = (spec.local as AnyNode & { name: string }).name;
+    if (spec.type === "ImportDefaultSpecifier") bindings.defaultLocal = local;
+    else if (spec.type === "ImportNamespaceSpecifier") bindings.namespaceLocal = local;
+    else if (spec.type === "ImportSpecifier") {
+      const imported = spec.imported as AnyNode & { name?: string; value?: string };
+      bindings.named.push({ imported: imported.name ?? String(imported.value), local });
+    }
+  }
+  return bindings;
+};
+
+export interface IModuleExports {
+  /** Public export name -> the LOCAL expression text that currently holds its value (almost
+   *  always just the local binding name itself - real top-level declarations are untouched, so a
+   *  getter closing over that name sees its real, live, current value for free). */
+  named: { publicName: string; localExpr: string }[];
+  /** `export default <expr>` - `localExpr` is what a getter should return. For a bare identifier
+   *  default (`export default foo;`) this is just `foo`, unedited. For anything else, `edit` gives
+   *  the [start,end) to replace with a `const` declaration capturing the expression under a fresh
+   *  name (there's no existing binding to close over otherwise). */
+  defaultExport?: { localExpr: string; edit?: { start: number; end: number; replacement: string } };
+}
+
+let defaultExportCounter = 0;
+
+/** Every export a module DECLARES ITSELF (`export const/let/function/class`, `export { a, b as
+ *  c }` of an already-declared local, `export default <expr>`) - NOT `export ... from`/`export *
+ *  from` (a re-export has no local binding of its own; loader.ts's circular fallback doesn't
+ *  support closing a cycle through one - see its own doc comment for why). */
+export const moduleExports = (program: AnyNode, source: string): IModuleExports => {
+  const named: { publicName: string; localExpr: string }[] = [];
+  let defaultExport: IModuleExports["defaultExport"];
+
+  for (const node of program.body as AnyNode[]) {
+    if (node.type === "ExportDefaultDeclaration") {
+      const decl = node.declaration as AnyNode;
+      const isNamedDeclOrIdentifier =
+        ((decl.type === "FunctionDeclaration" || decl.type === "ClassDeclaration") && decl.id) || decl.type === "Identifier";
+      if (isNamedDeclOrIdentifier) {
+        const name = decl.type === "Identifier" ? (decl.name as string) : ((decl.id as AnyNode).name as string);
+        defaultExport = { localExpr: name };
+      } else {
+        // No existing binding to close over (an anonymous function/class, or a plain expression
+        // like `export default 42`) - capture it under a fresh name instead. `decl`'s own source
+        // text (an expression, or an unnamed function/class - both valid on a `const`'s RHS
+        // unmodified) replaces the WHOLE `export default ...` statement.
+        const localName = `__wcvm_default_export_${defaultExportCounter++}__`;
+        defaultExport = {
+          localExpr: localName,
+          edit: { start: node.start, end: node.end, replacement: `const ${localName} = ${source.slice(decl.start, decl.end)};` },
+        };
+      }
+      continue;
+    }
+    if (node.type !== "ExportNamedDeclaration" || node.source) continue; // a re-export has no local binding
+    const decl = node.declaration as AnyNode | null;
+    if (decl) {
+      if (decl.type === "VariableDeclaration") {
+        for (const d of decl.declarations as AnyNode[]) {
+          const names: string[] = [];
+          collectDeclaredNames(d.id as AnyNode, names);
+          for (const n of names) named.push({ publicName: n, localExpr: n });
+        }
+      } else if (decl.id) {
+        const name = (decl.id as AnyNode & { name: string }).name;
+        named.push({ publicName: name, localExpr: name });
+      }
+      continue;
+    }
+    for (const spec of node.specifiers as AnyNode[]) {
+      const exported = spec.exported as AnyNode & { name?: string; value?: string };
+      const local = spec.local as AnyNode & { name: string };
+      named.push({ publicName: exported.name ?? String(exported.value), localExpr: local.name });
+    }
+  }
+
+  return { named, defaultExport };
+};
+
+const collectDeclaredNames = (node: AnyNode, into: string[]): void => {
+  if (node.type === "Identifier") into.push(node.name as string);
+  else if (node.type === "ObjectPattern") {
+    for (const prop of node.properties as AnyNode[]) collectDeclaredNames((prop.type === "RestElement" ? prop.argument : prop.value) as AnyNode, into);
+  } else if (node.type === "ArrayPattern") {
+    for (const el of node.elements as (AnyNode | null)[]) if (el) collectDeclaredNames(el, into);
+  } else if (node.type === "AssignmentPattern") collectDeclaredNames(node.left as AnyNode, into);
+  else if (node.type === "RestElement") collectDeclaredNames(node.argument as AnyNode, into);
 };
 
 export interface IDynamicImportCall {

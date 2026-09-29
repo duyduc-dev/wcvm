@@ -51,7 +51,7 @@ interface IServiceWorkerGlobal {
   clients: {
     claim(): Promise<void>;
     get(id: string): Promise<IClient | undefined>;
-    matchAll(options?: { type?: "window" }): Promise<IClient[]>;
+    matchAll(options?: { type?: "window"; includeUncontrolled?: boolean }): Promise<IClient[]>;
   };
 }
 
@@ -100,8 +100,24 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 // fetches once loaded (also a nested client, so still correctly skipped).
 // A previewed page opened in its own tab is top-level too - but it's not a wcvm page, so skip it.
 //
+// `matchAll()` defaults to `includeUncontrolled: false` (per spec) - it only ever returns clients
+// THIS Service Worker instance is actively controlling. `enable()` (apis/Preview.ts) does wait for
+// `clients.claim()`'s own "controllerchange" event before resolving, but a real host page can
+// still exist as a genuine, valid top-level client WITHOUT (yet, or any more) being "controlled"
+// by this exact worker: `clients.claim()` claiming a page and the BROWSER'S OWN internal
+// controller bookkeeping catching up aren't necessarily the same instant, and Studio's own call
+// site (`void this.wc.preview.enable()`) doesn't block anything on it finishing at all, so a dev
+// server can start listening (and a preview iframe navigate) before that settles. Without
+// `includeUncontrolled: true`, THIS specific host page - not a stale or unrelated one - can be
+// invisible to `matchAll()` for reasons that have nothing to do with the retry loop below (a
+// momentary absence from the client list entirely, the one case it WAS built for) and everything
+// to do with control status, which no amount of retrying fixes if the page is never "controlled"
+// as far as this SW instance is concerned. `findHostClient`'s own filter (top-level, not itself a
+// preview page) already narrows the field just as tightly either way, so including uncontrolled
+// clients only ever widens the search to legitimate candidates, never accepts a wrong one.
+//
 // Retries briefly instead of failing on the first empty match: the host tab can be genuinely,
-// if momentarily, ABSENT from the client list - not just not-yet-claimed - whenever the page
+// if momentarily, ABSENT from the client list - not just not-yet-controlled - whenever the page
 // itself is mid-navigation. The concrete way this happens in practice: a dev server rebuilding
 // wcvm's own dist/ (`tsup --watch`, e.g. via the repo's root `pnpm dev`) makes Vite's dev server
 // force a full reload of the host page (`import.meta.hot`'s own full-reload, logged as "page
@@ -115,7 +131,7 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 // into a long hang (previewResponse's 502 still fires if nothing ever shows up).
 const findHostClient = async (): Promise<IClient | undefined> => {
   const matchOne = async () => {
-    const clients = await sw.clients.matchAll({ type: "window" });
+    const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
     return clients.find((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
   };
   for (let attempt = 0; attempt < 10; attempt++) {

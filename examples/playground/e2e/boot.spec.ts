@@ -829,14 +829,49 @@ test.describe("node", () => {
       expect(r).toEqual({ code: 0, out: "99\n", err: "" });
     });
 
-    test("a genuinely circular static import throws a clear error instead of a silent wrong value", async ({ page }) => {
+    // FIXED (was: threw ERR_CIRCULAR_ESM_NOT_SUPPORTED unconditionally - see runtime/esm/loader.ts
+    // and runtime/esm/cyclic.ts's own doc comments for the full design and the two dead ends hit
+    // on the way there). A genuine cycle now works via a shared, per-module registry object (live
+    // GETTERS, not a one-time snapshot - the exact "partial exports" hazard a snapshot would have,
+    // confirmed to actually break the real target case: zod v4's own core.js/util.js, reached
+    // through @tanstack/router-plugin) - but reading a circular binding SYNCHRONOUSLY, at the
+    // TOP LEVEL, right where the import used to be, still can't work (neither would real,
+    // un-transformed circular ESM - that's a TDZ ReferenceError there too), so it throws a
+    // clear, TDZ-shaped error instead of silently reading `undefined`.
+    test("reading a circular binding synchronously at the top level still throws - a clear, TDZ-shaped error, not a silent wrong value", async ({ page }) => {
       await writeFiles(page, {
         "/a.mjs": "import { b } from './b.mjs';\nexport const a = 1;\nconsole.log('a', b);\n",
         "/b.mjs": "import { a } from './a.mjs';\nexport const b = 2;\nconsole.log('b', a);\n",
       });
       const r = await spawn(page, "node", ["/a.mjs"]);
       expect(r.code).toBe(1);
-      expect(r.err).toContain("Circular static ESM import");
+      expect(r.err).toMatch(/ReferenceError.*before initialization/);
+    });
+
+    test("a genuinely circular import actually works when used the real (lazy) way - not at the top level, and mutation across the cycle is visible", async ({ page }) => {
+      await writeFiles(page, {
+        // Same shape as zod v4's real core.js/util.js: each side reads the OTHER's export only
+        // INSIDE a function, called later - never synchronously at the top level.
+        "/core.mjs": [
+          "import { installMembers } from './util.mjs';",
+          "export const globalConfig = { count: 0 };",
+          "export function setup() { installMembers(globalConfig); }",
+        ].join("\n"),
+        "/util.mjs": [
+          "import { globalConfig } from './core.mjs';",
+          "export function installMembers(obj) { obj.installed = true; }",
+          "export function readCount() { return globalConfig.count; }",
+        ].join("\n"),
+        "/main.mjs": [
+          "import { globalConfig, setup } from './core.mjs';",
+          "import { readCount } from './util.mjs';",
+          "setup();",
+          "globalConfig.count = 5;",
+          "console.log(globalConfig.installed, readCount());",
+        ].join("\n"),
+      });
+      const r = await spawn(page, "node", ["/main.mjs"]);
+      expect(r).toEqual({ code: 0, out: "true 5\n", err: "" });
     });
   });
 
@@ -1759,13 +1794,14 @@ test.describe("Vite dev server", () => {
 
 test.describe("TanStack Router template (Studio recipe)", () => {
   // apps/studio's tanstackRouterTemplateProject.ts scaffolds react-ts, adds @tanstack/react-router
-  // + @tanstack/router-plugin, and replaces the entry/App with a router setup - shipped marked
-  // "(experimental)" in Studio's template picker because it had only ever been scaffolded and
-  // installed, never actually run with a real dev server. This is the exact recipe (same package
-  // versions, same files), proving end-to-end that the router plugin's own Vite plugin (which must
-  // run BEFORE @vitejs/plugin-react, see vite.config.ts below) really does generate
-  // routeTree.gen.ts on dev start under wcvm's sandboxed fs/Vite, and that real client-side
-  // navigation between file-based routes works through the preview iframe.
+  // + @tanstack/router-plugin, and replaces the entry/App with a router setup. This is the exact
+  // recipe (same package versions, same files), proving end-to-end that the router plugin's own
+  // Vite plugin (which must run BEFORE @vitejs/plugin-react, see vite.config.ts below) really does
+  // generate routeTree.gen.ts on dev start under wcvm's sandboxed fs/Vite, and that real
+  // client-side navigation between file-based routes works through the preview iframe. First found
+  // genuinely broken (a real circular ESM import three layers deep in @tanstack/router-core's own
+  // zod dependency), then FIXED at the ESM loader level - see constants.ts's own comment on the
+  // picker entry for the full writeup of everything that had to be fixed along the way.
   const VITE_CONFIG_TS = `import { defineConfig } from "vite";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import viteReact from "@vitejs/plugin-react";
@@ -1785,9 +1821,19 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
+// wcvm's preview relay serves this project under a /__wcvm_preview__/<port>/ prefix - the router
+// needs to know about it, since it matches routes against the real window.location.pathname,
+// which includes that prefix inside the preview iframe. The port isn't known ahead of time (you
+// start the dev server yourself, on whatever port Vite picks), so this is computed at runtime,
+// not a build-time Vite "base" config. Outside wcvm's preview (e.g. a plain "vite preview"), this
+// is just "/", Vite's own default.
+const segments = window.location.pathname.split("/").filter(Boolean);
+const basepath = segments[0] === "__wcvm_preview__" && segments[1] ? "/" + segments[0] + "/" + segments[1] : "/";
+
 // The @tanstack/router-plugin Vite plugin generates ./routeTree.gen.ts on dev start.
 const router = createRouter({
   routeTree,
+  basepath,
   defaultPreload: "intent",
   scrollRestoration: true,
 });
@@ -1863,14 +1909,13 @@ function About() {
 }
 `;
 
-  // KNOWN BROKEN, confirmed: vite.config.ts fails to load with EsmResolveError: Circular static
-  // ESM import involving zod/v4/core/core.js (see constants.ts's own comment on the picker entry
-  // for the full root cause). test.fail() marks this as an EXPECTED failure so it stays visible
-  // without red-flagging every opt-in run; if a future wcvm/zod change ever makes it start
-  // passing, Playwright will flag that as unexpected.
-  test("dev server hangs on zod v4's circular ESM import (KNOWN BROKEN)", async ({ page }) => {
+  // FIXED (was: vite.config.ts failed to load with EsmResolveError: Circular static ESM import
+  // involving zod/v4/core/core.js, reached transitively through @tanstack/router-plugin - a
+  // genuine 2-node cycle, zod v4's own core.js<->util.js). Root-caused and fixed in
+  // runtime/esm/loader.ts + runtime/esm/cyclic.ts: see their own doc comments for the full design
+  // (a live, getter-backed registry per cyclic module instead of a native import between them).
+  test("scaffolds, installs and serves a real dev server, and client-side navigation works", async ({ page }) => {
     test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then Vite/React/TanStack Router, from registry.npmjs.org)");
-    test.fail();
     test.setTimeout(120_000);
 
     await page.click("#preview-enable");

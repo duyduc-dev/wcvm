@@ -166,6 +166,28 @@ describe("builtins Vite needs", () => {
     expect(r.stdout).toBe("ERR_INSPECTOR_NOT_AVAILABLE\nERR_INSPECTOR_NOT_AVAILABLE\n");
   });
 
+  it("vm.runInThisContext runs code in the real global scope only, like an indirect eval - what jiti (Vite's own vite.config.ts loader) actually calls", async () => {
+    const r = await run(`
+      const vm = require("vm");
+      globalThis.__probe = 1;
+      const local = "should not be visible";
+      console.log(vm.runInThisContext("JSON.stringify([typeof __probe, typeof local])"));
+      console.log(vm.runInThisContext("1 + 2"));
+      vm.runInThisContext("globalThis.__set = 42;");
+      console.log(__set);
+      try { vm.runInThisContext("("); } catch (e) { console.log(e instanceof SyntaxError); }
+      const s = new vm.Script("3 * 4", { filename: "/probe.js" });
+      console.log(s.runInThisContext());
+      console.log(require("node:vm") === vm);
+    `);
+    expect(r).toEqual(
+      expect.objectContaining({
+        code: 0,
+        stdout: '["number","undefined"]\n3\n42\ntrue\n12\ntrue\n',
+      }),
+    );
+  });
+
   it("monitorEventLoopDelay samples real delays between start() and stop()", async () => {
     const r = await run(`
       const { monitorEventLoopDelay } = require("perf_hooks");
