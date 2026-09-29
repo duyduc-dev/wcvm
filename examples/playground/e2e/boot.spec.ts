@@ -1757,6 +1757,198 @@ test.describe("Vite dev server", () => {
   });
 });
 
+test.describe("TanStack Router template (Studio recipe)", () => {
+  // apps/studio's tanstackRouterTemplateProject.ts scaffolds react-ts, adds @tanstack/react-router
+  // + @tanstack/router-plugin, and replaces the entry/App with a router setup - shipped marked
+  // "(experimental)" in Studio's template picker because it had only ever been scaffolded and
+  // installed, never actually run with a real dev server. This is the exact recipe (same package
+  // versions, same files), proving end-to-end that the router plugin's own Vite plugin (which must
+  // run BEFORE @vitejs/plugin-react, see vite.config.ts below) really does generate
+  // routeTree.gen.ts on dev start under wcvm's sandboxed fs/Vite, and that real client-side
+  // navigation between file-based routes works through the preview iframe.
+  const VITE_CONFIG_TS = `import { defineConfig } from "vite";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
+import viteReact from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [
+    // The router plugin MUST come before React's so routeTree.gen.ts is generated
+    // before the React transform runs.
+    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    viteReact(),
+  ],
+});
+`;
+
+  const MAIN_TSX = `import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { RouterProvider, createRouter } from "@tanstack/react-router";
+import { routeTree } from "./routeTree.gen";
+
+// The @tanstack/router-plugin Vite plugin generates ./routeTree.gen.ts on dev start.
+const router = createRouter({
+  routeTree,
+  defaultPreload: "intent",
+  scrollRestoration: true,
+});
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <RouterProvider router={router} />
+  </StrictMode>,
+);
+`;
+
+  const ROOT_ROUTE_TSX = `import { Link, Outlet, createRootRoute } from "@tanstack/react-router";
+
+export const Route = createRootRoute({
+  component: RootComponent,
+});
+
+function RootComponent() {
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif" }}>
+      <nav style={{ display: "flex", gap: "1rem", padding: "1rem" }}>
+        <Link to="/">Home</Link>
+        <Link to="/about">About</Link>
+      </nav>
+      <hr />
+      <Outlet />
+    </div>
+  );
+}
+`;
+
+  const INDEX_ROUTE_TSX = `import { createFileRoute } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/")({
+  component: Home,
+});
+
+function Home() {
+  return (
+    <main style={{ padding: "2rem" }}>
+      <h1>TanStack Router</h1>
+      <p>Type-safe, file-based routing for React — a client-side SPA on Vite.</p>
+      <p>
+        Edit <code>src/routes/index.tsx</code> and save, or add a file under{" "}
+        <code>src/routes/</code>.
+      </p>
+    </main>
+  );
+}
+`;
+
+  const ABOUT_ROUTE_TSX = `import { createFileRoute } from "@tanstack/react-router";
+
+export const Route = createFileRoute("/about")({
+  component: About,
+});
+
+function About() {
+  return (
+    <main style={{ padding: "2rem" }}>
+      <h1>About</h1>
+      <p>
+        This route lives in <code>src/routes/about.tsx</code>.
+      </p>
+    </main>
+  );
+}
+`;
+
+  test("scaffolds, installs and serves a real dev server, and client-side navigation works", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs create-vite, then Vite/React/TanStack Router, from registry.npmjs.org)");
+    test.setTimeout(120_000);
+
+    await page.click("#preview-enable");
+    await expect(page.locator("#preview-status")).toHaveText(/Waiting for a script to listen/);
+
+    // 1. Scaffold - exactly what createTanstackRouterTemplateProject does.
+    const created = await spawn(page, "npm", ["create", "vite@latest", "tsr", "--", "--template", "react-ts", "--no-interactive"], "/");
+    expect(created.code).toBe(0);
+
+    // 2. Wire up TanStack Router - same package.json/file edits as the Studio recipe (pkg edits
+    // inline the pins vitePins.ts's pinVitePackage() would apply, since this test lives outside
+    // the studio app).
+    await page.evaluate(
+      async ({ viteConfig, mainTsx, rootRoute, indexRoute, aboutRoute }) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile("/tsr/package.json")));
+        pkg.dependencies = { ...pkg.dependencies, "@tanstack/react-router": "^1.130.0" };
+        pkg.devDependencies = {
+          ...pkg.devDependencies,
+          "@tanstack/router-plugin": "^1.130.0",
+          vite: "7.3.6",
+          "@vitejs/plugin-react": "^5.0.0",
+        };
+        pkg.overrides = { esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" };
+        await fs.writeFile("/tsr/package.json", JSON.stringify(pkg));
+        await fs.writeFile("/tsr/vite.config.ts", viteConfig);
+        await fs.writeFile("/tsr/src/main.tsx", mainTsx);
+        if (await fs.exists("/tsr/src/App.tsx")) await fs.rm("/tsr/src/App.tsx");
+        if (await fs.exists("/tsr/src/App.css")) await fs.rm("/tsr/src/App.css");
+        await fs.mkdir("/tsr/src/routes", { recursive: true });
+        await fs.writeFile("/tsr/src/routes/__root.tsx", rootRoute);
+        await fs.writeFile("/tsr/src/routes/index.tsx", indexRoute);
+        await fs.writeFile("/tsr/src/routes/about.tsx", aboutRoute);
+      },
+      { viteConfig: VITE_CONFIG_TS, mainTsx: MAIN_TSX, rootRoute: ROOT_ROUTE_TSX, indexRoute: INDEX_ROUTE_TSX, aboutRoute: ABOUT_ROUTE_TSX },
+    );
+
+    // 3. Install.
+    const install = await spawn(page, "npm", ["install"], "/tsr");
+    expect(install.code).toBe(0);
+
+    // 4. Start the real dev server.
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const vite = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", "5198", "--strictPort"], { cwd: "/tsr" });
+      const w = window as unknown as { __tsr: typeof vite; __tsrOut: string };
+      w.__tsr = vite;
+      w.__tsrOut = "";
+      for (const stream of [vite.stdout, vite.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__tsrOut += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    const viteOutput = () => page.evaluate(() => (window as unknown as { __tsrOut: string }).__tsrOut);
+    await expect.poll(viteOutput, { timeout: 30_000 }).toContain("Local:");
+
+    // 5. The router plugin actually generated routeTree.gen.ts, and the app renders through it.
+    const generated = await page.evaluate(() => (window as unknown as WcWindow).wc.fs.exists("/tsr/src/routeTree.gen.ts"));
+    expect(generated).toBe(true);
+
+    await expect(page.locator("#preview-frame")).toHaveAttribute("src", "/__wcvm_preview__/5198/");
+    const frame = page.frameLocator("#preview-frame");
+    await expect(frame.locator("h1")).toHaveText("TanStack Router", { timeout: 30_000 });
+
+    // 6. Real client-side navigation (no full reload) between the two file-based routes.
+    await frame.locator("a", { hasText: "About" }).click();
+    await expect(frame.locator("h1")).toHaveText("About");
+    await frame.locator("a", { hasText: "Home" }).click();
+    await expect(frame.locator("h1")).toHaveText("TanStack Router");
+
+    await page.evaluate(async () => {
+      const vite = (window as unknown as { __tsr: { kill: () => void; exit: Promise<unknown> } }).__tsr;
+      vite.kill();
+      await vite.exit;
+    });
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over

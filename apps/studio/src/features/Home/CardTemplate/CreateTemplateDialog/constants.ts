@@ -122,9 +122,18 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     category: "Frontend",
   },
   {
+    // Smoke-tested with a real dev server (2026-09-29): it scaffolds and `npm install`s fine, but
+    // the dev server itself never starts. Root cause confirmed by reading the real published
+    // source, not guessed: @tanstack/router-plugin hard-depends on zod@^4.5.4, and zod v4's own
+    // `v4/core/core.js`/`v4/core/util.js` have a genuine, unconditional circular static ESM import
+    // (core.js imports util.js's `installMembers`; util.js imports core.js's `globalConfig` right
+    // back) - the exact same wcvm ESM-loader limitation Svelte is already PARKED for (see
+    // HISTORY.md), just tripped by a different dependency. Left in the picker (unlike Qwik, which
+    // was left out entirely) since it's a real Studio feature people may want, but labeled broken
+    // rather than "experimental" so nobody mistakes this for merely untested.
     id: "tanstack-router",
     label: "TanStack Router",
-    description: "TypeScript (experimental)",
+    description: "TypeScript (broken)",
     icon: TanstackLogoIcon,
     category: "Frontend",
   },
