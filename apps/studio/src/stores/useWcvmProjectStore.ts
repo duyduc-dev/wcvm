@@ -12,6 +12,7 @@ import { createRectifyTemplateProject } from "@/services/wcvm/templateProjects/r
 import { createStaticTemplateProject } from "@/services/wcvm/templateProjects/staticTemplateProject";
 import { createBootstrapTemplateProject } from "@/services/wcvm/templateProjects/bootstrapTemplateProject";
 import { createTanstackRouterTemplateProject } from "@/services/wcvm/templateProjects/tanstackRouterTemplateProject";
+import { createTailwindTemplateProject } from "@/services/wcvm/templateProjects/tailwindTemplateProject";
 import {
   clearAllFileSystem,
   removeFolderByPath,
@@ -43,9 +44,9 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
 
       async addProject(input, type = "blank", onProgress) {
         const id = uuidv6();
-        // "rectify"/"static"/"bootstrap"/"tanstack-router" each have their own manual wiring (none
-        // has an official create-vite template); any other non-"blank" type IS a real create-vite
-        // `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts).
+        // "rectify"/"static"/"bootstrap"/"tanstack-router"/"tailwind" each have their own manual
+        // wiring (none has an official create-vite template); any other non-"blank" type IS a real
+        // create-vite `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts).
         const newProj =
           type === "blank"
             ? await createBlankTemplateProject(input)
@@ -57,7 +58,9 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
                   ? await createBootstrapTemplateProject(input, onProgress)
                   : type === "tanstack-router"
                     ? await createTanstackRouterTemplateProject(input, onProgress)
-                    : await createViteTemplateProject(input, type, onProgress);
+                    : type === "tailwind"
+                      ? await createTailwindTemplateProject(input, onProgress)
+                      : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const now = Date.now();
