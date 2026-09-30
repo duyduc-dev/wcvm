@@ -58,17 +58,19 @@ built this way" that was probably already answered by a real bug.
 - The playground (`examples/playground`) has four working dev-server examples (Vite+React,
   Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express). Studio's
   own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
-  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Rectify - Svelte was PARKED, then re-verified working
-  once the circular-ESM gap above was fixed (see HISTORY.md).
-- Tests: 1025 Vitest + 141 Playwright (Chromium; 17 of them opt-in, needing the real npm registry:
+  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Rectify - Svelte was PARKED, then
+  re-verified working once the circular-ESM gap above was fixed; Tailwind CSS v4 hit a real
+  `@napi-rs/wasm-runtime` deadlock (any native `Scanner` call spanning more than one line of input
+  in a single call freezes the whole thread - a spawned WASI worker's own file reads relay back to
+  the creator thread, which is itself already frozen waiting on that same worker), fixed by
+  patching `@tailwindcss/vite`'s own plugin to call `Scanner.scanFiles()` once per line instead of
+  once per file (see PLAN.md's "Tailwind CSS v4: feasibility findings" and HISTORY.md).
+- Tests: 1025 Vitest + 143 Playwright (Chromium; 19 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): npm workspaces and the rest of `npm exec` (arbitrary local/
-registry commands, not just `create`), a Tailwind CSS v4 Studio template (INVESTIGATED and PARKED -
-a genuine, unfixable structural deadlock in `@napi-rs/wasm-runtime`'s own browser-build content-
-scanning, the same category of finding as "Real npm" below - see PLAN.md's "Tailwind CSS v4:
-feasibility findings"), Angular/Ember Studio templates (need a Rolldown-WASM binding wcvm doesn't
-have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
+registry commands, not just `create`), Angular/Ember Studio templates (need a Rolldown-WASM binding
+wcvm doesn't have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's

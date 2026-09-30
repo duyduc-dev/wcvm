@@ -2357,6 +2357,318 @@ test.describe("Tailwind v4 native deps (@tailwindcss/oxide WASI, lightningcss)",
     expect(r.out).toContain("scanner function");
     expect(r.out).toMatch(/lightningcss[\s\S]*\.a\s*\{\s*color:\s*red;?\s*\}/);
   });
+
+  // FOUND THE REAL TRIGGER (narrower than first thought): it's not "any content with an import
+  // statement" - it's any scanFiles() call whose total input spans MORE than one line, whether
+  // that's one multi-line content string OR multiple single-line entries in the same call (both
+  // isolated directly: a single entry with a leading blank line, or a leading comment line, or a
+  // real `import` line, all deadlock the same way once real class-bearing content lands on line 2
+  // or later; two single-line entries in ONE call deadlock too, even though NEITHER entry alone
+  // is multi-line). A single scanFiles() call with EXACTLY one entry, EXACTLY one line, never
+  // dispatches to the worker pool at all and always returns immediately - confirmed by splitting
+  // a real, realistic multi-line file (main.ts-shaped, 20 lines, real Tailwind classes scattered
+  // across it) into one scanFiles() call PER non-blank line: no hang, correct candidates found
+  // (bg-indigo-600, rounded-xl, shadow-lg, hover:bg-indigo-700, ...), and fast (native calls, not
+  // the deadlocking pool path - 20 lines in ~11ms). This is the real, viable workaround
+  // @tailwindcss/vite's own plugin patch is built on (see the Studio recipe test below).
+  test("scanFiles() called once per line avoids the deadlock, even for realistic multi-line content", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(60_000);
+
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/tw-strip", { recursive: true });
+      await fs.writeFile(
+        "/tw-strip/package.json",
+        JSON.stringify({ name: "tw-strip", private: true, dependencies: { "@tailwindcss/oxide": "4.3.3" } }),
+      );
+    });
+    const install = await spawn(page, "npm", ["install"], "/tw-strip");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    const patched = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const wasiPkgDir = "/tw-strip/node_modules/@tailwindcss/oxide-wasm32-wasi";
+      if (!(await fs.exists(wasiPkgDir))) return { ok: false };
+      const browserJs = new TextDecoder().decode(await fs.readFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.js`));
+      await fs.writeFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.mjs`, browserJs);
+      const oxideDir = "/tw-strip/node_modules/@tailwindcss/oxide";
+      await fs.writeFile(`${oxideDir}/package.json`, JSON.stringify({ name: "@tailwindcss/oxide", version: "4.3.3", type: "module", main: "index.js" }));
+      await fs.writeFile(
+        `${oxideDir}/index.js`,
+        [
+          'export * from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+          'export { default } from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+        ].join("\n"),
+      );
+      return { ok: true };
+    });
+    expect(patched.ok).toBe(true);
+
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.writeFile(
+        "/tw-strip/test.mjs",
+        [
+          'setInterval(() => console.log("heartbeat"), 500).unref();',
+          'const { Scanner } = await import("@tailwindcss/oxide");',
+          "const realFile = [",
+          '  \'import "./index.css";\',',
+          "  '',",
+          '  "const app = document.querySelector<HTMLDivElement>(\\"#app\\")!;",',
+          "  'app.innerHTML = `',",
+          "  '  <main class=\"flex min-h-screen items-center justify-center bg-slate-100\">',",
+          "  '    <div id=\"card\" class=\"max-w-sm rounded-xl bg-white p-8 shadow-lg\">',",
+          '  \'      <h1 class="text-2xl font-bold text-slate-900">Vite + Tailwind CSS</h1>\',',
+          "  '      <p class=\"mt-2 text-slate-500\">Running inside wcvm.</p>',",
+          '  \'      <button id="count" type="button" class="mt-6 rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white hover:bg-indigo-700">\',',
+          "  '        count is 0',",
+          "  '      </button>',",
+          "  '    </div>',",
+          "  '  </main>',",
+          "  '`;',",
+          "  '',",
+          "  'let count = 0;',",
+          '  "document.querySelector<HTMLButtonElement>(\\"#count\\")!.addEventListener(\\"click\\", (event) => {",',
+          "  '  count++;',",
+          '  \'  (event.currentTarget as HTMLButtonElement).textContent = `count is ${count}`;\',',
+          "  '});',",
+          "].join(\"\\n\");",
+          "const start = Date.now();",
+          "const scanner = new Scanner({ sources: [] });",
+          "const candidates = new Set();",
+          "for (const line of realFile.split(\"\\n\")) {",
+          '  if (!line.trim()) continue;',
+          '  for (const c of scanner.scanFiles([{ content: line, extension: "ts" }])) candidates.add(c);',
+          "}",
+          'console.log("lines processed:", realFile.split("\\n").length, "in", Date.now() - start, "ms");',
+          'console.log("scanned", JSON.stringify([...candidates]));',
+        ].join("\n"),
+      );
+    });
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn("node", ["test.mjs"], { cwd: "/tw-strip" });
+      const w = window as unknown as { __twStrip: string };
+      w.__twStrip = "";
+      for (const stream of [proc.stdout, proc.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__twStrip += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    await page.waitForTimeout(15_000);
+    const out = await page.evaluate(() => (window as unknown as { __twStrip: string }).__twStrip);
+    expect(out, out).toContain("scanned");
+    expect(out).toContain("bg-indigo-600");
+    expect(out).toContain("rounded-xl");
+    expect(out).toContain("hover:bg-indigo-700");
+  });
+});
+
+test.describe("Tailwind CSS v4 template (Studio recipe)", () => {
+  // apps/studio's tailwindTemplateProject.ts: scaffold vanilla-ts, wire in @tailwindcss/vite +
+  // the node_modules patches proven standalone above (lightningcss -> lightningcss-wasm via
+  // overrides, @tailwindcss/oxide's own index.js/package.json rewritten to reach its already-
+  // installed -wasm32-wasi sibling's browser build), PLUS a patch to @tailwindcss/vite's OWN
+  // plugin code: its stock `this.scanner.scan()` call deadlocks (see the "Tailwind v4 native
+  // deps" describe block above for the full story - a real, structural Atomics.wait deadlock
+  // between the creator thread and its own spawned WASI worker), and even the content-based
+  // `scanFiles()` deadlocks the same way once given more than one line's worth of input in a
+  // single call. The fix: read real files via wcvm's own fs.globSync, split each into lines, and
+  // call scanFiles() once per non-blank line - proven standalone (the "scanFiles() called once
+  // per line..." test above) to avoid the deadlock entirely, with correct candidate detection and
+  // negligible overhead (native calls, not the deadlocking pool path).
+  const patchTailwindVitePlugin = (source: string): string => {
+    const replacements: [string, string][] = [
+      [
+        'import*as M from"vite";',
+        'import*as M from"vite";import{readFileSync as __wcvmReadFileSync,globSync as __wcvmGlobSync}from"node:fs";' +
+          "function __wcvmScanSources(sources){" +
+          "const files=new Set();" +
+          "for(const s of sources){" +
+          "if(s.negated)continue;" +
+          "let matches=[];" +
+          'try{matches=__wcvmGlobSync(s.pattern,{cwd:s.base,exclude:p=>p.split("/").some(seg=>seg==="node_modules"||(seg.startsWith(".")&&seg!=="."&&seg!==".."))});}catch{}' +
+          'for(const m of matches)files.add(m.startsWith("/")?m:s.base+"/"+m);' +
+          "}" +
+          "return[...files];" +
+          "}" +
+          // Tailwind's own native scan() skips binary assets by extension internally - since this
+          // walker replaces that native logic, it needs the same skip.
+          'const __wcvmBinaryExt=new Set(["png","jpg","jpeg","gif","webp","avif","ico","bmp","woff","woff2","ttf","otf","eot","mp4","webm","mp3","wav","ogg","pdf","zip","gz","wasm"]);' +
+          "function __wcvmScanFiles(scanner,sources){" +
+          "const files=__wcvmScanSources(sources||[]);" +
+          "const candidates=new Set();" +
+          "for(const file of files){" +
+          'const dot=file.lastIndexOf(".");' +
+          'const extension=dot===-1?"":file.slice(dot+1).toLowerCase();' +
+          "if(__wcvmBinaryExt.has(extension))continue;" +
+          "let content;" +
+          'try{content=__wcvmReadFileSync(file,"utf8");}catch{continue;}' +
+          // ONE scanFiles() call per non-blank LINE, never more than one entry per call - see
+          // this file's own "Tailwind v4 native deps" describe block for exactly why: any call
+          // spanning more than one line (whether as one multi-line entry or multiple entries in
+          // one call) deadlocks; exactly one entry, exactly one line, never does.
+          'for(const line of content.split("\\n")){' +
+          "if(!line.trim())continue;" +
+          'for(const c of scanner.scanFiles([{content:line,extension}]))candidates.add(c);' +
+          "}" +
+          "}" +
+          "return{candidates:[...candidates],files};" +
+          "}",
+      ],
+      ["this.scanner=new Y({sources:d})", "this.scanner=new Y({sources:d}),this.__wcvmSources=d"],
+      [
+        "for(let i of this.scanner.scan())this.candidates.add(i);",
+        "{let __r=__wcvmScanFiles(this.scanner,this.__wcvmSources);this.__wcvmScannedFiles=__r.files;for(let i of __r.candidates)this.candidates.add(i);}",
+      ],
+      ["for(let i of this.scanner.files)c(i)", "for(let i of(this.__wcvmScannedFiles||[]))c(i)"],
+      [
+        'for(let i of this.scanner.globs){if(i.pattern[0]==="!")continue;',
+        'for(let i of(this.__wcvmSources||[])){if(i.negated||i.pattern[0]==="!")continue;',
+      ],
+      ["get scannedFiles(){return this.scanner?.files??[]}", "get scannedFiles(){return this.__wcvmScannedFiles??[]}"],
+    ];
+    let patched = source;
+    for (const [from, to] of replacements) {
+      if (!patched.includes(from)) throw new Error(`Tailwind Vite plugin patch anchor not found: ${JSON.stringify(from.slice(0, 60))}`);
+      patched = patched.replace(from, to);
+    }
+    return patched;
+  };
+
+  test("scaffolds, installs and serves a real dev server, and Tailwind's utility classes really apply", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+
+    const created = await spawn(page, "npm", ["create", "vite@latest", "tpl-tailwind", "--", "--template", "vanilla-ts", "--no-interactive"], "/");
+    expect(created.code).toBe(0);
+
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile("/tpl-tailwind/package.json")));
+      pkg.devDependencies["@tailwindcss/vite"] = "4.3.3";
+      pkg.devDependencies.vite = "7.3.6";
+      pkg.overrides = {
+        ...pkg.overrides,
+        esbuild: "npm:esbuild-wasm@0.28.2",
+        rollup: "npm:@rollup/wasm-node@4.63.4",
+        lightningcss: "npm:lightningcss-wasm@1.30.2",
+      };
+      await fs.writeFile("/tpl-tailwind/package.json", JSON.stringify(pkg));
+      await fs.writeFile(
+        "/tpl-tailwind/vite.config.ts",
+        'import { defineConfig } from "vite";\nimport tailwindcss from "@tailwindcss/vite";\n\nexport default defineConfig({ plugins: [tailwindcss()] });\n',
+      );
+      await fs.writeFile(
+        "/tpl-tailwind/index.html",
+        '<!doctype html>\n<html lang="en">\n  <head><meta charset="UTF-8" /><title>Vite + Tailwind CSS</title></head>\n  <body>\n    <div id="app"></div>\n    <script type="module" src="/src/main.ts"></script>\n  </body>\n</html>\n',
+      );
+      await fs.writeFile("/tpl-tailwind/src/index.css", '@import "tailwindcss";\n');
+      await fs.writeFile(
+        "/tpl-tailwind/src/main.ts",
+        [
+          'import "./index.css";',
+          "document.querySelector<HTMLDivElement>(\"#app\")!.innerHTML = `",
+          '  <div id="card" class="rounded-xl bg-indigo-600 p-8"><h1>Tailwind</h1></div>',
+          "`;",
+        ].join("\n"),
+      );
+    });
+
+    const install = await spawn(page, "npm", ["install"], "/tpl-tailwind");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    const patched = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const wasiPkgDir = "/tpl-tailwind/node_modules/@tailwindcss/oxide-wasm32-wasi";
+      if (!(await fs.exists(wasiPkgDir))) return { ok: false, reason: "oxide-wasm32-wasi not installed" };
+      const browserJs = new TextDecoder().decode(await fs.readFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.js`));
+      await fs.writeFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.mjs`, browserJs);
+      const oxideDir = "/tpl-tailwind/node_modules/@tailwindcss/oxide";
+      await fs.writeFile(`${oxideDir}/package.json`, JSON.stringify({ name: "@tailwindcss/oxide", version: "4.3.3", type: "module", main: "index.js" }));
+      await fs.writeFile(
+        `${oxideDir}/index.js`,
+        [
+          'export * from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+          'export { default } from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+        ].join("\n"),
+      );
+      return { ok: true };
+    });
+    expect(patched.ok, JSON.stringify(patched)).toBe(true);
+
+    // The Vite plugin patch itself is a pure string transform - runs in the OUTER (real Node)
+    // Playwright test process, not inside the page, so it's an ordinary function call rather than
+    // needing to serialize/reconstruct it inside page.evaluate.
+    const viteDir = "/tpl-tailwind/node_modules/@tailwindcss/vite";
+    const original = await page.evaluate(async (dir) => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      return new TextDecoder().decode(await fs.readFile(`${dir}/dist/index.mjs`));
+    }, viteDir);
+    const patchedSource = patchTailwindVitePlugin(original);
+    await page.evaluate(
+      async ({ dir, patchedSource }) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        await fs.writeFile(`${dir}/dist/index.mjs`, patchedSource);
+      },
+      { dir: viteDir, patchedSource },
+    );
+
+    await page.evaluate(async () => {
+      const wc = (window as unknown as WcWindow).wc;
+      const vite = await wc.spawn("node", ["node_modules/vite/bin/vite.js", "--port", "5204", "--strictPort"], { cwd: "/tpl-tailwind" });
+      const w = window as unknown as { __tw: typeof vite; __twOut: string };
+      w.__tw = vite;
+      w.__twOut = "";
+      for (const stream of [vite.stdout, vite.stderr]) {
+        void (async () => {
+          const reader = stream.getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) return;
+            w.__twOut += new TextDecoder().decode(value);
+          }
+        })();
+      }
+    });
+    const output = () => page.evaluate(() => (window as unknown as { __twOut: string }).__twOut);
+    await expect.poll(output, { timeout: 30_000 }).toMatch(/Local:|error/i);
+    const out = await output();
+    expect(out, out).toContain("Local:");
+
+    const frame = page.frameLocator("#preview-frame");
+    await expect(frame.locator("h1"), await output()).toHaveText("Tailwind", { timeout: 30_000 });
+    // The real proof Tailwind's utility classes compiled and applied - a computed style, not just
+    // the class names/markup being present (which would pass even with the CSS build silently
+    // failing/producing nothing).
+    const card = frame.locator("#card");
+    await expect(async () => {
+      const [bg, radius] = await card.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return [style.backgroundColor, style.borderRadius];
+      });
+      // Tailwind v4's default theme declares colors in OKLCH, not RGB - real Chromium reports the
+      // computed value back in whatever color space it was declared in (confirmed directly, not
+      // assumed: oklch(0.511 0.262 276.966) is Tailwind v4's own published indigo-600 swatch).
+      expect(bg).toBe("oklch(0.511 0.262 276.966)"); // indigo-600
+      expect(radius).not.toBe("0px");
+    }).toPass({ timeout: 30_000 });
+
+    await page.evaluate(async () => {
+      const vite = (window as unknown as { __tw: { kill: () => void; exit: Promise<unknown> } }).__tw;
+      vite.kill();
+      await vite.exit;
+    });
+  });
 });
 
 test.describe("fetcher", () => {

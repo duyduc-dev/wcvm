@@ -1059,8 +1059,8 @@ picking this back up.
       shim couldn't provide either, whereas the package's OWN browser build already solves that
       half of the problem for free.
 
-#### Tailwind CSS v4: feasibility findings (2026-09-30, investigated end-to-end, PARKED - not a
-Studio template)
+#### Tailwind CSS v4: feasibility findings (2026-09-30, investigated end-to-end - FIXED, shipped as
+a Studio template)
 
 Attempted as the "Tailwind" entry in Studio's picker (following Svelte's addition). Tailwind v4's
 `@tailwindcss/vite` plugin statically imports two native-Rust packages with zero plain-JS fallback:
@@ -1104,16 +1104,16 @@ rejected outright, unlike real Node's legacy any-subpath-resolves fallback for p
 `"exports"` at all; both packages are npm-hoisted siblings under the same `@tailwindcss/` scope
 directory, so a relative specifier sidesteps package resolution/`"exports"` entirely).
 
-**The actual, unfixable blocker: real content-scanning deadlocks, unconditionally, via TWO separate
-codepaths both routing through the exact same mechanism.** `Scanner.scan()` (native FS globbing and
-reading, what `@tailwindcss/vite`'s own stock plugin calls) spawns a WASI worker thread (via
+**The real blocker (eventually fixed): real content-scanning deadlocks via TWO separate codepaths
+both routing through the exact same mechanism.** `Scanner.scan()` (native FS globbing and reading,
+what `@tailwindcss/vite`'s own stock plugin calls) spawns a WASI worker thread (via
 `onCreateWorker`) whose own file reads relay back to the CREATOR thread's in-memory filesystem via
 `postMessage` + `Atomics.wait` (`@napi-rs/wasm-runtime`'s own `createFsProxy`/`createOnMessage` -
 read directly from its real published source, `fs-proxy.js`). The creator thread is ITSELF already
 frozen in its own separate `Atomics.wait` (`@emnapi/core`'s own thread-pool completion primitive,
-confirmed by reading ITS real source too), waiting for that same worker to finish. A genuine,
-structural deadlock: neither side can ever proceed, and it isn't a matter of choosing better options
-- `asyncWorkPoolSize: 0` (which `@emnapi/core`'s own source confirms should run "async work" fully
+confirmed by reading ITS real source too), waiting for that same worker to finish. A genuine
+deadlock: neither side can ever proceed, and it isn't a matter of choosing better options -
+`asyncWorkPoolSize: 0` (which `@emnapi/core`'s own source confirms should run "async work" fully
 in-place with no pool at all) and `RAYON_NUM_THREADS=1` (injected directly into the browser WASI
 binding's own `env`, since it doesn't forward real `process.env` at all, unlike the Node-targeted
 build) were both tried and had zero effect - a worker is unconditionally created regardless of
@@ -1129,37 +1129,47 @@ walk the filesystem itself: real files were enumerated via wcvm's own `fs.globSy
 process, surfaced and fixed a completely separate, genuine wcvm gap - `internal/deps/minimatch`
 wasn't vendored yet, so `fs.globSync`/`fs.glob` threw `WcvmError: Builtin module 'internal/deps/
 minimatch/index' is not vendored yet` on ANY use; fixed via the standard `discover-node-lib.mjs`
-flow, see CLAUDE.md's Status - a real, useful, Tailwind-independent capability that stays regardless
-of this feature's own outcome), read, and passed to `scanFiles()` - after ALSO discovering and
+flow, see CLAUDE.md's Status - a real, useful, Tailwind-independent capability kept regardless of
+this feature's own outcome), read, and passed to `scanFiles()` - after ALSO discovering and
 excluding binary assets by extension (feeding raster/font bytes decoded as "utf8" broke the native
 call outright). This actually got real Tailwind CSS generating correctly (real `@layer theme/base`
 Preflight output, confirmed via a direct fetch of the compiled CSS).
 
-**But the deadlock was still there, just one layer deeper - and this is the one that closes the
-door for real.** ANY JS/TS/JSX content containing a real `import` statement deadlocks `scanFiles()`
-too, confirmed in complete isolation: a fresh `Scanner`, a single file, no prior calls, the content
-trimmed down to just an `import "./index.css";` line plus a template literal. Remove the `import`
-and the identical content scans fine. Oxide's own JS/TSX candidate extractor evidently tries to
-resolve import specifiers as part of parsing (a real Tailwind v4 feature - it understands CSS
-imported from JS/component files) - hitting the identical worker-pool/fs-proxy relay regardless of
-which public API reaches it. Since virtually every real component file (React, Vue, Svelte, or even
-a plain TypeScript entry point) has at least one import, this is not a narrow edge case to design
-around - only static, import-free HTML/CSS content can be scanned safely, which defeats the actual
-point of using Tailwind in any component-based project.
+**First (wrong) theory: "any JS/TS/JSX content with a real `import` statement deadlocks
+`scanFiles()` too."** Looked airtight at first - confirmed in isolation (a fresh `Scanner`, a single
+file, no prior calls, content trimmed to just `import "./index.css";` plus a template literal;
+remove the `import` and the identical content scans fine) - but this was a coincidence, not the real
+variable, caught by testing a wider set of isolated variants (see `boot.spec.ts`'s own "Tailwind v4
+native deps" describe block for the full progression). **The real trigger, found by systematically
+isolating one variable at a time: any single `scanFiles()` call whose total input spans MORE than
+one line deadlocks - whether that's one multi-line content string (a leading blank line, a leading
+comment line, or a real `import` line before the class-bearing line all reproduce it identically) OR
+multiple single-line entries passed together in the same call (also reproduces it, even though
+neither entry alone is multi-line).** A call with EXACTLY one entry and EXACTLY one line never
+dispatches to the worker pool at all and returns immediately, every time. **The fix: call
+`scanFiles()` once per non-blank line instead of once per file**, accumulating candidates - proven
+against a realistic, multi-line file (main.ts-shaped, 20 lines, real Tailwind classes scattered
+throughout, including an `import` line) with correct candidates and negligible overhead (native
+calls, not the deadlocking pool path - 20 lines in ~11ms). Patched into `@tailwindcss/vite`'s own
+plugin bundle (`apps/studio/.../tailwindTemplateProject.ts`'s `patchTailwindVitePlugin`) and
+verified end to end in real Chromium against the real npm registry: install, dev server start, real
+Tailwind CSS generating and applying, checked via a real computed style (`getComputedStyle`'s own
+`backgroundColor`/`borderRadius`, not just markup/class-name presence) - Tailwind v4's own default
+theme uses OKLCH colors, not RGB (`oklch(0.511 0.262 276.966)` for `indigo-600`, confirmed against
+its own published theme, not assumed).
 
-**Parked, matching "Real npm: feasibility findings" above: a genuine structural dead end in
-`@napi-rs/wasm-runtime`'s own browser-build architecture (its content-scanning story fundamentally
-assumes either a real OS thread pool with its own real, unmediated filesystem access, or that the
-creator thread dispatching work stays responsive while it runs - neither holds in a single-threaded
-JS sandbox with no real OS filesystem for a Worker to read directly), not a scoped patch away.** What
-survives, real and kept: `lightningcss` support (a fully working fix, reusable by anything else that
-needs it), `@tailwindcss/oxide`'s own native bindings loading and running basic work at all (proven,
-passing test - reusable groundwork for the exact `@napi-rs/wasm-runtime` browser-build pattern any
-future napi-rs-based WASI package will also need), and `fs.globSync`/`fs.glob` now genuinely working
-(minimatch vendored - a real new wcvm capability, independent of Tailwind). Revisit only if
-`@napi-rs/wasm-runtime`'s own browser build changes how it handles cross-thread fs access for a
-synchronously-blocked creator, or if Tailwind's own JS/TSX candidate extractor gains an option to
-skip import resolution entirely.
+**Shipped, not parked. What's real and kept**: `lightningcss` support, `@tailwindcss/oxide`'s native
+bindings loading and running (reusable groundwork for the exact `@napi-rs/wasm-runtime` browser-
+build pattern any future napi-rs-based WASI package will also need), `fs.globSync`/`fs.glob` now
+genuinely working (minimatch vendored), and the "Tailwind" entry in Studio's picker
+(`apps/studio/.../templateProjects/tailwindTemplateProject.ts`). The per-line `scanFiles()` fix
+means Studio's own scaffolded project's classes ARE detected correctly on first load; it does NOT
+mean the underlying `@napi-rs/wasm-runtime` deadlock is fixed in general - any OTHER future napi-rs-
+based WASI package that calls a single "do real work" entry point spanning more than trivial input
+in one call (not just Tailwind's own `Scanner.scan()`) will hit the identical deadlock and need the
+same kind of per-call-size workaround, not a wcvm-side fix (there isn't one - the creator thread
+being frozen while its own worker needs it responsive is inherent to this cross-thread fs-proxy
+design, not something wcvm can patch around in general).
 
 Later: Python (Pyodide), Bun shim, debugger, Studio UI.
 

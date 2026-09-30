@@ -1543,9 +1543,9 @@ Sections, in build order:
   `constants.ts` for the Studio-side wiring this entry is actually about. A full, clean
   `pnpm exec playwright test` run (140 passed, 16 opt-in run with
   `WCVM_E2E_VITE=1`) and `vitest run` (1025/1025) confirm no regressions.
-- **Tailwind CSS v4 was attempted as the next Studio template (after Svelte) and PARKED - a real,
-  structural deadlock in `@napi-rs/wasm-runtime`'s own browser-build content-scanning, not a
-  version-pinning issue and not fixable with a scoped patch.** Full findings live in PLAN.md's
+- **Tailwind CSS v4 was attempted as the next Studio template (after Svelte), hit a real, genuine
+  deadlock, and was FIXED once the exact trigger was correctly isolated (initially misdiagnosed and
+  parked, then reopened and actually solved - see below).** Full findings live in PLAN.md's
   "Tailwind CSS v4: feasibility findings" (2026-09-30) - this entry is the short version. Tailwind
   v4's `@tailwindcss/vite` plugin statically imports two native-Rust packages with zero plain-JS
   fallback: `@tailwindcss/oxide` (a `Scanner`) and, transitively, `lightningcss`. `lightningcss` was
@@ -1559,7 +1559,7 @@ Sections, in build order:
   does) by renaming its `.js` to `.mjs` and rewriting `@tailwindcss/oxide`'s own `index.js` +
   `package.json` into a small ESM re-export shim. Both fixes are real, proven, and kept as passing
   tests (`examples/playground/e2e/boot.spec.ts`'s "Tailwind v4 native deps" describe block).
-  **The actual blocker**: `Scanner.scan()` (native FS globbing/reading) spawns a WASI worker thread
+  **The real blocker**: `Scanner.scan()` (native FS globbing/reading) spawns a WASI worker thread
   whose own file reads relay back to the creator thread's in-memory filesystem via `postMessage` +
   `Atomics.wait` - but the creator thread is ITSELF already frozen in its own separate `Atomics.wait`
   waiting for that same worker to finish. A genuine deadlock, confirmed directly (a heartbeat timer
@@ -1570,23 +1570,28 @@ Sections, in build order:
   `fs.globSync` (which, along the way, surfaced and fixed a real, separate, Tailwind-independent gap
   - `internal/deps/minimatch` wasn't vendored yet, so `fs.globSync`/`fs.glob` threw unconditionally;
   fixed via the standard `discover-node-lib.mjs` flow - see CLAUDE.md's Status). This genuinely
-  produced real Tailwind CSS (`@layer theme/base` Preflight, confirmed via a direct fetch). But the
-  SAME deadlock reappears one layer deeper and closes the door for good: ANY JS/TS/JSX content
-  containing a real `import` statement deadlocks `scanFiles()` too (confirmed in complete isolation -
-  a fresh `Scanner`, one file, no prior calls; remove the `import` and the identical content scans
-  fine) - oxide's own JS/TSX candidate extractor evidently tries to resolve import specifiers as
-  part of parsing, hitting the identical worker-pool/fs-proxy relay regardless of which API reaches
-  it. Since virtually every real component file (React, Vue, Svelte, even a plain TypeScript entry
-  point) has at least one import, only static, import-free HTML/CSS content can be scanned safely -
-  not a narrow edge case, but the thing that defeats using Tailwind in any component-based project at
-  all. Parked, the same category of finding as "Real npm: feasibility findings" (PLAN.md) - a genuine
-  architectural limit of `@napi-rs/wasm-runtime`'s browser build (it assumes either a real OS thread
-  pool with its own unmediated filesystem access, or a creator thread that stays responsive while
-  dispatching work - neither holds in a single-threaded JS sandbox with no real OS filesystem for a
-  Worker to read directly), not something to keep chasing at this effort level. What's real and kept
-  regardless: `lightningcss` support, `@tailwindcss/oxide`'s native bindings loading and running (a
-  reusable proof for any future `@napi-rs/wasm-runtime`-based WASI package), and `fs.globSync`/
-  `fs.glob` now genuinely working. A full, clean `pnpm exec playwright test` run (141 passed, 17
-  opt-in run with `WCVM_E2E_VITE=1`) and `vitest run` (1025/1025) confirm no regressions.
-- Tests: 1025 Vitest + 141 Playwright (Chromium; 17 of them opt-in, needing the real npm registry:
+  produced real Tailwind CSS (`@layer theme/base` Preflight, confirmed via a direct fetch).
+  **First diagnosis, later found WRONG**: the deadlock seemed to reappear whenever scanned content
+  contained a real `import` statement (confirmed - at the time - in isolation), leading to an initial
+  conclusion that ANY realistic component file (virtually all of which have imports) was unscannable
+  and the feature was PARKED. Asked to keep investigating anyway; systematically varying ONE thing
+  at a time (not just the presence of an import) found the real, narrower rule: **any single
+  `scanFiles()` call whose total input spans MORE than one line deadlocks** - a leading blank line,
+  a leading comment line, or a real `import` line all reproduced it identically, and so did passing
+  TWO single-line entries together in one call (neither alone multi-line). Exactly one entry,
+  exactly one line, per call never dispatches to the worker pool and always returns immediately.
+  **Fixed for real**: call `scanFiles()` once per non-blank line instead of once per file - proven
+  against a realistic, multi-line file with real Tailwind classes scattered throughout (20 lines,
+  ~11ms, correct candidates including an `import` line among them) and then end to end in a real
+  Vite dev server: real Tailwind CSS generating and applying, checked via a real computed style
+  (Tailwind v4's own default theme uses OKLCH colors, not RGB - `oklch(0.511 0.262 276.966)` for
+  `indigo-600`, confirmed against Tailwind's own published theme). Shipped as Studio's "Tailwind"
+  template (`apps/studio/.../templateProjects/tailwindTemplateProject.ts`). Lesson: the FIRST
+  isolation that "confirms" a hypothesis by removing one variable and seeing the symptom disappear
+  is not automatically the real variable - the fix here only fell out of testing several
+  DIFFERENT isolated variants (a leading blank line alone, with no import at all, reproduced the
+  exact same hang), not just re-confirming the first one twice. A full, clean
+  `pnpm exec playwright test` run (143 passed, 19 opt-in run with `WCVM_E2E_VITE=1`) and
+  `vitest run` (1025/1025) confirm no regressions.
+- Tests: 1025 Vitest + 143 Playwright (Chromium; 19 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".

@@ -19,7 +19,7 @@ const CACHE_ROOT = "/home/user/.template-cache";
 // to be a stale cache clone. A change to the pin VALUES below doesn't need a bump either way (see
 // cacheKeyFor's own comment) - only a change to what's HARDCODED in a specific template's own
 // recipe file(s) does.
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 4;
 
 /** A tiny non-cryptographic string hash (FNV-1a) - this keys a local cache, not a security
  *  boundary, so deterministic + low collision risk for a handful of short config strings is all

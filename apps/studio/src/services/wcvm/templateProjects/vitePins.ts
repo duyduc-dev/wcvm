@@ -20,6 +20,15 @@ export const KNOWN_PLUGIN_PINS: Record<string, string> = {
 export const WASM_OVERRIDES: Record<string, string> = {
   esbuild: "npm:esbuild-wasm@0.28.2",
   rollup: "npm:@rollup/wasm-node@4.63.4",
+  // lightningcss (a transitive dep of @tailwindcss/node, itself pulled in by @tailwindcss/vite -
+  // see tailwindTemplateProject.ts) is native Rust with no wasm32 optionalDependency variant of
+  // its own (unlike @tailwindcss/oxide, patched separately - see that file), so it needs the same
+  // swap-the-package-name trick as esbuild/rollup above. lightningcss-wasm's own "node" condition
+  // target (wcvm's ESM resolver already recognizes "node") is coincidentally sandbox-friendly
+  // already: real fs.readFileSync(new URL(...)) + SYNCHRONOUS WebAssembly.Module/Instance, no
+  // ESM-condition change needed. Confirmed directly: `npm view lightningcss-wasm@1.30.2`, and its
+  // wasm-node.mjs's own published source.
+  lightningcss: "npm:lightningcss-wasm@1.30.2",
 };
 
 /** Mutates a parsed package.json in place: pins `vite`, pins any known plugin it already

@@ -12,6 +12,7 @@ import {
   SolidLogoIcon,
   StaticLogoIcon,
   SvelteLogoIcon,
+  TailwindLogoIcon,
   TanstackLogoIcon,
   TsLogoIcon,
   VueLogoIcon,
@@ -155,6 +156,29 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     label: "TanStack Router",
     description: "TypeScript",
     icon: TanstackLogoIcon,
+    category: "Frontend",
+  },
+  {
+    // FIXED (2026-09-30): Tailwind CSS v4's own @tailwindcss/vite plugin statically imports two
+    // native-Rust packages with no plain-JS fallback (@tailwindcss/oxide, and lightningcss via
+    // @tailwindcss/node). lightningcss is swapped for lightningcss-wasm via the same `overrides`
+    // trick esbuild/rollup already use; @tailwindcss/oxide's own already-installed (wcvm's npm
+    // fakes cpu="wasm32", matching that package's own optionalDependency gating) `-wasm32-wasi`
+    // sibling ships a browser build using the same @napi-rs/wasm-runtime shape already proven
+    // inside wcvm for @rolldown/browser - reached via a post-install patch (see
+    // tailwindTemplateProject.ts's own top comment for the full writeup). A SEPARATE, deeper
+    // problem: the plugin's own native Scanner.scan() (real FS globbing) deadlocks - a spawned
+    // WASI worker's own file reads relay back to the creator thread via postMessage + Atomics.wait,
+    // but the creator thread is itself already frozen in its own Atomics.wait waiting on that same
+    // worker. Content-based Scanner.scanFiles() avoids that specific deadlock, but deadlocks too
+    // the instant it's given more than one line of input in a single call - fixed by patching the
+    // plugin's own bundle to call it once per non-blank line instead (proven fast and correct,
+    // real Tailwind CSS generating and applying, checked via a real computed style not just markup
+    // presence). Verified end to end in real Chromium against the real npm registry.
+    id: "tailwind",
+    label: "Tailwind CSS",
+    description: "TypeScript",
+    icon: TailwindLogoIcon,
     category: "Frontend",
   },
   {
