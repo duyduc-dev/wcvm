@@ -2000,7 +2000,7 @@ function About() {
   });
 });
 
-test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik)", () => {
+test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik/Svelte)", () => {
   // Studio's picker (apps/studio/src/features/Home/CardTemplate/CreateTemplateDialog/constants.ts)
   // offers these four via the SAME generic path react-ts/vue-ts already use
   // (templateProjects/viteTemplateProject.ts's pinVitePackage(): pins vite to 7.3.6 and swaps
@@ -2010,21 +2010,31 @@ test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik)", () => {
   // code shipped a "qwik-ts" entry anyway, so that claim can't be trusted without checking for
   // real. This runs the EXACT production recipe for all four, one framework per test so a single
   // failure doesn't hide the others.
-  const runTemplate = async (page: import("@playwright/test").Page, id: string, dir: string, port: number) => {
+  const runTemplate = async (
+    page: import("@playwright/test").Page,
+    id: string,
+    dir: string,
+    port: number,
+    knownPluginPins: Record<string, string> = {},
+  ) => {
     const created = await spawn(page, "npm", ["create", "vite@latest", dir, "--", "--template", id, "--no-interactive"], "/");
     expect(created.code).toBe(0);
 
     // Exactly pinVitePackage() (apps/studio/.../vitePins.ts): pin vite + swap esbuild/rollup for
-    // their wasm builds - nothing else, matching what real users of the picker actually get.
+    // their wasm builds, plus any framework plugin pin KNOWN_PLUGIN_PINS actually has for this
+    // template (only applied when the scaffold already depends on it, same as the real function).
     await page.evaluate(
-      async ({ dir }) => {
+      async ({ dir, knownPluginPins }) => {
         const { fs } = (window as unknown as WcWindow).wc;
         const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile(`/${dir}/package.json`)));
         pkg.devDependencies.vite = "7.3.6";
+        for (const [name, pin] of Object.entries(knownPluginPins)) {
+          if (pkg.devDependencies[name]) pkg.devDependencies[name] = pin;
+        }
         pkg.overrides = { ...pkg.overrides, esbuild: "npm:esbuild-wasm@0.28.2", rollup: "npm:@rollup/wasm-node@4.63.4" };
         await fs.writeFile(`/${dir}/package.json`, JSON.stringify(pkg));
       },
-      { dir },
+      { dir, knownPluginPins },
     );
 
     const install = await spawn(page, "npm", ["install"], `/${dir}`);
@@ -2114,6 +2124,23 @@ test.describe("Frontend template scaffolds (Preact/Lit/Solid/Qwik)", () => {
     test.setTimeout(90_000);
     await page.click("#preview-enable");
     await runTemplate(page, "qwik-ts", "tpl-qwik", 5202);
+    await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });
+    await stopTemplate(page);
+  });
+
+  // FIXED (was PARKED - see HISTORY.md's "Svelte was attempted as a fifth example and PARKED"):
+  // Svelte's own compiler (compiler/utils/ast.js <-> #compiler/builders) has a genuine, static,
+  // mutual circular ESM import that wcvm's ESM loader couldn't handle until the SCC-aware rewrite
+  // added alongside TanStack Router above (runtime/esm/loader.ts, runtime/esm/cyclic.ts). Unlike
+  // Preact/Lit/Solid/Qwik, create-vite's svelte-ts template needs one plugin pin:
+  // @sveltejs/vite-plugin-svelte defaults to ^7.3.0, which needs vite@8+ (this sandbox has no
+  // Rolldown-WASM build) - ^6.2.4 is the last major still compatible with vite@7 (confirmed via
+  // `npm view @sveltejs/vite-plugin-svelte@6.2.4 peerDependencies`: "^6.3.0 || ^7.0.0").
+  test("svelte-ts really runs (@sveltejs/vite-plugin-svelte pinned to ^6.2.4 for vite@7)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+    await page.click("#preview-enable");
+    await runTemplate(page, "svelte-ts", "tpl-svelte", 5203, { "@sveltejs/vite-plugin-svelte": "^6.2.4" });
     await expect(page.frameLocator("#preview-frame").locator("h1")).toHaveText("Get started", { timeout: 30_000 });
     await stopTemplate(page);
   });

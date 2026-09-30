@@ -1521,5 +1521,27 @@ Sections, in build order:
   revisit only if circular-ESM support becomes a priority for its own sake, and re-verify against
   Svelte's then-current source rather than assuming this writeup is still accurate (the ecosystem
   moves; the exact cycle location already changed once between 5.0.0 and 5.57.1).
-- Tests: 898 Vitest + 122 Playwright (Chromium; 7 of them opt-in, needing the real npm registry:
+- **FIXED and RE-VERIFIED (2026-09-29).** The circular-ESM support this section said would need
+  "genuine runtime work on the order of the Rolldown/worker-pool platform investigations" was
+  actually built, driven by hitting the SAME `ERR_CIRCULAR_ESM_NOT_SUPPORTED` constraint for real
+  again - not in Svelte this time, but in zod v4's `core.js`/`util.js` (reached transitively through
+  `@tanstack/router-plugin`, while adding a TanStack Router template to Studio's picker). The fix
+  (`runtime/esm/loader.ts`'s `discover()`/`computeSccs()`, `runtime/esm/cyclic.ts`'s
+  `rewriteCyclicModule()` - both have their own full design-history doc comments, including the two
+  rejected approaches: a single-edge dynamic-import bridge that DEADLOCKS, and a CJS-style snapshot
+  that loses live-binding semantics and breaks the real target case) is exactly the strongly-
+  connected-component merge this writeup predicted would be needed. Once it landed and was proven
+  against TanStack Router's own real cycle, Svelte was re-verified against it directly - re-added to
+  Studio's picker (`svelte-ts`, create-vite's own official template, no hand-written recipe needed -
+  unlike this section's now-obsolete from-scratch wiring above) with one plugin pin
+  (`@sveltejs/vite-plugin-svelte` -> `^6.2.4`, still the last major compatible with this sandbox's
+  pinned vite@7 - confirmed again directly against the current registry, not assumed stale) and
+  verified end to end in real Chromium against the real npm registry: install, dev server start, and
+  the scaffolded app actually rendering. The circular-ESM fix's own full design writeup (including
+  the two rejected approaches) lives in `runtime/esm/loader.ts`'s and `runtime/esm/cyclic.ts`'s own
+  doc comments, not duplicated here; see `apps/studio/.../templateProjects/vitePins.ts`/
+  `constants.ts` for the Studio-side wiring this entry is actually about. A full, clean
+  `pnpm exec playwright test` run (140 passed, 16 opt-in run with
+  `WCVM_E2E_VITE=1`) and `vitest run` (1025/1025) confirm no regressions.
+- Tests: 1025 Vitest + 140 Playwright (Chromium; 16 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".

@@ -34,8 +34,10 @@ built this way" that was probably already answered by a real bug.
   `execSync`/`spawnSync`/`fork()`+IPC), and an interactive REPL.
 - Real ESM (`import`/`export`) via the browser's own `import()` of rewritten `blob:` URLs; real
   `import.meta` (the module's actual `file://` URL/filename/dirname/resolve); dynamic `import()`
-  from CJS too. Known gap: a genuinely circular static ESM import isn't supported (hit for real in
-  Svelte's own compiler - see HISTORY.md section 5).
+  from CJS too. Genuinely circular static ESM imports ARE now supported (a strongly-connected-
+  component-aware rewrite - `runtime/esm/loader.ts`, `runtime/esm/cyclic.ts` - merges each cycle
+  into live getter-based bindings instead of one Blob URL per module); this used to be a hard gap
+  (hit for real in zod v4's and Svelte's own compilers) - see HISTORY.md for the full writeup.
 - `fs.watch`/`fs.watchFile` (real push events + polling).
 - `net` (real TCP over a virtual in-kernel network), `http` (real vendored `http.js` plus a
   hand-written HTTP/1.1 wire parser), `dgram` (real UDP).
@@ -53,20 +55,20 @@ built this way" that was probably already answered by a real bug.
 - A real native browser `Worker` and `fetch()` of `file:` URLs (needed by WASM-loading packages
   like Rolldown's browser build).
 - The playground (`examples/playground`) has four working dev-server examples (Vite+React,
-  Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express); a Svelte
-  template was attempted and PARKED (see HISTORY.md section 5 - a real circular-ESM limitation in
-  Svelte's own compiler, not a version-pinning issue).
-- Tests: 898 Vitest + 122 Playwright (Chromium; 7 of them opt-in, needing the real npm registry:
+  Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express). Studio's
+  own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
+  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Rectify - Svelte was PARKED, then re-verified working
+  once the circular-ESM gap above was fixed (see HISTORY.md).
+- Tests: 1025 Vitest + 140 Playwright (Chromium; 16 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
-Not done (roadmap order, see PLAN.md): a Svelte dev-server template (PARKED - a real, structural
-circular-ESM limitation in Svelte's own compiler, not a version-pinning issue; Vite+React,
-Vite+Vue and plain Node+Express templates exist), npm workspaces and the rest of `npm exec`
-(arbitrary local/registry commands, not just `create`), DNS (`dns.lookup()` is a fixed-address
-shim, low-value in a single virtual host with no real network to resolve a name against), real
-`npm` (investigated and DEFERRED - its fetch stack has no path to a real network from inside
-wcvm's virtual `net`/`http`; a minimal built-in `npm install`/`npm run`/`npm create` exists
-instead - see above and PLAN.md's "Real npm: feasibility findings"), Python/Bun, Studio UI.
+Not done (roadmap order, see PLAN.md): npm workspaces and the rest of `npm exec` (arbitrary local/
+registry commands, not just `create`), Angular/Ember Studio templates (need a Rolldown-WASM binding
+wcvm doesn't have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
+single virtual host with no real network to resolve a name against), real `npm` (investigated and
+DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
+a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's
+"Real npm: feasibility findings"), Python/Bun, Studio UI.
 
 ## Architecture in one page
 
