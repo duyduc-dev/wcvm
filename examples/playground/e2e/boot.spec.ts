@@ -2671,6 +2671,481 @@ test.describe("Tailwind CSS v4 template (Studio recipe)", () => {
   });
 });
 
+test.describe("Angular feasibility probe", () => {
+  // SCOPING PROBE, not yet a Studio template. vivari's own Angular recipe needs a Rolldown-WASM
+  // binding wcvm doesn't have; re-investigated directly rather than trusting that inherited
+  // assumption - @angular/build@22.2.0's own package.json does hard-depend on real `rolldown`, but
+  // reading its actual source (chunk-optimizer.js, only called from execute-build.js when
+  // lazyChunksCount >= optimizeChunksThreshold, default 3) shows it's an OPTIONAL, lazily-
+  // require()'d production chunk-merging pass - environment-options.js documents a public
+  // NG_BUILD_OPTIMIZE_CHUNKS=false escape hatch (threshold -> Infinity) that skips it entirely, so
+  // require("rolldown") never executes at all. wcvm's npm also has no general `npx`/`npm exec`
+  // support (only install/run/create/init) - @angular/cli's own "ng new" isn't reachable via
+  // `npm create` (no create-angular initializer package), so it's installed as an ordinary
+  // dependency and its own bin script run directly via node, the same pattern every other
+  // hand-wired template already uses for vite itself.
+  // Real findings, from reading the real published source of every package involved directly -
+  // not assumed - and testing each fix against the real CLI, one real error at a time:
+  // - `require("yargs/helpers")` (a genuine CJS file, @angular/cli's own command-module.js)
+  //   against `yargs@18` (the version @angular/cli@22.2.0 actually depends on) threw a SyntaxError
+  //   - confirmed this is NOT a wcvm bug: yargs@18 is real ESM-only (`"./helpers":
+  //   "./helpers/helpers.mjs"`, no "require" condition at all in its own package.json exports),
+  //   and real Node 24 only bridges this via its own `require(esm)` synchronous interop (verified
+  //   directly: `require("yargs/helpers")` really does work in real Node 24 against real yargs@18)
+  //   - a feature wcvm's own CJS loader doesn't implement. `yargs@17.7.2` (the last major before
+  //   the ESM-only jump) has a real, proper dual CJS/ESM "./helpers" export
+  //   (`"require": "./helpers/index.js"`) - overriding to it is the same `overrides` trick already
+  //   used for esbuild/rollup/lightningcss elsewhere, and @angular/cli's own use of it (just
+  //   `hideBin`) is stable across that version gap.
+  // - `node:assert/strict` wasn't vendored at all - a real, narrow wcvm gap (not
+  //   Angular-specific), fixed the standard way (discover-node-lib.mjs, see CLAUDE.md's Status).
+  // - `npm --version`/`-v` weren't implemented by wcvm's own minimal npm at all - @angular/cli's
+  //   own package-manager detection (src/package-managers/factory.ts) spawns exactly this via
+  //   child_process to confirm npm is "installed" - not a PATH-resolution problem (wcvm's built-in
+  //   npm was already found and run just fine via child_process), just this one missing flag,
+  //   which surfaced as a misleading "npm ... cannot be found in the PATH" error. Fixed in
+  //   programs/npm/npm.ts.
+  // - `ng new` (unlike `ng version`) pulls in real schematics execution, which surfaced the exact
+  //   same require(esm) gap again, this time inside @angular-devkit/schematics's own CJS
+  //   (recorder.js: real "use strict"/exports.-style CJS, `require("magic-string")`) - confirmed by
+  //   reading the actual published source, not assumed. magic-string@1.4.1 (the exact version
+  //   schematics@22.2.0 depends on) is real ESM-only ("type":"module", single "." export, no
+  //   "require" condition at all); magic-string@0.30.x still has a real, proper dual CJS/ESM export
+  //   map and the same stable MagicString API surface (.appendLeft/.appendRight/.remove/.original/
+  //   .toString()) recorder.js actually calls. A proactive sweep of @angular/cli@22.2.0's other
+  //   direct deps for the same "type":"module" + no "require" condition shape (checked against
+  //   real published package.json "exports", not guessed) found three more ESM-only-only-in-their-
+  //   latest-major packages that a full `ng new` run risks eagerly require()'ing even where
+  //   --defaults/--skip-install/--skip-git skip their actual FEATURE (prompts, spinners): a
+  //   dependency being unused by the CODE PATH doesn't mean its module isn't require()'d at load
+  //   time - the same "eager router construction" shape child_process.ts's own gotcha already
+  //   established. Each has a real, still-dual-CJS/ESM last-major-before-the-ESM-only-jump version:
+  //   @inquirer/prompts (ESM-only from 8.x; 7.10.1 is dual), ora (ESM-only from 6.x; 5.4.1 is dual,
+  //   no "exports" field at all), parse5-html-rewriting-stream (ESM-only from 7.x; 6.0.1 is dual).
+  const NG_CLI_OVERRIDES = {
+    yargs: "^17.7.2",
+    "magic-string": "^0.30.19",
+    "@inquirer/prompts": "^7.10.1",
+    ora: "^5.4.1",
+    "parse5-html-rewriting-stream": "^6.0.1",
+  };
+
+  test("ng version runs for real (@angular/cli installs and its own CLI actually runs)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(120_000);
+
+    await page.evaluate(
+      async (overrides) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        await fs.mkdir("/ng-probe", { recursive: true });
+        await fs.writeFile(
+          "/ng-probe/package.json",
+          JSON.stringify({ name: "ng-probe", private: true, devDependencies: { "@angular/cli": "22.2.0" }, overrides }),
+        );
+      },
+      NG_CLI_OVERRIDES,
+    );
+
+    const install = await spawn(page, "npm", ["install"], "/ng-probe");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    const version = await spawn(page, "node", ["node_modules/@angular/cli/bin/ng.js", "version"], "/ng-probe");
+    expect(version.code, version.out + version.err).toBe(0);
+    expect(version.out).toContain("Angular CLI");
+    expect(version.out).toContain("22.2.0");
+  });
+
+  test("ng new scaffolds a real app (schematics, no install/git)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(120_000);
+
+    await page.evaluate(
+      async (overrides) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        await fs.mkdir("/ng-cli", { recursive: true });
+        await fs.writeFile(
+          "/ng-cli/package.json",
+          JSON.stringify({ name: "ng-cli", private: true, devDependencies: { "@angular/cli": "22.2.0" }, overrides }),
+        );
+      },
+      NG_CLI_OVERRIDES,
+    );
+    const install = await spawn(page, "npm", ["install"], "/ng-cli");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    const created = await spawn(
+      page,
+      "node",
+      ["ng-cli/node_modules/@angular/cli/bin/ng.js", "new", "ng-new-app", "--skip-git", "--skip-install", "--defaults"],
+      "/",
+    );
+    expect(created.code, created.out + created.err).toBe(0);
+
+    const files = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      return fs.readdir("/ng-new-app");
+    });
+    expect(files).toContain("package.json");
+    expect(files).toContain("angular.json");
+  });
+
+  // The scaffolded app's OWN package.json depends on @angular/build, which pulls in a much bigger
+  // native-dependency tree than the CLI itself - checked against the real published package.json
+  // of every one of @angular/build@22.2.0's direct dependencies (npm view, not assumed):
+  // - vite: pinned EXACTLY to "8.3.0", which (like every other real-scaffold template here -
+  //   vitePins.ts's own VITE_PIN comment) hard-depends on real `rolldown` with no wasm32 build
+  //   published at all (confirmed: `npm view rolldown@1.2.8 optionalDependencies` lists only real
+  //   OS/arch native bindings). Overridden down to vitePins.ts's own VITE_PIN (7.3.6, the same
+  //   version every other template already uses) - the same trick, applied to a new consumer.
+  // - esbuild: pinned exactly to "0.28.2" - esbuild-wasm@0.28.2 (the exact matching version) is
+  //   real and published; same swap-the-package-name trick as every other template's esbuild
+  //   override.
+  // - sass-embedded: real native Dart-compiled platform binaries selected via optionalDependencies
+  //   os/cpu gating - but ALSO ships its own real pure-JS fallback variant
+  //   (sass-embedded-all-unknown, cpu: ["!arm","!arm64","!riscv64","!x64"]) that install.ts's
+  //   existing PLATFORM={cpu:"wasm32"} fakery already selects "for free", no override needed -
+  //   confirmed directly against the real published package.json, not assumed.
+  // - @parcel/watcher: real native file-watcher binding, no wasm32 optionalDependency variant of
+  //   its own - but @parcel/watcher-wasm@2.6.0 (exact matching version) is a real, separately-
+  //   published drop-in with a proper dual CJS/ESM export map of its own. Overridden the same way
+  //   as lightningcss/esbuild/rollup elsewhere.
+  // - oxc-parser: real native parser binding. A `@oxc-parser/binding-wasm32-wasi` DOES exist on the
+  //   registry at the exact matching version (0.150.0) - oxc-parser@0.150.0 itself just stopped
+  //   listing it as an optionalDependency (older 0.6x-0.14x versions did) - but per the deadlock
+  //   finding below, it's a dead end for this app's dev-serve path regardless, so it's neither
+  //   installed nor patched in here.
+  // - listr2: pinned exactly to "11.1.0" - a SUBTLER variant of the require(esm) gap: its own
+  //   package.json "exports" DOES have a "require" condition (unlike magic-string's), but that
+  //   condition points at the exact same real ESM ".mjs" file as "import" does (a "fake dual"
+  //   package, confirmed directly via `npm view listr2@11.1.0 exports` - not a genuine separate
+  //   CJS build). Checking every 10.x version individually (not just the latest, which was the
+  //   first real mistake here) shows the SAME fake-dual shape starting at 10.1.0 - only 10.0.0
+  //   itself still has a real, separate ".cjs" build; that exact version is the override target.
+  // - vite itself: unlike every other override above, there is NO version of vite (any major) that
+  //   isn't real ESM-only ("type":"module" - true since long before Angular 22 existed), so no
+  //   override can fix this. @angular/build's own dev-server needs PROGRAMMATIC access to vite's
+  //   API (createServer, etc), not just to spawn its CLI bin script the way every other template
+  //   here does - confirmed directly in its published, compiled source
+  //   (builders/dev-server/vite/{index,server}.js, tools/vite/plugins/{angular-memory,ssr-
+  //   transform}-plugin.js): each does `await import('vite')`, which its CommonJS build target
+  //   downlevels to `Promise.resolve(\`${'vite'}\`).then(s => __importStar(require(s)))` - still a
+  //   real require() under the hood, still hitting the same gap. Real dynamic `import()` from CJS
+  //   IS genuinely supported here (see CLAUDE.md's Status) - the fix is a source patch (same idea
+  //   as tailwindTemplateProject.ts's patchTailwindVitePlugin): rewrite that exact downleveled
+  //   expression back into a real `import('vite')`. The SAME idea, but a SECOND compiled shape
+  //   (`Promise.resolve().then(() => __importStar(require('pkg')))` - no template-string wrapper,
+  //   a zero-arg arrow, confirmed by reading `javascript-transformer-worker.js`'s own compiled
+  //   source directly) appears for the "Babel linker" path's own lazy load of
+  //   `@angular/compiler-cli/linker/babel`, `@angular/compiler-cli` and `@babel/core` - a REAL,
+  //   PUBLIC escape hatch (`NG_BUILD_BABEL_LINKER=1`, `environment-options.js`'s own
+  //   `useBabelLinker`) that routes Angular's own partial-compilation linking through Babel instead
+  //   of its newer OXC-based linker - which matters because OXC's own linker needs `oxc-parser`,
+  //   a REAL NATIVE WASM parser (`@napi-rs/wasm-runtime`-based, the exact same architecture already
+  //   proven, in this project's own PLAN.md, to DEADLOCK on any single native call whose input
+  //   spans more than one line (the Tailwind `Scanner.scanFiles()` finding) - PLAN.md's own
+  //   writeup explicitly warns this generalizes to "any OTHER future napi-rs[-based binding]" this
+  //   way, and a JS parser fundamentally cannot be fed one line at a time (unlike Tailwind's
+  //   decomposable class-name scan) - so oxc-parser's `parseSync(filename, code, ...)`, called with
+  //   an entire real source file as `code`, is a genuine, structural dead end here, not a "hasn't
+  //   been patched yet" gap. Babel has no native/WASM component at all, so it carries none of that
+  //   risk - hence routing around OXC entirely rather than trying to fix it. A default `ng new
+  //   --defaults` app has no @angular/ssr dependency (SSR isn't the default), so the other
+  //   downleveled dynamic imports found in the same source (`@angular/ssr/node`,
+  //   `beasties/compiler`, a user's `--proxy-config` path, ...) are dead code for this probe and
+  //   deliberately left unpatched.
+  const NG_APP_OVERRIDES = {
+    ...NG_CLI_OVERRIDES,
+    vite: "7.3.6",
+    esbuild: "npm:esbuild-wasm@0.28.2",
+    "@parcel/watcher": "npm:@parcel/watcher-wasm@2.6.0",
+    listr2: "10.0.0",
+  };
+
+  /** Walks `root` (real fs, inside the sandbox) and rewrites every real-CJS file that downlevels a
+   *  real `await import('pkg')` into a `require()` call (see the doc comment above - TWO different
+   *  compiled shapes are known) back into a real dynamic `import()`. Unconditional over ANY package
+   *  name found this way (not just the ones this probe cares about) - real dynamic `import()` here
+   *  works for a CJS target too (see CLAUDE.md's Status), so this is never a regression, only ever a
+   *  fix. Runs INSIDE the page (via page.evaluate at the call site) - this function's own source is
+   *  serialized across, so it must be self-contained (no closured references). */
+  async function patchAngularBuildDynamicRequires(root: string): Promise<string[]> {
+    const { fs } = (window as unknown as WcWindow).wc;
+    const patterns: [RegExp, string][] = [
+      [/Promise\.resolve\(`\$\{'([^']+)'\}`\)\.then\(s => __importStar\(require\(s\)\)\)/g, "Promise.resolve(import('$1')).then(s => __importStar(s))"],
+      [/Promise\.resolve\(\)\.then\(\(\) => __importStar\(require\('([^']+)'\)\)\)/g, "Promise.resolve(import('$1')).then((s) => __importStar(s))"],
+    ];
+    const patched: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const entry of await fs.readdir(dir)) {
+        const full = `${dir}/${entry}`;
+        const st = await fs.stat(full);
+        if (st.kind === "dir") {
+          await walk(full);
+        } else if (entry.endsWith(".js")) {
+          const text = new TextDecoder().decode(await fs.readFile(full));
+          let next = text;
+          for (const [pattern, replacement] of patterns) next = next.replace(pattern, replacement);
+          if (next !== text) {
+            await fs.writeFile(full, next);
+            patched.push(full);
+          }
+        }
+      }
+    };
+    await walk(root);
+    return patched;
+  }
+
+  // A DEEPER instance of the same gap, found only once `ng build`/`ng serve` actually reach real
+  // JS-transform work: `tools/javascript-transformer/javascript-transformer-worker.js` (a real
+  // piscina worker-thread entry - confirmed via its own stack trace, `piscina/dist/worker.js`'s
+  // `importESMCached`/`getHandler`) requires `tools/oxc/oxc-transform.js` UNCONDITIONALLY at its
+  // own module top level, and oxc-transform.js's OWN top level does a PLAIN `require("oxc-parser")`
+  // (real ESM-only, confirmed: `"type":"module"`, single non-conditional "main", no CJS build at
+  // any version at all - unlike magic-string/listr2) and `require("@angular/compiler-cli/linker")`
+  // (also real ESM-only). Worse, oxc-transform.js TRANSITIVELY requires two more local files with
+  // the exact same problem at THEIR OWN top level (tools/angular/linker/oxc-linker.js requires
+  // "@angular/compiler-cli" AND "@angular/compiler-cli/linker"; oxc-ast-host.js requires
+  // "@angular/compiler-cli/linker" again) - and even past all of THAT, oxc-transform.js's own
+  // `transform()` calls `oxc-parser`'s `parseSync(filename, code, ...)` on an ENTIRE real source
+  // file - a real native WASM parser (`@napi-rs/wasm-runtime`-based), the exact architecture this
+  // project's own PLAN.md already proved DEADLOCKS on any single native call whose input spans more
+  // than one line (the Tailwind `Scanner.scanFiles()` finding, explicitly flagged there as
+  // generalizing to "any OTHER future napi-rs[-based binding]") - and a JS parser fundamentally
+  // cannot be fed one line at a time the way Tailwind's class-name scan could. So even fixing every
+  // require in this chain would just trade a crash for a hang.
+  // First attempted a require() INTERCEPTOR (monkeypatching `node:module`'s `Module.prototype.
+  // require`, the mechanism real tools like babel-register/pirates use in real Node) to redirect
+  // these three specifiers to pre-warmed real `import()`s - proven, with a small standalone probe
+  // (no Angular involved), that this DOESN'T intercept anything here: wcvm's own `require()` is
+  // its own hand-written dispatch (`req`/`load`/`resolve`/`compile`, visible in every blob: stack
+  // trace throughout this file) layered on top of - not routed through - the vendored `Module`
+  // class, so mutating its prototype is a no-op for what guest code's own injected `require`
+  // actually calls.
+  // The fix that actually works needs neither a monkeypatch nor fixing oxc-parser's own deadlock:
+  // `oxc_transform_js_1.transform()` has exactly ONE call site (inside the
+  // `if (oxcLink || advancedOptimizations)` branch of transformJavaScriptImpl), and for a plain dev
+  // `ng serve` with NG_BUILD_BABEL_LINKER=1 (oxcLink=false) and no production
+  // advancedOptimizations (module-level, defaults false, off for `serve`), that branch is NEVER
+  // ENTERED - meaning oxc-transform.js's own require is never actually reached IF it's moved from
+  // the file's top level into that specific branch instead. A plain `require()` call has no special
+  // hoisting semantics - moving it doesn't change anything about how it works, just WHEN (and
+  // whether) it runs - so this sidesteps the entire chain (oxc-parser's deadlock included) rather
+  // than trying to fix any part of it, for exactly the scenario this probe cares about (a dev
+  // server, not a production optimizing build).
+  async function patchJavascriptTransformerLazyOxc(root: string): Promise<boolean> {
+    const { fs } = (window as unknown as WcWindow).wc;
+    const workerPath = `${root}/src/tools/javascript-transformer/javascript-transformer-worker.js`;
+    const topLevelNeedle = 'const oxc_transform_js_1 = require("../oxc/oxc-transform.js");\n';
+    const callSiteNeedle = "const result = (0, oxc_transform_js_1.transform)(filename, code, {";
+    const callSiteReplacement = 'const oxc_transform_js_1 = require("../oxc/oxc-transform.js");\n        const result = (0, oxc_transform_js_1.transform)(filename, code, {';
+
+    const source = new TextDecoder().decode(await fs.readFile(workerPath));
+    const applicable = source.includes(topLevelNeedle) && source.includes(callSiteNeedle);
+    if (applicable) {
+      const patched = source.replace(topLevelNeedle, "").replace(callSiteNeedle, callSiteReplacement);
+      await fs.writeFile(workerPath, patched);
+    }
+    return applicable;
+  }
+
+  // Isolates the leading theory for `ng serve`'s own "instant, silent, clean exit(0)" symptom,
+  // stripped of every bit of Angular/npm-install complexity: bin/ng.js's own top-level body is
+  // `void import('../lib/init.js')` (bootstrap.js) - a real dynamic import with no `.catch()` and
+  // nothing else in the script to keep the event loop alive while it resolves. If this sandbox's
+  // event loop doesn't REF itself for an in-flight top-level dynamic import the way it already
+  // has to for a connecting TCP socket or a `fs.watch()` (see CLAUDE.md's own gotchas for both),
+  // the whole process could go idle and fire `beforeExit`/`exit` before the import ever settles -
+  // exactly matching what was observed. Two local files, no registry, no npm install.
+  test("a bare top-level `void import(...)` keeps the process alive until it resolves", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/import-repro", { recursive: true });
+      await fs.writeFile("/import-repro/late.mjs", "console.log('late module ran');\n");
+      await fs.writeFile("/import-repro/main.js", "void import('./late.mjs');\n");
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn("node", ["main.js"], { cwd: "/import-repro" });
+      const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exit]);
+      return { code: exit.exitCode, out, err };
+    });
+    console.log("DEBUG bare void-import repro out:", result.out);
+    console.log("DEBUG bare void-import repro err:", result.err);
+    console.log("DEBUG bare void-import repro code:", result.code);
+    expect(result.out, result.out + result.err).toContain("late module ran");
+  });
+
+  test("ng new + npm install + ng serve (real Angular dev server)", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(300_000);
+    page.on("console", (msg) => console.log("DEBUG page console:", msg.type(), msg.text()));
+    page.on("pageerror", (error) => console.log("DEBUG pageerror:", error.message, error.stack));
+
+    await page.evaluate(
+      async (overrides) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        await fs.mkdir("/ng-cli2", { recursive: true });
+        await fs.writeFile(
+          "/ng-cli2/package.json",
+          JSON.stringify({ name: "ng-cli2", private: true, devDependencies: { "@angular/cli": "22.2.0" }, overrides }),
+        );
+      },
+      NG_CLI_OVERRIDES,
+    );
+    const cliInstall = await spawn(page, "npm", ["install"], "/ng-cli2");
+    expect(cliInstall.code, cliInstall.out + cliInstall.err).toBe(0);
+
+    const created = await spawn(
+      page,
+      "node",
+      ["ng-cli2/node_modules/@angular/cli/bin/ng.js", "new", "ng-serve-app", "--skip-git", "--skip-install", "--defaults"],
+      "/",
+    );
+    expect(created.code, created.out + created.err).toBe(0);
+
+    await page.evaluate(
+      async (overrides) => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        const raw = new TextDecoder().decode(await fs.readFile("/ng-serve-app/package.json"));
+        const pkg = JSON.parse(raw);
+        pkg.overrides = { ...pkg.overrides, ...overrides };
+        await fs.writeFile("/ng-serve-app/package.json", JSON.stringify(pkg, null, 2));
+      },
+      NG_APP_OVERRIDES,
+    );
+
+    const appInstall = await spawn(page, "npm", ["install"], "/ng-serve-app");
+    expect(appInstall.code, appInstall.out + appInstall.err).toBe(0);
+
+    const dynamicRequirePatched = await page.evaluate(patchAngularBuildDynamicRequires, "/ng-serve-app/node_modules/@angular/build");
+    console.log("DEBUG dynamic-require patched files:", JSON.stringify(dynamicRequirePatched));
+
+    const oxcLazyPatched = await page.evaluate(patchJavascriptTransformerLazyOxc, "/ng-serve-app/node_modules/@angular/build");
+    console.log("DEBUG lazy-oxc patch applied:", oxcLazyPatched);
+
+    // NG_BUILD_BABEL_LINKER routes Angular's own partial-compilation linking through Babel instead
+    // of the OXC-based linker's own oxc-parser (a real native WASM parser that deadlocks here on
+    // any real, multi-line source file - see the doc comment above) - for a dev `ng serve` (no
+    // production `advancedOptimizations`), this avoids calling into oxc-parser's own parseSync at
+    // all, sidestepping the deadlock rather than fixing it (a genuinely unfixed, structural gap).
+    const ngEnv = { NG_BUILD_OPTIMIZE_CHUNKS: "false", NG_BUILD_BABEL_LINKER: "true" };
+
+    // `ng serve` was observed exiting almost instantly with code 0 and NOT ONE byte on either
+    // stream - not even the very first listr2-rendered "Building..." line a real local run (real
+    // Node 24.18.0, verified directly) always prints immediately. bin/ng.js's own bootstrap.js
+    // does `void import('../lib/init.js')` - a real dynamic import with NO `.catch()` at all -
+    // meaning if anything anywhere in the whole CLI's own module graph rejects, it becomes a
+    // genuinely unhandled rejection with no guarantee this sandbox's own top-level handling (proven
+    // to work in Vitest for the MAIN thread - runtime.test.ts's own "unhandled rejection" test)
+    // also covers whatever specific async context this happens in. Wrapping the entry point in an
+    // explicit trap installed BEFORE requiring it - rather than trying to trace every layer of
+    // Angular's own source to find the exact silent-drop point - forces visibility either way.
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.writeFile(
+        "/ng-serve-app/__ng_trap.js",
+        [
+          "console.log('WCVM_TRAP: alive, argv=' + JSON.stringify(process.argv));",
+          "process.on('exit', (code) => { console.log('WCVM_TRAP: process exit event, code=' + code); });",
+          "process.on('beforeExit', (code) => { console.log('WCVM_TRAP: beforeExit event, code=' + code); });",
+          "process.on('unhandledRejection', (reason) => { console.error('WCVM_TRAP unhandledRejection:', reason && reason.stack ? reason.stack : reason); });",
+          "process.on('uncaughtException', (error) => { console.error('WCVM_TRAP uncaughtException:', error && error.stack ? error.stack : error); });",
+          "console.log('WCVM_TRAP: about to require ng.js');",
+          "require('./node_modules/@angular/cli/bin/ng.js');",
+          "console.log('WCVM_TRAP: require of ng.js returned synchronously');",
+        ].join("\n"),
+      );
+
+      // Direct tracing INSIDE @angular/cli's own async chain (lib/init.js) - the IIFE that
+      // resolves the local `cli` module, then `.then(cli => cli?.({cliArgs}))` (the actual command
+      // dispatch), then a final `.then`/`.catch`. Pinpoints exactly how far execution gets before
+      // things go quiet, rather than continuing to guess.
+      const initPath = "/ng-serve-app/node_modules/@angular/cli/lib/init.js";
+      const initSource = new TextDecoder().decode(await fs.readFile(initPath));
+      const patched = initSource
+        .replace(
+          ".then((cli) => cli?.({\n    cliArgs: process.argv.slice(2),\n}))",
+          ".then((cli) => { console.error('WCVM_TRAP: got cli =', typeof cli, '- calling now'); return cli?.({\n    cliArgs: process.argv.slice(2),\n}); })",
+        )
+        .replace(
+          ".then((exitCode = 0) => {\n    if (forceExit) {",
+          ".then((exitCode = 0) => {\n    console.error('WCVM_TRAP: cli() resolved, exitCode =', exitCode);\n    if (forceExit) {",
+        )
+        .replace(
+          ".catch((err) => {\n    // eslint-disable-next-line  no-console\n    console.error('Unknown error: ' + err.toString());",
+          ".catch((err) => {\n    console.error('WCVM_TRAP: caught in chain:', err && err.stack ? err.stack : err);\n    // eslint-disable-next-line  no-console\n    console.error('Unknown error: ' + err.toString());",
+        );
+      await fs.writeFile(initPath, patched);
+
+      // `@angular/cli`'s own main entry (lib/cli/index.js) REDIRECTS console.log/warn/error into an
+      // RxJS-observable-backed `IndentLogger` right before dispatching the real command - flushed
+      // asynchronously via `logger.forEach(...)`'s own subscription, awaited in a `finally` block
+      // only at the very end. Testing directly whether THAT redirection/flush pipeline is what's
+      // swallowing output: patch it out so console.log/error stay real for this one run.
+      const cliIndexPath = "/ng-serve-app/node_modules/@angular/cli/lib/cli/index.js";
+      const cliIndexSource = new TextDecoder().decode(await fs.readFile(cliIndexPath));
+      const cliIndexPatched = cliIndexSource
+        .replace(
+          "    // Redirect console to logger\n    console.info = console.log = function (...args) {\n        logger.info((0, node_util_1.format)(...args));\n    };\n    console.warn = function (...args) {\n        logger.warn((0, node_util_1.format)(...args));\n    };\n    console.error = function (...args) {\n        logger.error((0, node_util_1.format)(...args));\n    };",
+          "    process.stderr.write('WCVM_TRAP: console redirection disabled for this probe\\n');",
+        )
+        .replace(
+          "    try {\n        return await (0, command_runner_1.runCommand)(options.cliArgs, logger);\n    }",
+          "    try {\n        process.stderr.write('WCVM_TRAP: about to call runCommand\\n');\n        const __wcvmResult = (0, command_runner_1.runCommand)(options.cliArgs, logger);\n        process.stderr.write('WCVM_TRAP: runCommand() called, got a ' + typeof __wcvmResult + (__wcvmResult && typeof __wcvmResult.then === 'function' ? ' thenable' : '') + '\\n');\n        const __wcvmAwaited = await __wcvmResult;\n        process.stderr.write('WCVM_TRAP: runCommand() resolved with ' + JSON.stringify(__wcvmAwaited) + '\\n');\n        return __wcvmAwaited;\n    }",
+        );
+      const cliIndexApplicable = cliIndexPatched !== cliIndexSource;
+      await fs.writeFile(cliIndexPath, cliIndexPatched);
+      console.log("DEBUG cli-index console-redirect patch applied:", cliIndexApplicable);
+
+      // runCommand()'s own promise never settles - narrowing further: its FIRST real async work is
+      // reading workspace config (`getWorkspace('local'/'global')`), then `createPackageManager()`
+      // (already known, from earlier in this probe, to spawn `npm --version` via child_process to
+      // confirm npm is "installed"). Tracing both boundaries directly.
+      const runnerPath = "/ng-serve-app/node_modules/@angular/cli/src/command-builder/command-runner.js";
+      const runnerSource = new TextDecoder().decode(await fs.readFile(runnerPath));
+      const runnerPatched = runnerSource
+        .replace(
+          "    try {\n        [workspace, globalConfiguration] = await Promise.all([\n            (0, config_1.getWorkspace)('local'),\n            (0, config_1.getWorkspace)('global'),\n        ]);\n    }",
+          "    try {\n        process.stderr.write('WCVM_TRAP: about to read workspace config\\n');\n        [workspace, globalConfiguration] = await Promise.all([\n            (0, config_1.getWorkspace)('local'),\n            (0, config_1.getWorkspace)('global'),\n        ]);\n        process.stderr.write('WCVM_TRAP: workspace config read OK\\n');\n    }",
+        )
+        .replace(
+          "    const packageManager = await (0, package_managers_1.createPackageManager)({",
+          "    process.stderr.write('WCVM_TRAP: about to createPackageManager\\n');\n    const packageManager = await (0, package_managers_1.createPackageManager)({",
+        )
+        .replace(
+          "    const localYargs = (0, yargs_1.default)(args);",
+          "    process.stderr.write('WCVM_TRAP: createPackageManager resolved OK\\n');\n    const localYargs = (0, yargs_1.default)(args);",
+        )
+        .replace(
+          "    for (const CommandModule of await getCommandsToRegister(positional[0])) {\n        (0, command_1.addCommandModuleToYargs)(CommandModule, context);\n    }",
+          "    process.stderr.write('WCVM_TRAP: about to getCommandsToRegister\\n');\n    for (const CommandModule of await getCommandsToRegister(positional[0])) {\n        (0, command_1.addCommandModuleToYargs)(CommandModule, context);\n    }\n    process.stderr.write('WCVM_TRAP: commands registered with yargs\\n');",
+        )
+        .replace(
+          "    await localYargs\n        .scriptName('ng')",
+          "    process.stderr.write('WCVM_TRAP: about to run yargs parseAsync chain\\n');\n    await localYargs\n        .scriptName('ng')",
+        )
+        .replace(
+          "        .wrap(localYargs.terminalWidth())\n        .parseAsync();\n    return +(process.exitCode ?? 0);",
+          "        .wrap(localYargs.terminalWidth())\n        .parseAsync();\n    process.stderr.write('WCVM_TRAP: yargs parseAsync chain resolved\\n');\n    return +(process.exitCode ?? 0);",
+        );
+      const runnerApplicable = runnerPatched !== runnerSource;
+      await fs.writeFile(runnerPath, runnerPatched + "\n// WCVM_TRAP: patch applied end marker\n");
+      console.log("DEBUG command-runner trace patch applied:", runnerApplicable);
+    });
+
+    const served = await page.evaluate(async (env) => {
+      const wc = (window as unknown as WcWindow).wc;
+      const proc = await wc.spawn("node", ["__ng_trap.js", "serve", "--port", "4300"], { cwd: "/ng-serve-app", env });
+      const [out, err, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exit]);
+      return { code: exit.exitCode, out, err };
+    }, ngEnv);
+    console.log("DEBUG ng serve out:", served.out);
+    console.log("DEBUG ng serve err:", served.err);
+    console.log("DEBUG ng serve code:", served.code);
+
+    expect(served.out + served.err, served.out + served.err).toContain("Application bundle generation complete");
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over

@@ -141,6 +141,9 @@
     "internal/util/diff": "a83310ac63406ef953c2b2440817d4771fc79af5985d2254618591fdf9735752",
     "internal/async_local_storage/async_hooks": "eea3319577b1d10267b19d0668b54cf5ad4d4d986050b640035cdd98f69b7d15",
     "internal/file": "a6935dd6037ce604b5075c3f7dbe98000ae2d65e6fa589af36267ff40f0cdd09",
-    "internal/deps/minimatch/index": "23f1e425aa0813670574fe2c0241f591ef5463aacf2a23e3284654a49245fd4c"
+    "internal/deps/minimatch/index": "23f1e425aa0813670574fe2c0241f591ef5463aacf2a23e3284654a49245fd4c",
+    "assert/strict": "07c94fd4322f33fb366bec83977c7aa4816802a0deb1a4ab54c1093d0c05a524",
+    "path/posix": "117a373870d6dd7ff7470e9e5d0eb7f0c284c39f036492da60453ad0615d643e",
+    "path/win32": "cfa5914ed0ada68fbf7891014ddb2db26db353810c8bbc7b25d941537ddf22e5"
   }
 }

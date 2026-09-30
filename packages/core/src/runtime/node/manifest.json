@@ -141,6 +141,9 @@
     "internal/util/diff": "builtin",
     "internal/async_local_storage/async_hooks": "builtin",
     "internal/file": "builtin",
-    "internal/deps/minimatch/index": "builtin"
+    "internal/deps/minimatch/index": "builtin",
+    "assert/strict": "builtin",
+    "path/posix": "builtin",
+    "path/win32": "builtin"
   }
 }

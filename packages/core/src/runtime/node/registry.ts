@@ -7,6 +7,7 @@ import f__http_incoming from "./lib/_http_incoming.js";
 import f__http_outgoing from "./lib/_http_outgoing.js";
 import f__http_server from "./lib/_http_server.js";
 import f_assert from "./lib/assert.js";
+import f_assert_strict from "./lib/assert/strict.js";
 import f_async_hooks from "./lib/async_hooks.js";
 import f_buffer from "./lib/buffer.js";
 import f_child_process from "./lib/child_process.js";
@@ -125,6 +126,8 @@ import f_internal_worker_messaging from "./lib/internal/worker/messaging.js";
 import f_net from "./lib/net.js";
 import f_os from "./lib/os.js";
 import f_path from "./lib/path.js";
+import f_path_posix from "./lib/path/posix.js";
+import f_path_win32 from "./lib/path/win32.js";
 import f_perf_hooks from "./lib/perf_hooks.js";
 import f_process from "./lib/process.js";
 import f_querystring from "./lib/querystring.js";
@@ -152,6 +155,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "_http_outgoing": f__http_outgoing,
   "_http_server": f__http_server,
   "assert": f_assert,
+  "assert/strict": f_assert_strict,
   "async_hooks": f_async_hooks,
   "buffer": f_buffer,
   "child_process": f_child_process,
@@ -269,6 +273,8 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "net": f_net,
   "os": f_os,
   "path": f_path,
+  "path/posix": f_path_posix,
+  "path/win32": f_path_win32,
   "perf_hooks": f_perf_hooks,
   "process": f_process,
   "querystring": f_querystring,

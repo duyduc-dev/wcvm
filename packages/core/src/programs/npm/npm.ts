@@ -25,6 +25,7 @@ const USAGE = `Usage: npm install [<package>[@<version|range|tag>] ...] [--save-
        npm run [<script>] [-- <args>...] [--if-present] [--ignore-scripts]
        npm start|stop|restart|test [-- <args>...] [--if-present] [--ignore-scripts]
        npm create <name>[@<version>] [-- <args>...]  (same as \`npm init <name> ...\`)
+       npm --version|-v
 
 wcvm's npm only installs (from package.json with no arguments, or the named packages, saved to
 package.json - no lockfile, no install scripts, no git/file/workspace dependencies), runs
@@ -32,6 +33,13 @@ package.json scripts (no workspaces; \`--if-present\`/\`--ignore-scripts\` are t
 and creates: \`npm create <name>\` fetches "create-<name>" (real npm's own mangling) and runs its
 own bin, like \`npx create-<name>\` - bare \`npm init\` (real npm's interactive wizard) isn't.
 `;
+
+/** A static, plausible version string (matching a currently-real npm major/minor, not tied to an
+ *  exact Node-bundled pairing) - not real npm's own version, but real enough for tools that just
+ *  need `npm --version` to succeed with a valid semver string to confirm npm is "installed" (found
+ *  for real: @angular/cli's own package-manager detection spawns exactly this via `child_process`
+ *  - it isn't a "found on PATH" check at all, just this one unimplemented flag). */
+const FAKE_NPM_VERSION = "11.9.0";
 
 /** Strips the first bare `--` (everything else is untouched) - real npm's own CLI parsing
  *  consumes it the same way before a created package's own args ever see it, and this sandbox's
@@ -149,6 +157,10 @@ export const createNpm = (deps: INpmDeps): Program => async (ctx) => {
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     (command === undefined ? stderr : stdout)(USAGE);
     return command === undefined ? 1 : 0;
+  }
+  if (command === "--version" || command === "-v") {
+    stdout(`${FAKE_NPM_VERSION}\n`);
+    return 0;
   }
 
   if (RUN_ALIASES.has(command) || Object.hasOwn(LIFECYCLE_EVENTS, command)) return runCommand(ctx, command, rest);

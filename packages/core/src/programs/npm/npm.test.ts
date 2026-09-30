@@ -399,3 +399,19 @@ describe("npm create / npm init", () => {
     expect((await t.run(["create"])).stderr).toContain("no package name");
   });
 });
+
+describe("npm --version", () => {
+  // Found for real, not hypothetically: @angular/cli's own package-manager detection
+  // (src/package-managers/factory.ts) spawns exactly `npm --version` via child_process to confirm
+  // npm is "installed" before proceeding - it isn't a PATH-existence check at all (wcvm's built-in
+  // npm was already found and run just fine), just this one previously-unimplemented flag, which
+  // made real npm-dependent tools fail with a misleading "not installed" error.
+  it("--version and -v both print a valid semver, exit 0", async () => {
+    const t = setup({});
+    const long = await t.run(["--version"]);
+    expect(long).toMatchObject({ code: 0, stderr: "" });
+    expect(long.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+    const short = await t.run(["-v"]);
+    expect(short).toEqual(long);
+  });
+});
