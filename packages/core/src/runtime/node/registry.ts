@@ -32,6 +32,7 @@ import f_internal_console_constructor from "./lib/internal/console/constructor.j
 import f_internal_console_global from "./lib/internal/console/global.js";
 import f_internal_constants from "./lib/internal/constants.js";
 import f_internal_deps_acorn_acorn_dist_acorn from "./lib/internal/deps/acorn/acorn/dist/acorn.js";
+import f_internal_deps_minimatch_index from "./lib/internal/deps/minimatch/index.js";
 import f_internal_dgram from "./lib/internal/dgram.js";
 import f_internal_error_serdes from "./lib/internal/error_serdes.js";
 import f_internal_errors from "./lib/internal/errors.js";
@@ -176,6 +177,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "internal/console/global": f_internal_console_global,
   "internal/constants": f_internal_constants,
   "internal/deps/acorn/acorn/dist/acorn": f_internal_deps_acorn_acorn_dist_acorn,
+  "internal/deps/minimatch/index": f_internal_deps_minimatch_index,
   "internal/dgram": f_internal_dgram,
   "internal/error_serdes": f_internal_error_serdes,
   "internal/errors": f_internal_errors,

@@ -2246,6 +2246,119 @@ document.querySelector("#open")!.addEventListener("click", () => modal.show());
   });
 });
 
+test.describe("Tailwind v4 native deps (@tailwindcss/oxide WASI, lightningcss)", () => {
+  // Tailwind CSS v4 was INVESTIGATED and PARKED, not shipped as a Studio template - see PLAN.md's
+  // "Tailwind CSS v4: feasibility findings" for the full writeup. This test documents the one part
+  // that genuinely DOES work (kept as a real, passing regression - both native deps loading and
+  // running basic native work at all): everything past it (real project-file scanning) hits a
+  // structural deadlock this sandbox cannot route around.
+  //
+  // Summary of the full investigation (see PLAN.md for the complete chain of reasoning):
+  // - lightningcss: fixed cleanly. Swapped for lightningcss-wasm via the usual `overrides` trick
+  //   (esbuild/rollup already use it) - its "node" condition target happens to be sandbox-friendly
+  //   already (sync fs.readFileSync + sync WebAssembly.Module/Instance, no thread pool at all).
+  // - @tailwindcss/oxide (a Scanner, native Rust via napi-rs): its stock loader needs real
+  //   `node:wasi` (unimplemented) and throws - but its own `-wasm32-wasi` optional sibling (already
+  //   installed for free, since wcvm's npm fakes cpu="wasm32" for esbuild/rollup's own wasm32
+  //   variants too) ships a real browser build using the same @napi-rs/wasm-runtime shape already
+  //   proven for @rolldown/browser. Reaching it needs a POST-INSTALL PATCH (real Node ignores the
+  //   legacy "browser" package.json field this build is only ever reached through in real usage;
+  //   plus a .js->.mjs rename, since the file's own package has no "type":"module") - done below,
+  //   and it genuinely works for a TRIVIAL case (this test).
+  // - BUT real Scanner.scan() (native FS globbing/reading) spawns a WASI worker thread whose own
+  //   file reads relay back to the creator thread's in-memory filesystem via postMessage +
+  //   Atomics.wait - and the creator thread is ITSELF already frozen in its own Atomics.wait,
+  //   waiting for that same worker. A genuine, structural deadlock (confirmed via a heartbeat
+  //   timer that stops dead the instant scan() is called) - not fixable via asyncWorkPoolSize or
+  //   RAYON_NUM_THREADS (a worker is unconditionally created regardless of either).
+  // - Scanner.scanFiles()/getCandidatesWithPositions() (content-based, no native FS access) avoid
+  //   THAT specific deadlock - proven for a single, trivial HTML string. But real project files
+  //   need real content, and a REAL PATCH to @tailwindcss/vite's own plugin (feeding it file
+  //   content via wcvm's own real fs.globSync - itself needing internal/deps/minimatch vendored,
+  //   a genuine new wcvm capability, see CLAUDE.md's Status) got real Tailwind CSS (theme/base
+  //   layers) generating correctly.
+  // - THE ACTUAL, FINAL BLOCKER: any JS/TS/JSX content containing a real `import` statement
+  //   deadlocks scanFiles() too - confirmed in complete isolation (a fresh Scanner, a single file,
+  //   no prior calls). Oxide's own JS/TSX candidate extractor apparently tries to resolve import
+  //   specifiers as part of parsing, hitting the identical worker-pool/fs-proxy relay regardless
+  //   of which API is used to reach it. Since virtually every real component file (React, Vue,
+  //   Svelte, or even plain TypeScript) has at least one import, this isn't a narrow edge case -
+  //   only import-free, static HTML/CSS content can be scanned safely. Parked: a genuine
+  //   structural dead end in `@napi-rs/wasm-runtime`'s browser build, the same category of finding
+  //   as "Real npm: feasibility findings" (PLAN.md) - not a scoped patch away.
+  test("Scanner (@tailwindcss/oxide) and transform() (lightningcss) both really run, after a targeted node_modules patch", async ({ page }) => {
+    test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+    test.setTimeout(90_000);
+
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.mkdir("/tw-probe", { recursive: true });
+      // "lightningcss" is deliberately NOT a direct dependency here - wcvm's own npm overrides
+      // only apply to TRANSITIVE requests (install.ts's readOverrides doc comment: "the project's
+      // own direct dependencies keep what they say", matching how the real Tailwind template will
+      // actually see it too: @tailwindcss/node depends on lightningcss, wcvm's picker never would).
+      await fs.writeFile(
+        "/tw-probe/package.json",
+        JSON.stringify({
+          name: "tw-probe",
+          private: true,
+          dependencies: { "@tailwindcss/oxide": "4.3.3", "@tailwindcss/node": "4.3.3" },
+          overrides: { lightningcss: "npm:lightningcss-wasm@1.30.2" },
+        }),
+      );
+    });
+
+    const install = await spawn(page, "npm", ["install"], "/tw-probe");
+    expect(install.code, install.out + install.err).toBe(0);
+
+    const patched = await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      const wasiPkgDir = "/tw-probe/node_modules/@tailwindcss/oxide-wasm32-wasi";
+      if (!(await fs.exists(wasiPkgDir))) return { ok: false, reason: "oxide-wasm32-wasi not installed" };
+
+      const browserJs = new TextDecoder().decode(await fs.readFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.js`));
+      await fs.writeFile(`${wasiPkgDir}/tailwindcss-oxide.wasi-browser.mjs`, browserJs);
+
+      const oxideDir = "/tw-probe/node_modules/@tailwindcss/oxide";
+      await fs.writeFile(`${oxideDir}/package.json`, JSON.stringify({ name: "@tailwindcss/oxide", version: "4.3.3", type: "module", main: "index.js" }));
+      // A bare `@tailwindcss/oxide-wasm32-wasi/...` subpath specifier hits wcvm's ESM resolver's
+      // own simplification (no "exports" map in that package -> subpaths are rejected outright,
+      // unlike real Node's legacy any-subpath-resolves fallback) - a plain RELATIVE specifier
+      // sidesteps package resolution/"exports" entirely, and both packages are npm-hoisted
+      // siblings under the same @tailwindcss/ scope directory.
+      await fs.writeFile(
+        `${oxideDir}/index.js`,
+        [
+          'export * from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+          'export { default } from "../oxide-wasm32-wasi/tailwindcss-oxide.wasi-browser.mjs";',
+        ].join("\n"),
+      );
+      return { ok: true };
+    });
+    expect(patched.ok, JSON.stringify(patched)).toBe(true);
+
+    await page.evaluate(async () => {
+      const { fs } = (window as unknown as WcWindow).wc;
+      await fs.writeFile(
+        "/tw-probe/test.mjs",
+        [
+          'import { Scanner } from "@tailwindcss/oxide";',
+          'import { transform } from "lightningcss";',
+          "const scanner = new Scanner({ sources: [] });",
+          'console.log("scanner", typeof scanner.scan);',
+          'const out = transform({ filename: "a.css", code: Buffer.from(".a{color:red}") });',
+          "console.log(\"lightningcss\", out.code.toString());",
+        ].join("\n"),
+      );
+    });
+
+    const r = await spawn(page, "node", ["test.mjs"], "/tw-probe");
+    expect(r, r.out + r.err).toMatchObject({ code: 0 });
+    expect(r.out).toContain("scanner function");
+    expect(r.out).toMatch(/lightningcss[\s\S]*\.a\s*\{\s*color:\s*red;?\s*\}/);
+  });
+});
+
 test.describe("fetcher", () => {
   // wc.fs.fetch() (apis/Fs.ts -> kernel/fetcher.ts -> a real, dedicated Fetcher Worker,
   // workers/fetcher/worker.ts) does a REAL fetch() and streams the response into the VFS over

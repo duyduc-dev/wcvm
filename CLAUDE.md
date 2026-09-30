@@ -29,9 +29,10 @@ built this way" that was probably already answered by a real bug.
 - `sh`: `;`/`&&`/`||`, `|` pipes, `>`/`>>`/`<` redirects, `cd`, an interactive REPL, `PATH`-resolved
   executables (incl. shebang scripts).
 - `node script.js`/`node -e`: Node v24.18.0's own `lib/` vendored verbatim, most core builtins
-  (`fs`, `stream`, `events`, `buffer`, `util`, `timers`, `readline`, `url`, `tty`, `perf_hooks`,
-  `path`, `assert`, `querystring`, `module`, ...), `child_process` (`spawn`/`exec`/`execFile`/
-  `execSync`/`spawnSync`/`fork()`+IPC), and an interactive REPL.
+  (`fs` incl. `globSync`/`glob` - `internal/deps/minimatch` vendored, `stream`, `events`, `buffer`,
+  `util`, `timers`, `readline`, `url`, `tty`, `perf_hooks`, `path`, `assert`, `querystring`,
+  `module`, ...), `child_process` (`spawn`/`exec`/`execFile`/`execSync`/`spawnSync`/`fork()`+IPC),
+  and an interactive REPL.
 - Real ESM (`import`/`export`) via the browser's own `import()` of rewritten `blob:` URLs; real
   `import.meta` (the module's actual `file://` URL/filename/dirname/resolve); dynamic `import()`
   from CJS too. Genuinely circular static ESM imports ARE now supported (a strongly-connected-
@@ -59,12 +60,15 @@ built this way" that was probably already answered by a real bug.
   own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
   Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Rectify - Svelte was PARKED, then re-verified working
   once the circular-ESM gap above was fixed (see HISTORY.md).
-- Tests: 1025 Vitest + 140 Playwright (Chromium; 16 of them opt-in, needing the real npm registry:
+- Tests: 1025 Vitest + 141 Playwright (Chromium; 17 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): npm workspaces and the rest of `npm exec` (arbitrary local/
-registry commands, not just `create`), Angular/Ember Studio templates (need a Rolldown-WASM binding
-wcvm doesn't have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
+registry commands, not just `create`), a Tailwind CSS v4 Studio template (INVESTIGATED and PARKED -
+a genuine, unfixable structural deadlock in `@napi-rs/wasm-runtime`'s own browser-build content-
+scanning, the same category of finding as "Real npm" below - see PLAN.md's "Tailwind CSS v4:
+feasibility findings"), Angular/Ember Studio templates (need a Rolldown-WASM binding wcvm doesn't
+have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
 DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
 a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's
