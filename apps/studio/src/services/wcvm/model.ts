@@ -15,6 +15,7 @@ export type IWcvmProjectType =
   | "lit-ts"
   | "solid-ts"
   | "qwik-ts"
+  | "svelte-ts"
   | "rectify"
   | "static"
   | "bootstrap"

@@ -64,18 +64,26 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   when a package has no "exports" at all), rewrites each module's specifiers to `blob:` URLs
   (parsed with Node's own vendored acorn, dependency-first so a module is only blobbed once
   every static dependency already has one), then lets the browser's real dynamic `import()` do
-  the actual linking/evaluation - real live bindings, real circular-import semantics (among
-  non-cyclic modules), real top-level await, none of it reimplemented. A `node:` builtin or a
-  plain CJS file imported from ESM gets a synthetic wrapper module (`export default <value>;`
-  plus one `export const <key> = <value>[key];` per enumerable own key, for named-import
-  parity); same idea for a `with { type: "json" }` import. Dynamic `import()` calls (literal or
-  computed argument) are rewritten to a runtime bridge function that resolves lazily, so they
-  have none of static import's limits. Genuinely circular static imports (A statically imports
-  B which statically imports A) throw `ERR_CIRCULAR_ESM_NOT_SUPPORTED` instead of silently
-  breaking live bindings: a Blob's content is fixed at creation, unlike a real fetchable URL a
-  server could answer lazily, so creating A's blob needs B's URL and vice versa - a dynamic
-  `import()` breaks the cycle instead, same as it does in real bundled/served ESM. `import.meta`
-  is rewritten too, to the module's real `file://` URL/filename/dirname/resolve (not the blob's).
+  the actual linking/evaluation - real live bindings, real circular-import semantics, real
+  top-level await, none of it reimplemented. A `node:` builtin or a plain CJS file imported from
+  ESM gets a synthetic wrapper module (`export default <value>;` plus one
+  `export const <key> = <value>[key];` per enumerable own key, for named-import parity); same idea
+  for a `with { type: "json" }` import. Dynamic `import()` calls (literal or computed argument) are
+  rewritten to a runtime bridge function that resolves lazily, so they have none of static import's
+  limits. Genuinely circular static imports (A statically imports B which statically imports A) ARE
+  supported (`runtime/esm/loader.ts`'s `discover()`/`computeSccs()`, `runtime/esm/cyclic.ts`'s
+  `rewriteCyclicModule()`): every strongly-connected component of the static import graph is
+  detected first (Tarjan's algorithm) and merged into live getter-based property reads against a
+  shared registry instead of one Blob URL per member - a Blob's content is fixed at creation, unlike
+  a real fetchable URL a server could answer lazily, so a plain one-blob-per-module approach can't
+  handle two modules that each need to embed the other's URL in their own rewritten source. Reading
+  a cyclic binding synchronously at the top level (before the exporting side has run far enough to
+  initialize it) still throws a clear, TDZ-shaped `ReferenceError`, matching real Node's own
+  circular-ESM semantics - not a limitation, the correct behavior. See `loader.ts`'s and `cyclic.ts`'s
+  own doc comments for the full design (including two rejected approaches: a single-edge dynamic-
+  import bridge that deadlocks, and a CJS-style snapshot that breaks live-binding semantics for the
+  real target case) and HISTORY.md for how each was found. `import.meta` is rewritten too, to the
+  module's real `file://` URL/filename/dirname/resolve (not the blob's).
 - `node` with no script and no `-e` is an interactive REPL (`runtime/repl.ts`), and so is `sh`
   with no `-c`/script (see above). Real Node's own `repl` module isn't vendored - it needs
   raw-mode TTY, ANSI cursor control and tab-completion machinery `tty_wrap` deliberately stubs
@@ -950,17 +958,20 @@ picking this back up.
   in-this-tab pipeline isn't Vite-specific either; `npm start` exercises wcvm's own real fallback
   (`node server.js`); editing restarts the whole process (no HMR for a plain server) instead of
   relying on a watcher.
-- **Svelte was attempted and PARKED - a real, structural blocker, not a version-pinning issue** -
-  see CLAUDE.md's "Status" for the full writeup: Svelte's own real compiler has genuine circular
-  static ESM imports (confirmed across svelte@5.0.0-5.57.1, so it's structural, not a pinning
-  problem), which wcvm's ESM loader can't support - creating one `blob:` URL per module up front
-  means two mutually-referencing modules can never both be created first. A real fix needs the ESM
-  loader to merge strongly-connected components of the static import graph into one blob (the same
-  thing a real bundler does) - genuine runtime work on the order of the Rolldown/worker-pool
-  investigations above, not a template-writing task. Asked the user how to proceed; parked in favor
-  of the Express example above.
-- Left in this phase: npm workspaces. Svelte stays parked (see above) until wcvm's ESM loader can
-  merge circular import cycles into one module.
+- **Svelte was attempted and PARKED (2026-09), then FIXED and RE-VERIFIED (2026-09-29)** - see
+  CLAUDE.md's "Status" and HISTORY.md's Svelte section for the full writeup. The original blocker
+  was real and structural: Svelte's own compiler has genuine circular static ESM imports (confirmed
+  across svelte@5.0.0-5.57.1), which wcvm's ESM loader couldn't support at the time - creating one
+  `blob:` URL per module up front meant two mutually-referencing modules could never both be
+  created first. Fixed at the loader level (an SCC-aware rewrite - `runtime/esm/loader.ts`,
+  `runtime/esm/cyclic.ts` - merging each strongly-connected component of the static import graph
+  into live getter-based bindings instead of one-blob-per-module), built and proven first against
+  TanStack Router's own real circular dependency (zod v4), then re-verified against Svelte itself:
+  Studio's picker now offers `svelte-ts` (create-vite's own official template, no hand-written
+  recipe) via the same generic path as vue-ts/preact-ts, needing only one plugin pin
+  (`@sveltejs/vite-plugin-svelte` -> `^6.2.4`, the last major still compatible with this sandbox's
+  pinned vite@7). Verified end to end in real Chromium against the real npm registry.
+- Left in this phase: npm workspaces.
 - Known from old notes: Vite 8/Rolldown hit an upstream Wasm trap; Vite 7 with
   esbuild worked. Confirmed again directly (not just from old notes) verifying `npm create
   vite@latest`: its CURRENT template scaffolds Vite 8 by default, and Vite 7 pinned back in

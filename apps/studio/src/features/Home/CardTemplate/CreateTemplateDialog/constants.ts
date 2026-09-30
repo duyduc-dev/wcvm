@@ -11,6 +11,7 @@ import {
   RectifyLogoIcon,
   SolidLogoIcon,
   StaticLogoIcon,
+  SvelteLogoIcon,
   TanstackLogoIcon,
   TsLogoIcon,
   VueLogoIcon,
@@ -33,12 +34,13 @@ export interface IFrameworkOption {
 }
 
 // Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
-// Svelte is deliberately NOT here: PLAN.md/HISTORY.md documented it as PARKED in wcvm specifically
-// for a real circular-ESM limitation in Svelte's own compiler. That underlying wcvm ESM-loader
-// limitation is now FIXED (2026-09-29 - see runtime/esm/loader.ts's and runtime/esm/cyclic.ts's
-// own doc comments; proven against TanStack Router's own real circular dependency below), but
-// Svelte itself hasn't been RE-VERIFIED against the fix yet - still not offered until someone
-// actually checks, not because the original blocker is assumed to still apply.
+// Svelte was RE-VERIFIED (2026-09-29) against the circular-ESM fix below and works: create-vite's
+// own official "svelte-ts" template, going through the generic viteTemplateProject.ts path exactly
+// like vue-ts/preact-ts/etc - no hand-written recipe needed, just a plugin pin (vitePins.ts's
+// KNOWN_PLUGIN_PINS: "@sveltejs/vite-plugin-svelte" -> "^6.2.4", the last major still compatible
+// with this sandbox's pinned vite@7 - vite-plugin-svelte@^7 needs vite@8+, which needs the
+// Rolldown-WASM binding this sandbox doesn't have). See tanstack-router's own entry below for what
+// the circular-ESM fix actually was.
 // Angular and Ember aren't here either - vivari's own recipes for both need a Rolldown-WASM binding
 // wcvm doesn't have (vitePins.ts documents why Vite 7 is pinned instead); neither was attempted.
 export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
@@ -124,6 +126,13 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     label: "Qwik",
     description: "TypeScript",
     icon: QwikLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "svelte-ts",
+    label: "Svelte",
+    description: "TypeScript",
+    icon: SvelteLogoIcon,
     category: "Frontend",
   },
   {

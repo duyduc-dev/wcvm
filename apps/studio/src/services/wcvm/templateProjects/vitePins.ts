@@ -10,6 +10,11 @@ export const VITE_PIN = "7.3.6";
 export const KNOWN_PLUGIN_PINS: Record<string, string> = {
   "@vitejs/plugin-react": "^5.0.0",
   "@vitejs/plugin-vue": "^6.0.0",
+  // create-vite's svelte-ts template currently pulls in vite-plugin-svelte@^7.3.0, which needs
+  // vite@8+ (this sandbox has no WASM Rolldown build - see VITE_PIN's own comment). ^6.2.4 is
+  // the last major still compatible with vite@7 (peerDependencies: "^6.3.0 || ^7.0.0" - confirmed
+  // via `npm view @sveltejs/vite-plugin-svelte@6.2.4 peerDependencies` directly, not assumed).
+  "@sveltejs/vite-plugin-svelte": "^6.2.4",
 };
 
 export const WASM_OVERRIDES: Record<string, string> = {
