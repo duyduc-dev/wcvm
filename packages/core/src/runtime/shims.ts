@@ -262,8 +262,10 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
     class Script {
       private code: string;
-      constructor(code: string, private options?: { filename?: string; lineOffset?: number }) {
+      private options?: { filename?: string; lineOffset?: number };
+      constructor(code: string, options?: { filename?: string; lineOffset?: number }) {
         this.code = code;
+        this.options = options;
       }
       runInThisContext(options?: { filename?: string; lineOffset?: number }) {
         return runInThisContext(this.code, { ...this.options, ...options });

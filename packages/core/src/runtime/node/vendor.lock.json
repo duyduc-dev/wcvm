@@ -140,6 +140,7 @@
     "internal/mime": "f34ca40f84cc35a00e0065d4a776bfc740f9ab132d94fe02367eb05fe469ed4a",
     "internal/util/diff": "a83310ac63406ef953c2b2440817d4771fc79af5985d2254618591fdf9735752",
     "internal/async_local_storage/async_hooks": "eea3319577b1d10267b19d0668b54cf5ad4d4d986050b640035cdd98f69b7d15",
-    "internal/file": "a6935dd6037ce604b5075c3f7dbe98000ae2d65e6fa589af36267ff40f0cdd09"
+    "internal/file": "a6935dd6037ce604b5075c3f7dbe98000ae2d65e6fa589af36267ff40f0cdd09",
+    "internal/deps/minimatch/index": "23f1e425aa0813670574fe2c0241f591ef5463aacf2a23e3284654a49245fd4c"
   }
 }
