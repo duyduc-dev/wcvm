@@ -82,3 +82,36 @@ export const routePreviewRequest = (request: IRoutableRequest, origin: string, c
   if (port === undefined) return { kind: "lookup", clientId: request.clientId };
   return port === null ? { kind: "passthrough" } : previewRedirect(port, url);
 };
+
+/** One wcvm host page (a top-level window client) the preview Service Worker could relay through. */
+export interface IHostCandidate<T> {
+  client: T;
+  /** The page has a guest server listening on the requested port. */
+  listening: boolean;
+  visible: boolean;
+  focused: boolean;
+}
+
+/**
+ * Which of several open wcvm pages should answer a preview request. The Service Worker is shared by
+ * every tab of the origin and a preview iframe's navigation carries no hint of who embeds it, so the
+ * best evidence available is: only a page that actually has a server on that port can answer it;
+ * if several do (two tabs running the same dev server on the same port), the one the user is looking
+ * at - focused, then merely visible - is the likeliest owner; ties keep the order the browser listed
+ * them in. With nobody listening there is nothing right to pick, so the same ranking applies to all
+ * (the caller gets the guest's own ECONNREFUSED from whichever is chosen).
+ */
+export const chooseHost = <T>(candidates: IHostCandidate<T>[]): T | undefined => {
+  const listening = candidates.filter((c) => c.listening);
+  const pool = listening.length > 0 ? listening : candidates;
+  let best: IHostCandidate<T> | undefined;
+  let bestScore = -1;
+  for (const candidate of pool) {
+    const score = (candidate.focused ? 2 : 0) + (candidate.visible ? 1 : 0);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best?.client;
+};

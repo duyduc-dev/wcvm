@@ -1326,6 +1326,89 @@ test.describe("node", () => {
       expect(r).toBe("echo:payload");
     });
 
+    test("a page that loaded without being controlled (hard reload, bypass for network) still gets controlled by enable()", async ({ page, context }) => {
+      // The worker claims a page only once, when it first activates. A page loaded while it is
+      // already active but bypassed stayed uncontrolled forever: enable() waited for a
+      // controllerchange that never came, and a preview iframe fell through to the host's own
+      // dev server, which answered with the host app itself ("Not Found" from its own router).
+      await page.evaluate(() => (window as unknown as WcWindow).wc.preview.enable());
+      const cdp = await context.newCDPSession(page);
+      await cdp.send("Network.enable");
+      await cdp.send("Network.setBypassServiceWorker", { bypass: true });
+      await page.reload();
+      await expect(page.locator("#app")).toHaveText("wcvm ready", { timeout: 15_000 });
+      expect(await page.evaluate(() => navigator.serviceWorker.controller === null)).toBe(true);
+      await cdp.send("Network.setBypassServiceWorker", { bypass: false });
+
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const enabled = await Promise.race([wc.preview.enable().then(() => "enabled"), new Promise((resolve) => setTimeout(() => resolve("timed out"), 15_000))]);
+        const server = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" + "http.createServer((req, res) => res.end('claimed')).listen(6420, () => console.log('ready'));",
+        ]);
+        const first = await server.stdout.getReader().read();
+        if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+        const response = await fetch(wc.preview.url(6420));
+        const text = await response.text();
+        server.kill();
+        await server.exit;
+        return { enabled, controlled: navigator.serviceWorker.controller !== null, status: response.status, text };
+      });
+      expect(r).toEqual({ enabled: "enabled", controlled: true, status: 200, text: "claimed" });
+    });
+
+    test("two pages of the same origin each reach their own guest server through the one shared Service Worker", async ({ page, context }) => {
+      // Every tab of an origin shares one preview Service Worker, which used to relay through
+      // "the first top-level client" whatever tab the request came from: a dev server in one tab
+      // answered ECONNREFUSED because the other tab was asked. Each page serves a different port;
+      // each fetches the OTHER's port too, so whichever page the browser lists first is asked on
+      // behalf of the other one - one direction always failed before.
+      const other = await context.newPage();
+      await other.goto("/");
+      await expect(other.locator("#app")).toHaveText("wcvm ready", { timeout: 15_000 });
+
+      const serve = (target: typeof page, port: number, name: string) =>
+        target.evaluate(
+          async ({ port, name }) => {
+            const wc = (window as unknown as WcWindow).wc;
+            await wc.preview.enable();
+            const server = await wc.spawn("node", [
+              "-e",
+              "const http = require('http');" +
+                `http.createServer((req, res) => res.end('${name}')).listen(${port}, () => console.log('ready'));`,
+            ]);
+            const first = await server.stdout.getReader().read();
+            if (new TextDecoder().decode(first.value) !== "ready\n") throw new Error("server did not become ready");
+            (window as unknown as { __server: typeof server }).__server = server;
+          },
+          { port, name },
+        );
+      const get = (target: typeof page, port: number) =>
+        target.evaluate(async (port) => {
+          const wc = (window as unknown as WcWindow).wc;
+          await wc.preview.enable();
+          const response = await fetch(wc.preview.url(port));
+          return { status: response.status, text: await response.text() };
+        }, port);
+
+      await serve(page, 6410, "server of page one");
+      await serve(other, 6411, "server of page two");
+      expect(await get(page, 6410)).toEqual({ status: 200, text: "server of page one" });
+      expect(await get(page, 6411)).toEqual({ status: 200, text: "server of page two" });
+      expect(await get(other, 6410)).toEqual({ status: 200, text: "server of page one" });
+      expect(await get(other, 6411)).toEqual({ status: 200, text: "server of page two" });
+
+      for (const target of [page, other]) {
+        await target.evaluate(async () => {
+          const server = (window as unknown as { __server: { kill: () => void; exit: Promise<unknown> } }).__server;
+          server.kill();
+          await server.exit;
+        });
+      }
+      await other.close();
+    });
+
     test("a port nobody is listening on comes back as a 502, not a hang", async ({ page }) => {
       const status = await page.evaluate(async () => {
         const wc = (window as unknown as WcWindow).wc;

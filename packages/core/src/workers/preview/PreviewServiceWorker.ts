@@ -14,14 +14,23 @@
 // below, just the handful actually used here, rather than switching this whole package to the
 // "webworker" lib.
 
-import { type IPreviewFetchMessage, type IPreviewFetchReply, type IPreviewFetchResult } from "../../protocols/preview";
-import { previewPortOf, previewRedirect, routePreviewRequest, type PreviewClientPorts, type PreviewRoute } from "./previewRouting";
+import {
+  type IPreviewClaimMessage,
+  type IPreviewFetchMessage,
+  type IPreviewFetchReply,
+  type IPreviewFetchResult,
+  type IPreviewProbeMessage,
+  type IPreviewProbeReply,
+} from "../../protocols/preview";
+import { chooseHost, previewPortOf, previewRedirect, routePreviewRequest, type PreviewClientPorts, type PreviewRoute } from "./previewRouting";
 import { injectWebSocketShim } from "./webSocketShim";
 
 interface IClient {
   id: string;
   url: string;
   frameType?: "top-level" | "nested" | "auxiliary" | "none";
+  visibilityState?: "visible" | "hidden" | "prerender";
+  focused?: boolean;
   postMessage(message: unknown): void;
 }
 
@@ -69,7 +78,18 @@ sw.addEventListener("activate", (event) => {
 let nextRequestId = 1;
 const pending = new Map<string, (reply: IPreviewFetchReply) => void>();
 
+const probes = new Map<string, (listening: boolean) => void>();
+
 sw.addEventListener("message", (event) => {
+  if ((event.data as IPreviewClaimMessage | null)?.type === "wcvm:previewClaim") {
+    void sw.clients.claim();
+    return;
+  }
+  const probeReply = event.data as IPreviewProbeReply | null;
+  if (probeReply?.type === "wcvm:previewProbeResult") {
+    probes.get(probeReply.requestId)?.(probeReply.listening);
+    return;
+  }
   const reply = event.data as IPreviewFetchReply | null;
   if (!reply || reply.type !== "wcvm:previewFetchResult") return;
   const resolve = pending.get(reply.requestId);
@@ -129,17 +149,57 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 // exact moment a preview navigation was in flight. A handful of short retries covers this - a
 // reload completes well under a second - without turning a real "nothing is host any more" case
 // into a long hang (previewResponse's 502 still fires if nothing ever shows up).
-const findHostClient = async (): Promise<IClient | undefined> => {
-  const matchOne = async () => {
+const listHostClients = async (): Promise<IClient[]> => {
+  const matchAll = async () => {
     const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-    return clients.find((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
+    return clients.filter((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
   };
   for (let attempt = 0; attempt < 10; attempt++) {
-    const found = await matchOne();
-    if (found) return found;
+    const found = await matchAll();
+    if (found.length > 0) return found;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  return matchOne();
+  return matchAll();
+};
+
+// A silent page (frozen, mid-navigation, not a wcvm page at all) must not stall the request: it
+// simply counts as not listening.
+const PROBE_TIMEOUT_MS = 500;
+
+const probeListening = (client: IClient, port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const requestId = String(nextRequestId++);
+    const timer = setTimeout(() => {
+      probes.delete(requestId);
+      resolve(false);
+    }, PROBE_TIMEOUT_MS);
+    probes.set(requestId, (listening) => {
+      clearTimeout(timer);
+      probes.delete(requestId);
+      resolve(listening);
+    });
+    const message: IPreviewProbeMessage = { type: "wcvm:previewProbe", requestId, port };
+    client.postMessage(message);
+  });
+
+// Every tab of this origin shares this one worker, and the request says nothing about which tab's
+// iframe made it (see the comment above) - so with two wcvm pages open, "the first top-level
+// client" answered for the wrong one (a dev server in tab A showed "wcvm preview relay error:
+// ECONNREFUSED" because tab B was asked). With one page open there is nothing to choose; with
+// several, ask each whether it has a server on this port and take the likeliest owner
+// (previewRouting.ts's chooseHost).
+const findHostClient = async (port: number): Promise<IClient | undefined> => {
+  const hosts = await listHostClients();
+  if (hosts.length <= 1) return hosts[0];
+  const listening = await Promise.all(hosts.map((client) => probeListening(client, port)));
+  return chooseHost(
+    hosts.map((client, index) => ({
+      client,
+      listening: listening[index],
+      visible: client.visibilityState === "visible",
+      focused: client.focused === true,
+    })),
+  );
 };
 
 // A page with COEP: require-corp (needed here for SharedArrayBuffer/crossOriginIsolated, see
@@ -176,7 +236,7 @@ const withWebSocketShim = (request: Request, result: IPreviewFetchResult): IPrev
 };
 
 const respondFromGuest = async (event: IFetchEvent, port: number, path: string): Promise<Response> => {
-  const client = await findHostClient();
+  const client = await findHostClient(port);
   if (!client) return previewResponse("wcvm preview: no host page available to relay the request to", { status: 502 });
 
   const method = event.request.method;

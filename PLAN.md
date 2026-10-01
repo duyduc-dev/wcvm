@@ -109,6 +109,15 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   its WebAssembly binding deadlocks the same way Tailwind's `Scanner` and Angular's parser did (a spawned WASI
   worker's file reads relay back to the creator thread, which is blocked in `Atomics.wait` on that worker). A real
   fix is to let those relays be served by something other than the thread waiting on the worker.
+- Preview Service Worker with several tabs (2026-10-01): every tab of an origin shares one worker, and it used to
+  relay through the first top-level page it found, so a dev server in one tab answered ECONNREFUSED (or another
+  tab's content) when the other tab was asked. With more than one wcvm page open it now probes each for a server on
+  the requested port (`wcvm:previewProbe`) and relays through the owner; if several listen on the same port it
+  prefers the focused, then the visible, page (`chooseHost`) - a heuristic, so two tabs running the SAME port can
+  still cross. Also: `enable()` asks an already-active worker to claim the page (`wcvm:previewClaim`); a page loaded
+  uncontrolled (hard reload, bypass for network) used to stay uncontrolled and its preview iframe fell through to
+  the host's own dev server. An id in the preview URL would be exact, but recipes read `/__wcvm_preview__/<port>/`
+  to compute their base path, so the URL shape is left alone.
 - Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
   "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
   `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina

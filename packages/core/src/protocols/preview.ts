@@ -51,6 +51,29 @@ export type IPreviewFetchReply =
   | { type: "wcvm:previewFetchResult"; requestId: string; ok: true; result: IPreviewFetchResult }
   | { type: "wcvm:previewFetchResult"; requestId: string; ok: false; error: string };
 
+/** window -> SW: "take control of me". `clients.claim()` otherwise runs once, when a worker first
+ *  activates - a page that loads UNcontrolled while a worker is already active (a hard reload,
+ *  DevTools' "Bypass for network" having been on) would never be controlled again. */
+export interface IPreviewClaimMessage {
+  type: "wcvm:previewClaim";
+}
+
+/** SW -> every top-level wcvm page when more than one is open (`Client.postMessage`): "does a guest
+ *  server of yours listen on this port?" The preview Service Worker is shared by every tab of an
+ *  origin, so without asking it can't tell whose iframe a request came from. */
+export interface IPreviewProbeMessage {
+  type: "wcvm:previewProbe";
+  requestId: string;
+  port: number;
+}
+
+/** window -> SW (a direct reply to the ServiceWorker that sent IPreviewProbeMessage). */
+export interface IPreviewProbeReply {
+  type: "wcvm:previewProbeResult";
+  requestId: string;
+  listening: boolean;
+}
+
 // --- WebSocket tunnel ------------------------------------------------------------------------
 // A preview page's own `new WebSocket(...)` can't reach a guest server any other way: a Service
 // Worker never sees WebSocket traffic at all (only fetch()es), so the page's WebSocket is
