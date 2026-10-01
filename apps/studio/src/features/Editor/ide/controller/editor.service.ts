@@ -1,6 +1,8 @@
 import type * as Monaco from "monaco-editor";
 import { EDITOR_FONT_FAMILY, LANGUAGE_BY_EXTENSION } from "./constants";
 import { extensionOf } from "./fs.service";
+import { registerFormatters } from "./format.service";
+import { registerExtraLanguages } from "./languages";
 
 export const languageForPath = (path: string): string =>
   LANGUAGE_BY_EXTENSION[extensionOf(path)] ?? "plaintext";
@@ -44,7 +46,10 @@ async function loadMonaco(): Promise<typeof Monaco> {
       }
     },
   };
-  return import("monaco-editor");
+  const monaco = await import("monaco-editor");
+  await registerExtraLanguages(monaco);
+  registerFormatters(monaco);
+  return monaco;
 }
 
 /** Memoized: every editor host (there's only ever one in v1, but this stays safe if that

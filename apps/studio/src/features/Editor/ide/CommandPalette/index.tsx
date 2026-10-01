@@ -1,5 +1,6 @@
 import {
   FloppyDiskIcon,
+  MagicWandIcon,
   MoonIcon,
   PlusIcon,
   SidebarSimpleIcon,
@@ -27,6 +28,7 @@ const ICON_BY_COMMAND: Record<CommandId, React.ComponentType<{ className?: strin
   "toggle-preview": SidebarSimpleIcon,
   "new-terminal": PlusIcon,
   "save-file": FloppyDiskIcon,
+  "format-document": MagicWandIcon,
   "toggle-theme": MoonIcon,
 };
 
@@ -43,6 +45,9 @@ function runCommand(id: CommandId, c: IdeController): void {
       return;
     case "save-file":
       return c.saveActiveFile();
+    case "format-document":
+      void c.formatActiveDocument();
+      return;
     case "toggle-theme":
       return c.toggleTheme();
   }

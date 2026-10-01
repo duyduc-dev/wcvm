@@ -68,9 +68,13 @@ export default defineConfig({
     previewServiceWorkerHeaders(),
   ],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      // prettier-plugin-svelte imports plain "prettier" (its Node entry, index.cjs - unparsable in
+      // a browser build); everything here formats through the browser build instead. Anchored so
+      // "prettier/standalone" and "prettier/plugins/*" are untouched.
+      { find: /^prettier$/, replacement: "prettier/standalone" },
+    ],
   },
   build: {
     // The built preview Service Worker is small enough that Vite's default asset inlining would

@@ -80,6 +80,12 @@ built this way" that was probably already answered by a real bug.
   too: it needed the event loop to stop exiting before promise continuations ran, `process.versions.
   webcontainer` (Piscina's worker pool hangs without it), `sh` fd redirects and more - see HISTORY.md
   "Angular"; Studio's shells set `NG_BUILD_BABEL_LINKER`/`NG_BUILD_OPTIMIZE_CHUNKS`.
+- Studio's editor (`apps/studio/.../Editor/ide`): Prettier formatting (Format button, ⇧⌥F, command
+  palette, Monaco's own Format Document - `controller/format.service.ts`, lazy-loaded, honours the
+  project's `.prettierrc`), Monarch grammars for Vue/Svelte/Ember `.gjs`/`.gts` (`controller/
+  languages.ts`, built on Monaco's own html/js/ts grammars), and per-file-type icons (`fileIcon/`).
+  `.gjs`/`.gts` formatting uses `content-tag` directly (the community plugin can't be bundled);
+  `vite.config.ts` aliases `prettier` to its browser build for prettier-plugin-svelte.
 - Tests: 1051 Vitest (run under Node 24 - on Node 22, 19 fail only because `URLPattern`/`CloseEvent`
   are missing; `~/.nvm/versions/node/v24.18.0/bin` here) + 151 Playwright (Chromium; the ones needing
   the real npm registry are opt-in: `WCVM_E2E_VITE=1`). See "Verifying".
