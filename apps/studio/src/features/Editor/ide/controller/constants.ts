@@ -49,6 +49,7 @@ export const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   // No built-in Monaco grammar for these - registered in languages.ts.
   vue: "vue",
   svelte: "svelte",
+  astro: "astro",
   gjs: "gjs",
   gts: "gts",
   hbs: "handlebars",

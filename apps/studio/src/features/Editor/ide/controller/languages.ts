@@ -114,6 +114,38 @@ const svelteExtensions = (t: IMonarchLanguage["tokenizer"]): void => {
   ];
 };
 
+/** `.astro`: a `---` fenced TypeScript frontmatter at the very top, then HTML with `{expressions}`. */
+const astroExtensions = (t: IMonarchLanguage["tokenizer"]): void => {
+  const expression: Rule = [/\{/, { token: "delimiter.curly", next: "@astroExpr", nextEmbedded: "typescript" }];
+  const closer: Rule = [/\}/, "delimiter.curly"];
+  t.root!.unshift(expression, closer);
+  t.otherTag!.unshift(expression, closer);
+  t.astroExpr = [
+    [/\}/, { token: "@rematch", next: "@pop", nextEmbedded: "@pop" }],
+    [/\{/, { token: "", next: "@astroNested" }],
+    [/[^{}]+/, ""],
+  ];
+  t.astroNested = [
+    [/\{/, { token: "", next: "@push" }],
+    [/\}/, { token: "", next: "@pop" }],
+    [/[^{}]+/, ""],
+  ];
+
+  // The frontmatter is only a frontmatter as the file's FIRST thing: a separate start state decides,
+  // then hands over to the HTML grammar (`switchTo`, so a later `---` line in the markup is plain text).
+  t.htmlRoot = t.root!;
+  t.frontmatterEnd = [[/^---\s*$/, { token: "delimiter", switchTo: "@htmlRoot" }]];
+  t.root = [
+    [/^---\s*$/, { token: "delimiter", switchTo: "@frontmatterBody", nextEmbedded: "typescript" }],
+    [/./, { token: "@rematch", switchTo: "@htmlRoot" }],
+  ];
+  t.frontmatterBody = [
+    [/^---\s*$/, { token: "@rematch", switchTo: "@frontmatterEnd", nextEmbedded: "@pop" }],
+    [/[^-]+/, ""],
+    [/-/, ""],
+  ];
+};
+
 /** JS/TS grammar + Ember's `<template>...</template>` region, embedded as Handlebars. */
 const buildTemplateTagLanguage = (base: IDefinitionModule, postfix: string): IMonarchLanguage => {
   const language = clone(base.language);
@@ -132,7 +164,7 @@ const buildTemplateTagLanguage = (base: IDefinitionModule, postfix: string): IMo
 
 let registered = false;
 
-/** Registers vue, svelte, gjs and gts with Monaco. Idempotent; the grammars are loaded lazily
+/** Registers vue, svelte, astro, gjs and gts with Monaco. Idempotent; the grammars are loaded lazily
  * (they're Monaco's own modules, already in the bundle for the built-in languages). */
 export async function registerExtraLanguages(monaco: typeof Monaco): Promise<void> {
   if (registered) return;
@@ -155,6 +187,7 @@ export async function registerExtraLanguages(monaco: typeof Monaco): Promise<voi
 
   define("vue", [".vue"], html.conf, buildMarkupLanguage(html, ".vue", vueExtensions));
   define("svelte", [".svelte"], html.conf, buildMarkupLanguage(html, ".svelte", svelteExtensions));
+  define("astro", [".astro"], html.conf, buildMarkupLanguage(html, ".astro", astroExtensions));
   define("gjs", [".gjs"], javascript.conf, buildTemplateTagLanguage(javascript, ".gjs"));
   define("gts", [".gts"], typescript.conf, buildTemplateTagLanguage(typescript, ".gts"));
 }

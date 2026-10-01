@@ -92,6 +92,31 @@ const isBound = (text: string, name: string): boolean =>
   new RegExp(`import\\b[^;]*\\b${escapeRegExp(name)}\\b[^;]*?["'][^"']+["']`).test(text) ||
   new RegExp(`\\b(?:const|let|var|function|class|enum|interface|type)\\s+${escapeRegExp(name)}\\b`).test(text);
 
+/** 1-based line right after the file's leading directives (blank lines and comments may precede or sit between them). */
+export function lineAfterDirectives(text: string): number {
+  const lines = text.split("\n");
+  let after = 1;
+  let inBlockComment = false;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (inBlockComment) {
+      if (trimmed.includes("*/")) inBlockComment = false;
+      continue;
+    }
+    if (trimmed === "" || trimmed.startsWith("//")) continue;
+    if (trimmed.startsWith("/*")) {
+      if (!trimmed.includes("*/")) inBlockComment = true;
+      continue;
+    }
+    if (/^(["'])use [\w -]+\1;?$/.test(trimmed)) {
+      after = i + 2;
+      continue;
+    }
+    break;
+  }
+  return after;
+}
+
 /** The edit that adds `name` (or the default binding) to an `import` from `spec`. */
 function importEdit(
   model: Monaco.editor.ITextModel,
@@ -123,7 +148,10 @@ function importEdit(
   const statement = isDefault
     ? `import ${name} from ${quote}${spec}${quote}${semi}\n`
     : `import { ${name} } from ${quote}${spec}${quote}${semi}\n`;
-  let line = 1;
+  // No import yet: go after a directive prologue ("use client", "use strict", ...), never above it - a
+  // directive only counts as one when it is the first statement, so an import in front of "use client"
+  // turns a client component into a server one (Next.js: "must be placed before other expressions").
+  let line = lineAfterDirectives(text);
   for (const m of text.matchAll(/^import\b[^;]*?["'][^"']+["'];?[ \t]*$/gm)) {
     line = model.getPositionAt(m.index + m[0].length).lineNumber + 1;
   }
