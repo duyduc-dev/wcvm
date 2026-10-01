@@ -18,7 +18,7 @@ const locationAt = (model: Monaco.editor.ITextModel, start: number, length: numb
   };
 };
 
-const wordAt = (text: string, offset: number): { word: string; start: number } | null => {
+export const wordAt = (text: string, offset: number): { word: string; start: number } | null => {
   let start = offset;
   let end = offset;
   while (start > 0 && /[\w$]/.test(text[start - 1])) start--;
@@ -26,7 +26,7 @@ const wordAt = (text: string, offset: number): { word: string; start: number } |
   return end > start ? { word: text.slice(start, end), start } : null;
 };
 
-const isMemberAccess = (text: string, wordStart: number): boolean => /\??\.\s*$/.test(text.slice(0, wordStart));
+export const isMemberAccess = (text: string, wordStart: number): boolean => /\??\.\s*$/.test(text.slice(0, wordStart));
 
 interface INavItem {
   text: string;
@@ -52,7 +52,7 @@ async function scriptDefinitions(monaco: typeof Monaco, model: Monaco.editor.ITe
 
 /** The script-level declaration (`const x`, `function f`, an import, a destructured prop) a template
  * expression's identifier refers to - found from the shadow model's navigation tree. */
-async function scriptDeclaration(monaco: typeof Monaco, model: Monaco.editor.ITextModel, name: string): Promise<Location[]> {
+export async function scriptDeclaration(monaco: typeof Monaco, model: Monaco.editor.ITextModel, name: string): Promise<Location[]> {
   const shadow = shadowOf(monaco, model);
   const getWorker = await monaco.typescript.getTypeScriptWorker();
   const worker = await getWorker(shadow.uri);
