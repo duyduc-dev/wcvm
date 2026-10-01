@@ -1222,6 +1222,31 @@ test.describe("node", () => {
       });
     });
 
+    test("one script that serves and requests ITSELF: its client and server sockets are not confused", async ({ page }) => {
+      // Both ends of the connection live in one process. They used to share one connection id, so the server
+      // read its own response back as a second request ("server got HTTP/1.1 200") and the client never finished.
+      const r = await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const proc = await wc.spawn("node", [
+          "-e",
+          "const http = require('http');" +
+            "const seen = [];" +
+            "const server = http.createServer((req, res) => { seen.push(req.method + ' ' + req.url); res.end('pong'); });" +
+            "server.listen(6500, () => {" +
+            "  http.get('http://localhost:6500/ping', (res) => {" +
+            "    let body = '';" +
+            "    res.on('data', (c) => { body += c; });" +
+            "    res.on('end', () => { console.log(JSON.stringify({ status: res.statusCode, body, seen })); server.close(); });" +
+            "  });" +
+            "});",
+        ]);
+        const out = await new Response(proc.stdout).text();
+        const exit = await proc.exit;
+        return { out: out.trim(), code: exit.exitCode };
+      });
+      expect(r).toEqual({ out: '{"status":200,"body":"pong","seen":["GET /ping"]}', code: 0 });
+    });
+
     test("a real client process POSTs a body to a real server process, which streams and echoes it back", async ({ page }) => {
       const r = await page.evaluate(async () => {
         const wc = (window as unknown as WcWindow).wc;
