@@ -1,78 +1,45 @@
-# React + TypeScript + Vite
+# wcvm Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A VS Code-style IDE that runs entirely in the browser, built on [wcvm](../../README.md): Monaco editor,
+terminals, a preview pane, and project templates (Vite + React/Vue/Svelte/..., Next.js, SvelteKit, Angular,
+Express, NestJS, ...). Projects are stored in the browser (OPFS); there is no backend.
 
-Currently, two official plugins are available:
+## Run it locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
-
-Note: This will impact Vite dev & build performances.
-You can also try [the experimental native React Compiler support in plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md#rust-react-compiler) by using `compiler: true` in the plugin options instead of using the Babel plugin.
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+pnpm install
+pnpm --filter wcvm build            # Studio uses wcvm's built dist/
+pnpm --filter studio dev            # http://localhost:5174
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Use **one Studio tab per browser profile**: tabs of an origin share one preview Service Worker and one OPFS
+store, and two tabs running a server on the same port can cross.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Build
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+pnpm --filter "studio..." build     # builds wcvm first, then Studio -> apps/studio/dist
+pnpm --filter studio preview        # serves dist/ with the required headers
 ```
+
+## Deploy (Cloudflare Pages)
+
+Studio is a static site, but it **must be served with cross-origin isolation headers**. `public/_headers`
+(copied to the site root by the build) sets them, and `Service-Worker-Allowed` for the preview Service Worker.
+Cloudflare Pages and Netlify both read that file; GitHub Pages cannot set these headers, so it will not work.
+
+Create a Cloudflare Pages project connected to this repository (or use `wrangler pages deploy`) with:
+
+| Setting | Value |
+|---|---|
+| Framework preset | None |
+| Build command | `pnpm install --frozen-lockfile && pnpm --filter "studio..." build` |
+| Build output directory | `apps/studio/dist` |
+| Environment variable | `NODE_VERSION` = `24` |
+
+Cloudflare serves `index.html` for unknown paths when there is no `404.html`, so client-side routes such as
+`/editor/<id>` work without a rewrite rule.
+
+After a deploy, check in DevTools that the document response has `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, and that `crossOriginIsolated` is `true` in the console. Template
+installs fetch packages from `registry.npmjs.org`, so the visitor's network must reach it.
