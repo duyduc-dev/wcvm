@@ -39,6 +39,15 @@ built this way" that was probably already answered by a real bug.
   component-aware rewrite - `runtime/esm/loader.ts`, `runtime/esm/cyclic.ts` - merges each cycle
   into live getter-based bindings instead of one Blob URL per module); this used to be a hard gap
   (hit for real in zod v4's and Svelte's own compilers) - see HISTORY.md for the full writeup.
+- Synchronous `require(esm)` like Node 24 (`runtime/esm/syncRequire.ts` + `cjs.ts`): a `.mjs`, a
+  `.js` under `"type": "module"`, or a `.js` whose CJS compile fails with ESM syntax (Node's own
+  syntax detection) is rewritten into a plain function body (imports -> live getters over a
+  synchronous `__wcvm_import_sync__`, resolved with the ESM "import" conditions; top-level await ->
+  `ERR_REQUIRE_ASYNC_MODULE`). Also new: `npx <local bin>` (no registry), `/tmp` (Studio creates it
+  at boot; core's VFS root stays empty), legacy no-`"exports"` package subpaths, Node's
+  `PATTERN_KEY_COMPARE` for `exports` patterns (both loaders), `import(URL)`, the global
+  `MessageChannel` once `worker_threads` loads, and `Error.prepareStackTrace` call sites whose
+  `getFileName()` works (`runtime/callSiteFileNames.ts`).
 - `fs.watch`/`fs.watchFile` (real push events + polling).
 - `net` (real TCP over a virtual in-kernel network), `http` (real vendored `http.js` plus a
   hand-written HTTP/1.1 wire parser), `dgram` (real UDP).
@@ -58,23 +67,29 @@ built this way" that was probably already answered by a real bug.
 - The playground (`examples/playground`) has four working dev-server examples (Vite+React,
   Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express). Studio's
   own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
-  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Rectify - Svelte was PARKED, then
+  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Ember (JS and TS)/Angular/Rectify - Svelte was PARKED, then
   re-verified working once the circular-ESM gap above was fixed; Tailwind CSS v4 hit a real
   `@napi-rs/wasm-runtime` deadlock (any native `Scanner` call spanning more than one line of input
   in a single call freezes the whole thread - a spawned WASI worker's own file reads relay back to
   the creator thread, which is itself already frozen waiting on that same worker), fixed by
   patching `@tailwindcss/vite`'s own plugin to call `Scanner.scanFiles()` once per line instead of
-  once per file (see PLAN.md's "Tailwind CSS v4: feasibility findings" and HISTORY.md).
-- Tests: 1025 Vitest + 143 Playwright (Chromium; 19 of them opt-in, needing the real npm registry:
-  `WCVM_E2E_VITE=1`). See "Verifying".
+  once per file (see PLAN.md's "Tailwind CSS v4: feasibility findings" and HISTORY.md). Ember 7.3
+  (Vite blueprint, `@embroider/vite`) runs too - its build forks `ember build --watch`, which shells
+  out to `npx vite build` - and needs `JOBS=1` in the environment (Studio's shells set it) or
+  broccoli-babel-transpiler's worker pool hangs; see HISTORY.md "Ember". Angular 22 (`ng serve`) runs
+  too: it needed the event loop to stop exiting before promise continuations ran, `process.versions.
+  webcontainer` (Piscina's worker pool hangs without it), `sh` fd redirects and more - see HISTORY.md
+  "Angular"; Studio's shells set `NG_BUILD_BABEL_LINKER`/`NG_BUILD_OPTIMIZE_CHUNKS`.
+- Tests: 1051 Vitest (run under Node 24 - on Node 22, 19 fail only because `URLPattern`/`CloseEvent`
+  are missing; `~/.nvm/versions/node/v24.18.0/bin` here) + 151 Playwright (Chromium; the ones needing
+  the real npm registry are opt-in: `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): npm workspaces and the rest of `npm exec` (arbitrary local/
-registry commands, not just `create`), Angular/Ember Studio templates (need a Rolldown-WASM binding
-wcvm doesn't have - see PLAN.md), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
+registry commands, not just `create`), DNS (`dns.lookup()` is a fixed-address shim, low-value in a
 single virtual host with no real network to resolve a name against), real `npm` (investigated and
-DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`;
-a minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's
-"Real npm: feasibility findings"), Python/Bun, Studio UI.
+DEFERRED - its fetch stack has no path to a real network from inside wcvm's virtual `net`/`http`; a
+minimal built-in `npm install`/`npm run`/`npm create` exists instead - see above and PLAN.md's "Real
+npm: feasibility findings"), Python/Bun, Studio UI.
 
 ## Architecture in one page
 

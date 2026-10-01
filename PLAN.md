@@ -84,6 +84,24 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   import bridge that deadlocks, and a CJS-style snapshot that breaks live-binding semantics for the
   real target case) and HISTORY.md for how each was found. `import.meta` is rewritten too, to the
   module's real `file://` URL/filename/dirname/resolve (not the blob's).
+- `require(esm)` (2026-10-01, `runtime/esm/syncRequire.ts`, hooked into `cjs.ts`'s `load`): Node 24's
+  synchronous loading of an ES module from CommonJS. Known differences from real Node: the namespace's
+  keys are sorted for statically known exports only (names an `export *` adds come after); no
+  `export { x as "module.exports" }` support; an `import` of a CJS module gets its runtime-enumerable
+  keys as named exports (Node derives them statically with cjs-module-lexer); a cyclic import read
+  synchronously at the top level hits the TDZ of the real binding, as in Node. Top-level await ->
+  `ERR_REQUIRE_ASYNC_MODULE`. Also this round: `npx` (local bins only), `constants`, legacy package
+  resolution in the ESM resolver, `PATTERN_KEY_COMPARE`, `import(URL)`, call-site file names for
+  `Error.prepareStackTrace`, and Ember as a Studio template - see HISTORY.md "Ember".
+- Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
+  "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
+  `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina
+  key off to avoid a `receiveMessageOnPort`-based worker pool), an event loop that confirms idleness
+  after microtasks have drained (a promise continuation can still queue ticks/handles), and the
+  `EventTarget` marker Node's `events.setMaxListeners` checks. Known limits: worker-process pools that
+  use `child_process.fork` (broccoli-babel-transpiler) still hang without `JOBS=1`; `oxc-parser` (a
+  napi-rs WASM parser) still deadlocks on multi-line input and is stubbed for Angular; Angular's
+  production `ng build` with 3+ lazy chunks needs `NG_BUILD_OPTIMIZE_CHUNKS=false` (no native `rolldown`).
 - `node` with no script and no `-e` is an interactive REPL (`runtime/repl.ts`), and so is `sh`
   with no `-c`/script (see above). Real Node's own `repl` module isn't vendored - it needs
   raw-mode TTY, ANSI cursor control and tab-completion machinery `tty_wrap` deliberately stubs

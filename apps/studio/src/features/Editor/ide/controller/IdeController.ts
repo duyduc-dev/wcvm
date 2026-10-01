@@ -101,8 +101,15 @@ export class IdeController {
     void this.wc.preview.enable();
     this.stopPreviewListener = this.wc.preview.onListen(({ port, listening }) => {
       if (!listening) return;
-      const already = this.snap.previewTabs.some((t) => t.port === port);
-      if (already) return;
+      const existing = this.snap.previewTabs.find((t) => t.port === port);
+      if (existing) {
+        // The port is listening AGAIN: the first listener was transient (Angular's `ng serve`
+        // binds and releases its port once just to check it's free, before the real server
+        // starts - the tab opened on that first bind and got ECONNREFUSED) or a dev server was
+        // restarted. Reload so the tab reaches whoever is listening now.
+        this.reloadPreviewTab(existing.id);
+        return;
+      }
       const tab = createPreviewTab(uuidv6(), port);
       this.set({
         previewTabs: [...this.snap.previewTabs, tab],
@@ -349,7 +356,13 @@ export class IdeController {
     // gets Vite's real, colorful startup banner (and anything else's) to actually show here.
     const process: IProcess = await this.wc.spawn("sh", [], {
       cwd: this.snap.rootPath,
-      env: { FORCE_COLOR: "3" },
+      // JOBS=1: broccoli-babel-transpiler (Ember's build) otherwise starts a worker-process pool
+      // that never answers in this sandbox and the build hangs forever; 1 makes it transpile inline.
+      //
+      // NG_BUILD_*: @angular/build - BABEL_LINKER routes Angular's partial-compilation linking through
+      // Babel instead of its oxc-parser based linker (a native WASM parser that deadlocks here);
+      // OPTIMIZE_CHUNKS=false skips the one production step that needs the native `rolldown`.
+      env: { FORCE_COLOR: "3", JOBS: "1", NG_BUILD_BABEL_LINKER: "true", NG_BUILD_OPTIMIZE_CHUNKS: "false" },
     });
     const handle = createShellTerminal(process, this.snap.isDark, () => this.markTerminalDead(id));
     this.terminals.set(id, handle);

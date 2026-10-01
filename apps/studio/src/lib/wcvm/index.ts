@@ -20,6 +20,12 @@ const bootWcvm = (): Promise<void> => {
       persist: { lazyDepth: 4 },
     });
 
+    // A real Linux host always has /tmp and os.tmpdir() reports it, but the sandbox's filesystem
+    // starts empty - some packages (e.g. @embroider/shared-internals, for Ember) realpathSync it
+    // at load and crash on ENOENT.
+    await WcvmInstance.ready;
+    await WcvmInstance.fs.mkdir("/tmp", { recursive: true });
+
     if (import.meta.env.DEV) {
       WcvmInstance.diagnostics.onEvent((e) => {
         console.log(`[bootWcvm][${e.timestamp}] ~ ${e.type} ~ `, e.payload);

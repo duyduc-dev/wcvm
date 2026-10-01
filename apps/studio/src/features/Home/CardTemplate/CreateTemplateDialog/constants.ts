@@ -2,7 +2,9 @@ import type { Icon } from "@phosphor-icons/react";
 import type { ReactElement } from "react";
 import type { IWcvmProjectType } from "@/services/wcvm/model";
 import {
+  AngularLogoIcon,
   BootstrapLogoIcon,
+  EmberLogoIcon,
   JsLogoIcon,
   LitLogoIcon,
   PreactLogoIcon,
@@ -42,8 +44,7 @@ export interface IFrameworkOption {
 // with this sandbox's pinned vite@7 - vite-plugin-svelte@^7 needs vite@8+, which needs the
 // Rolldown-WASM binding this sandbox doesn't have). See tanstack-router's own entry below for what
 // the circular-ESM fix actually was.
-// Angular and Ember aren't here either - vivari's own recipes for both need a Rolldown-WASM binding
-// wcvm doesn't have (vitePins.ts documents why Vite 7 is pinned instead); neither was attempted.
+// Ember and Angular are here (2026-10-01, see their entries below).
 export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
   {
     id: "react-ts",
@@ -179,6 +180,37 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     label: "Tailwind CSS",
     description: "TypeScript",
     icon: TailwindLogoIcon,
+    category: "Frontend",
+  },
+  {
+    // ADDED (2026-10-01): Ember 7.3 via its own Vite blueprint (@ember/app-blueprint) - see
+    // emberTemplateProject.ts for the recipe and what had to be fixed in wcvm to run it
+    // (`require(esm)`, `npx`, legacy package resolution, call-site file names, a global
+    // MessageChannel fix, a longest-pattern exports match). Verified end to end in real Chromium
+    // against the real npm registry: install, dev server start, the app rendering in the preview.
+    id: "ember-ts",
+    label: "Ember",
+    description: "TypeScript",
+    icon: EmberLogoIcon,
+    category: "Frontend",
+  },
+  {
+    id: "ember",
+    label: "Ember",
+    description: "JavaScript",
+    icon: EmberLogoIcon,
+    category: "Frontend",
+  },
+  {
+    // ADDED (2026-10-01): Angular 22 - @angular/build on vite 7 (overrides), with the native
+    // esbuild/rollup/@parcel/watcher swapped for WebAssembly builds, a stubbed oxc-parser and
+    // Babel linking. Verified end to end in real Chromium against the real npm registry. See
+    // angularRecipe.ts and HISTORY.md "Angular" for what it took (Piscina's worker pool hangs
+    // without `process.versions.webcontainer`, which wcvm now sets, among others).
+    id: "angular",
+    label: "Angular",
+    description: "TypeScript",
+    icon: AngularLogoIcon,
     category: "Frontend",
   },
   {

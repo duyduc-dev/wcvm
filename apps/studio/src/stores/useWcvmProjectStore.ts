@@ -11,6 +11,8 @@ import { createViteTemplateProject } from "@/services/wcvm/templateProjects/vite
 import { createRectifyTemplateProject } from "@/services/wcvm/templateProjects/rectifyTemplateProject";
 import { createStaticTemplateProject } from "@/services/wcvm/templateProjects/staticTemplateProject";
 import { createBootstrapTemplateProject } from "@/services/wcvm/templateProjects/bootstrapTemplateProject";
+import { createAngularTemplateProject } from "@/services/wcvm/templateProjects/angularTemplateProject";
+import { createEmberTemplateProject } from "@/services/wcvm/templateProjects/emberTemplateProject";
 import { createTanstackRouterTemplateProject } from "@/services/wcvm/templateProjects/tanstackRouterTemplateProject";
 import { createTailwindTemplateProject } from "@/services/wcvm/templateProjects/tailwindTemplateProject";
 import {
@@ -44,7 +46,7 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
 
       async addProject(input, type = "blank", onProgress) {
         const id = uuidv6();
-        // "rectify"/"static"/"bootstrap"/"tanstack-router"/"tailwind" each have their own manual
+        // "rectify"/"static"/"bootstrap"/"tanstack-router"/"tailwind"/"ember"/"ember-ts"/"angular" each have their own manual
         // wiring (none has an official create-vite template); any other non-"blank" type IS a real
         // create-vite `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts).
         const newProj =
@@ -60,7 +62,11 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
                     ? await createTanstackRouterTemplateProject(input, onProgress)
                     : type === "tailwind"
                       ? await createTailwindTemplateProject(input, onProgress)
-                      : await createViteTemplateProject(input, type, onProgress);
+                      : type === "ember" || type === "ember-ts"
+                        ? await createEmberTemplateProject(input, type === "ember-ts", onProgress)
+                        : type === "angular"
+                          ? await createAngularTemplateProject(input, onProgress)
+                          : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const now = Date.now();
