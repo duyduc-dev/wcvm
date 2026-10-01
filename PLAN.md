@@ -93,6 +93,13 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   `ERR_REQUIRE_ASYNC_MODULE`. Also this round: `npx` (local bins only), `constants`, legacy package
   resolution in the ESM resolver, `PATTERN_KEY_COMPARE`, `import(URL)`, call-site file names for
   `Error.prepareStackTrace`, and Ember as a Studio template - see HISTORY.md "Ember".
+- Studio's Backend templates (2026-10-01): Express (JS, TS) and NestJS install from the real npm registry and
+  serve through the preview relay, verified in real Chromium. TypeScript is compiled with `tsc` and run with
+  `node` (no `tsx`/`ts-node`: native esbuild), so there is no watch-and-restart. Known gap: `nest start`
+  (`@nestjs/cli`) fails - `@inquirer/core` constructs an `AsyncLocalStorage`, which calls
+  `internal/promise_hooks`, which isn't vendored (`runtime/node/manifest.json`); vendoring it (plus its
+  bindings) would let the CLI, and `tsx`-style watchers, run. Fullstack (Next.js, Nuxt, SvelteKit, React
+  Router 7, Astro) is shown in the picker as "soon" and is not implemented.
 - Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
   "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
   `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina

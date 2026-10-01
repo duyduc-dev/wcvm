@@ -313,3 +313,68 @@ export function TailwindLogoIcon({ size = 24 }: ITemplateIconProps) {
     </svg>
   );
 }
+
+// ── Backend / Fullstack ────────────────────────────────────────────────────
+// Simplified marks (not the brands' exact artwork) - enough to tell the cards apart at 24px.
+
+export function ExpressLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <rect x="1" y="1" width="22" height="22" rx="5" fill="#303030" />
+      <text x="12" y="16" textAnchor="middle" fontSize="10.5" fontFamily="ui-monospace, monospace" fontWeight="700" fill="#fff">
+        ex
+      </text>
+    </svg>
+  );
+}
+
+export function NestLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path
+        d="M12 1.5c-.7 0-1.3.3-1.7.8.5.3.8.8.9 1.4.1.6-.1 1.2-.4 1.6l.2.1c1.4.6 2.4 1.9 2.7 3.4 1.5-.6 3-.1 3.9 1 1 1.3 1 3.1-.1 4.4.8.4 1.5 1.1 1.7 2 .3 1.3-.3 2.6-1.4 3.3-1 .6-2.2.6-3.2.1-.4.9-1.3 1.6-2.4 1.6s-2-.7-2.4-1.6c-1 .5-2.2.5-3.2-.1-1.1-.7-1.7-2-1.4-3.3.2-.9.9-1.6 1.7-2-1.1-1.3-1.1-3.1-.1-4.4.9-1.1 2.4-1.6 3.9-1 .1-.5.3-1 .6-1.4-.4-.4-.6-1-.5-1.6.1-.6.4-1.1.9-1.4-.4-.5-1-.8-1.7-.8Z"
+        fill="#E0234E"
+      />
+      <circle cx="12" cy="10.5" r="1.1" fill="#fff" />
+    </svg>
+  );
+}
+
+export function NextjsLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="11" fill="#000" stroke="#7f7f7f" strokeWidth="1" />
+      <path d="M8.5 7.5v9M8.7 7.5l7 9.3" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      <path d="M15.5 7.5v5" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function NuxtLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path d="M13.6 20.5H21c.6 0 1-.5 1-1 0-.2 0-.3-.1-.5L16.4 8.6a1 1 0 0 0-1.7 0l-1.3 2.3 3.6 6.2Z" fill="#00DC82" />
+      <path d="M8 4.5c-.4 0-.7.2-.9.5L1.1 15.4a1 1 0 0 0 0 1c.2.4.6.6 1 .6h3.4c1.3 0 2.3-.5 3-1.6l1.6-2.7 2.9-5-1.9-3.3c-.2-.3-.5-.5-.9-.5Z" fill="#00DC82" transform="translate(0 3)" />
+    </svg>
+  );
+}
+
+export function ReactRouterLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <circle cx="12" cy="12" r="11" fill="#F44250" />
+      <circle cx="8" cy="9" r="1.9" fill="#fff" />
+      <circle cx="16" cy="15" r="1.9" fill="#fff" />
+      <path d="M9.8 9H14a2 2 0 0 1 2 2v2" stroke="#fff" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function AstroLogoIcon({ size = 24 }: ITemplateIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <path d="M8.4 18.9c-1.1-1-1.4-3.1-.9-4.7.8.9 1.9 1.2 3 1.4 1.7.3 3.3.2 4.7-.5l.4-.2c.2.6.2 1.2 0 1.8-.3 1.1-1 1.9-2.1 2.3-.8.3-1.5.3-2.2.5-.8.2-1.5.7-1.9 1.4-1.1-.7-1.9-1.4-2.9-2Z" fill="#BC52EE" transform="translate(0 -1)" />
+      <path d="M5.4 15.4s2.8-1.4 5.6-1.4l2.1-6.5c.1-.4.4-.6.7-.6s.6.2.7.6l2.1 6.5c1.7 0 5.6 1.4 5.6 1.4L15.8 2c-.2-.6-.6-1-1.1-1H9.3c-.5 0-.9.4-1.1 1L5.4 15.4Z" fill="#a78bfa" transform="translate(-3 3) scale(.9)" />
+    </svg>
+  );
+}

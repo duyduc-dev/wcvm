@@ -3,13 +3,19 @@ import type { ReactElement } from "react";
 import type { IWcvmProjectType } from "@/services/wcvm/model";
 import {
   AngularLogoIcon,
+  AstroLogoIcon,
   BootstrapLogoIcon,
   EmberLogoIcon,
+  ExpressLogoIcon,
   JsLogoIcon,
   LitLogoIcon,
+  NestLogoIcon,
+  NextjsLogoIcon,
+  NuxtLogoIcon,
   PreactLogoIcon,
   QwikLogoIcon,
   ReactLogoIcon,
+  ReactRouterLogoIcon,
   RectifyLogoIcon,
   SolidLogoIcon,
   StaticLogoIcon,
@@ -21,10 +27,12 @@ import {
   type ITemplateIconProps,
 } from "./templateIcons";
 
-export type ITemplateCategory = "Frontend" | "Experimental";
+export type ITemplateCategory = "Frontend" | "Backend" | "Fullstack" | "Experimental";
 
 export const TEMPLATE_CATEGORIES: ITemplateCategory[] = [
   "Frontend",
+  "Backend",
+  "Fullstack",
   "Experimental",
 ];
 
@@ -34,6 +42,17 @@ export interface IFrameworkOption {
   description: string;
   icon: Icon | ((props: ITemplateIconProps) => ReactElement);
   category: ITemplateCategory;
+}
+
+/** Shown (greyed out, "Soon") but not selectable: the next planned templates. They have no project
+ * type yet, so they are deliberately not part of `FRAMEWORK_OPTIONS` or the form's schema. */
+export interface IUpcomingOption {
+  label: string;
+  description: string;
+  icon: IFrameworkOption["icon"];
+  category: ITemplateCategory;
+  /** Marked "exp" in the picker, like the experimental templates elsewhere. */
+  experimental?: boolean;
 }
 
 // Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
@@ -213,6 +232,30 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     icon: AngularLogoIcon,
     category: "Frontend",
   },
+  // Backend (2026-10-01): ported from vivari's own backend templates, verified in real Chromium
+  // against the real npm registry - see services/wcvm/templateProjects/backendRecipes.ts (TypeScript
+  // is built with `tsc` and run with `node`; the NestJS CLI can't run here yet).
+  {
+    id: "express",
+    label: "Express",
+    description: "JavaScript",
+    icon: ExpressLogoIcon,
+    category: "Backend",
+  },
+  {
+    id: "express-ts",
+    label: "Express",
+    description: "TypeScript",
+    icon: ExpressLogoIcon,
+    category: "Backend",
+  },
+  {
+    id: "nestjs",
+    label: "NestJS",
+    description: "TypeScript",
+    icon: NestLogoIcon,
+    category: "Backend",
+  },
   {
     id: "rectify",
     label: "Rectify",
@@ -220,4 +263,14 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     icon: RectifyLogoIcon,
     category: "Experimental",
   },
+];
+
+/** The planned Fullstack tab - SSR frameworks that need a real server runtime plus a bundler. */
+export const UPCOMING_OPTIONS: IUpcomingOption[] = [
+  { label: "Next.js", description: "TypeScript", icon: NextjsLogoIcon, category: "Fullstack" },
+  { label: "Next.js", description: "JavaScript", icon: NextjsLogoIcon, category: "Fullstack" },
+  { label: "Nuxt", description: "TypeScript", icon: NuxtLogoIcon, category: "Fullstack", experimental: true },
+  { label: "SvelteKit", description: "TypeScript", icon: SvelteLogoIcon, category: "Fullstack", experimental: true },
+  { label: "React Router 7", description: "TypeScript", icon: ReactRouterLogoIcon, category: "Fullstack" },
+  { label: "Astro", description: "TypeScript", icon: AstroLogoIcon, category: "Fullstack" },
 ];
