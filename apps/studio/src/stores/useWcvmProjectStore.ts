@@ -12,6 +12,7 @@ import { createRectifyTemplateProject } from "@/services/wcvm/templateProjects/r
 import { createStaticTemplateProject } from "@/services/wcvm/templateProjects/staticTemplateProject";
 import { createBootstrapTemplateProject } from "@/services/wcvm/templateProjects/bootstrapTemplateProject";
 import { createAngularTemplateProject } from "@/services/wcvm/templateProjects/angularTemplateProject";
+import { createFullstackTemplateProject } from "@/services/wcvm/templateProjects/fullstackTemplateProject";
 import { createBackendTemplateProject } from "@/services/wcvm/templateProjects/backendTemplateProject";
 import { createEmberTemplateProject } from "@/services/wcvm/templateProjects/emberTemplateProject";
 import { createTanstackRouterTemplateProject } from "@/services/wcvm/templateProjects/tanstackRouterTemplateProject";
@@ -69,7 +70,9 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
                           ? await createAngularTemplateProject(input, onProgress)
                           : type === "express" || type === "express-ts" || type === "nestjs"
                             ? await createBackendTemplateProject(input, type, onProgress)
-                            : await createViteTemplateProject(input, type, onProgress);
+                            : type === "nextjs" || type === "nextjs-ts" || type === "sveltekit" || type === "react-router" || type === "astro"
+                              ? await createFullstackTemplateProject(input, type, onProgress)
+                              : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const now = Date.now();

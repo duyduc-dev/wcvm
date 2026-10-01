@@ -256,6 +256,45 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     icon: NestLogoIcon,
     category: "Backend",
   },
+  // Fullstack (2026-10-01): Next.js, SvelteKit, React Router 7 and Astro were each run for real - install,
+  // `npm run dev`, then the preview iframe: server-rendered HTML, a client interaction, a server endpoint
+  // and client-side navigation. See services/wcvm/templateProjects/fullstackRecipes.ts for what each needs
+  // and HISTORY.md for the runtime gaps they exposed.
+  {
+    id: "nextjs-ts",
+    label: "Next.js",
+    description: "TypeScript",
+    icon: NextjsLogoIcon,
+    category: "Fullstack",
+  },
+  {
+    id: "nextjs",
+    label: "Next.js",
+    description: "JavaScript",
+    icon: NextjsLogoIcon,
+    category: "Fullstack",
+  },
+  {
+    id: "sveltekit",
+    label: "SvelteKit",
+    description: "TypeScript",
+    icon: SvelteLogoIcon,
+    category: "Fullstack",
+  },
+  {
+    id: "react-router",
+    label: "React Router 7",
+    description: "TypeScript",
+    icon: ReactRouterLogoIcon,
+    category: "Fullstack",
+  },
+  {
+    id: "astro",
+    label: "Astro",
+    description: "TypeScript",
+    icon: AstroLogoIcon,
+    category: "Fullstack",
+  },
   {
     id: "rectify",
     label: "Rectify",
@@ -265,12 +304,8 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
   },
 ];
 
-/** The planned Fullstack tab - SSR frameworks that need a real server runtime plus a bundler. */
+/** Still to come. Nuxt needs `oxc-parser`, whose WebAssembly binding deadlocks on multi-line input (the same
+ * napi-rs worker problem as Angular's - see PLAN.md), and Nuxt 4 needs Vite 8 (no WebAssembly Rolldown here). */
 export const UPCOMING_OPTIONS: IUpcomingOption[] = [
-  { label: "Next.js", description: "TypeScript", icon: NextjsLogoIcon, category: "Fullstack" },
-  { label: "Next.js", description: "JavaScript", icon: NextjsLogoIcon, category: "Fullstack" },
   { label: "Nuxt", description: "TypeScript", icon: NuxtLogoIcon, category: "Fullstack", experimental: true },
-  { label: "SvelteKit", description: "TypeScript", icon: SvelteLogoIcon, category: "Fullstack", experimental: true },
-  { label: "React Router 7", description: "TypeScript", icon: ReactRouterLogoIcon, category: "Fullstack" },
-  { label: "Astro", description: "TypeScript", icon: AstroLogoIcon, category: "Fullstack" },
 ];

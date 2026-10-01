@@ -121,7 +121,9 @@ const CreateTemplateDialog = () => {
           <DialogDescription>
             {selected.category === "Backend"
               ? `Setting up a ${selected.label} ${selected.description} server and installing its dependencies`
-              : `Scaffolding a real Vite + ${selected.label} + ${selected.description} project`}{" "}
+              : selected.category === "Fullstack"
+                ? `Setting up a ${selected.label} app and installing its dependencies`
+                : `Scaffolding a real Vite + ${selected.label} + ${selected.description} project`}{" "}
             — this can take up to a minute the first time.
           </DialogDescription>
         </DialogHeader>
@@ -141,6 +143,11 @@ const CreateTemplateDialog = () => {
           {selected.category === "Backend" ? (
             <>
               A real server installed from the npm registry, running in your browser.
+            </>
+          ) : selected.category === "Fullstack" ? (
+            <>
+              A real full-stack framework installed from the npm registry, server and all, running in your
+              browser.
             </>
           ) : (
             <>
@@ -178,7 +185,7 @@ const CreateTemplateDialog = () => {
                 </TabsList>
                 {TEMPLATE_CATEGORIES.map((category) => (
                   <TabsContent key={category} value={category}>
-                    <div className="grid grid-cols-2 gap-2 max-h-[280px] overflow-y-auto pr-1 [scrollbar-width:thin] [scrollbar-color:rgba(127,127,127,0.5)_transparent]">
+                    <div className="grid grid-cols-2 gap-2 max-h-70 overflow-y-auto pr-1 scrollbar-thin [scrollbar-color:rgba(127,127,127,0.5)_transparent]">
                       {FRAMEWORK_OPTIONS.filter(
                         (option) => option.category === category,
                       ).map((option) => {
@@ -271,6 +278,12 @@ const CreateTemplateDialog = () => {
           )}
         </Field>
       </FieldGroup>
+      {activeCategory === "Fullstack" && hasCreatable && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Run <code>npm run dev</code> in the terminal. The first page of a full-stack app compiles on
+          demand and can take 15-30 seconds.
+        </p>
+      )}
       {!hasCreatable && (
         <p className="mt-4 text-sm text-muted-foreground">
           These templates are planned and not available yet.

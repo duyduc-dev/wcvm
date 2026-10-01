@@ -50,7 +50,12 @@ export function configureTypescript(monaco: typeof Monaco): void {
   const options: Monaco.typescript.CompilerOptions = {
     target: ts.ScriptTarget.ESNext,
     module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeJs,
+    // "bundler" (100): resolves a package's `exports` map the way Vite, Next.js, Astro, React Router and
+    // SvelteKit do (`react-router/dom`, `@sveltejs/kit/vite`). The old Node-10 setting could not, and
+    // TypeScript then builds a diagnostic holding a lazy function - which cannot cross the worker
+    // boundary ("... could not be cloned") and was thrown as an uncaught error in Monaco's TS worker.
+    // Monaco's own enum predates the value, hence the cast.
+    moduleResolution: 100 as unknown as Monaco.typescript.ModuleResolutionKind,
     jsx: ts.JsxEmit.ReactJSX,
     allowJs: true,
     allowNonTsExtensions: true,

@@ -1805,3 +1805,25 @@ bundles its own copy.
 Studio notes: Next needs `node_modules/next/wasm/@next/swc-wasm-nodejs` (what `next dev` falls back to
 "downloading"; wcvm's npm never runs `postinstall`, so the template creation links it from the installed
 `@next/swc-wasm-nodejs` - a symlink, not a 30 MB copy). The first page request compiles for ~15-25 s.
+
+## Studio: Backend and Fullstack template tabs (2026-10-01)
+
+- **Backend** (`templateProjects/backendRecipes.ts`, ported from vivari's): Express JS, Express TS, NestJS.
+  Each serves a small page at `/` and `GET /api/hello`. TypeScript is built with `tsc` and run with `node`.
+- **Fullstack** (`fullstackRecipes.ts`): Next.js (TS/JS), SvelteKit, React Router 7, Astro 6. Per recipe:
+  Vite-based ones take the shared Vite 7 / WASM pins (`pinVitePackage`); React Router's `app/entry.client.tsx`
+  tells the client router about the `/__wcvm_preview__/<port>/` prefix at runtime; Next.js links the installed
+  `@next/swc-wasm-nodejs` into `node_modules/next/wasm/@next/` after install (what `postinstall` would do).
+- **Picker**: Backend / Fullstack tabs; switching a tab selects that tab's first template (Create used to build
+  the previous tab's selection), and Create is disabled on a tab with nothing real to create. Nuxt remains a
+  greyed-out "soon" card under Fullstack.
+- **Editor, found on the way**: Monaco's TS service now resolves with `moduleResolution: bundler` (100). Under
+  Node-10 resolution TypeScript built a "types exist here but your moduleResolution can't resolve them" diagnostic
+  holding a lazy function for `react-router/dom`, which cannot cross the worker boundary - an uncaught `postMessage
+  ... could not be cloned` in Monaco's worker.
+- **Verified**: each template through the real Studio UI (create from the Fullstack tab, `npm run dev` in a
+  terminal, then in the iframe: server-rendered text, the counter hydrating, a `fetch()` to the server endpoint,
+  a link to `/about` that stays under the preview prefix), and by `Backend and fullstack templates (Studio
+  recipes)` in `examples/playground/e2e/boot.spec.ts` (opt-in, `WCVM_E2E_VITE=1`: install, start, GET the page
+  and the endpoint through the relay). Creation takes ~13-45 s, a cached clone is much faster; Next.js's first
+  page takes 15-30 s more.
