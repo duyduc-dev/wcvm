@@ -18,7 +18,8 @@
 //  - The home page of each is the framework's OWN starter (fullstackStarters.ts - generated from what its
 //    scaffolder writes), so a new project opens on the page its documentation shows. What these recipes
 //    add is a `/demo` page (server-rendered text, a counter that must hydrate, a call to a server
-//    endpoint) and the endpoint itself - the part that proves the server half is running.
+//    endpoint) and the endpoint itself - the part that proves the server half is running. SvelteKit is the exception: it is the `sv create` demo app, whose
+//    own pages (About, the Sverdle game with form actions) already do that.
 //  - Not here: Nuxt. `nuxt dev` needs `oxc-parser`, whose WebAssembly binding hits the same napi-rs
 //    worker deadlock as Angular's (see PLAN.md); Nuxt 4 also needs Vite 8.
 
@@ -27,11 +28,10 @@ import {
   NEXT_COMPILED_CSS, NEXT_PAGE_JS, NEXT_PAGE_TS, NEXT_SVG_FILE, NEXT_SVG_GLOBE, NEXT_SVG_NEXT, NEXT_SVG_VERCEL,
   NEXT_SVG_WINDOW,
   RR_APP_CSS, RR_HOME, RR_LOGO_DARK_SVG, RR_LOGO_LIGHT_SVG, RR_ROOT, RR_WELCOME,
-  SVELTEKIT_FAVICON_SVG, SVELTEKIT_LAYOUT, SVELTEKIT_PAGE,
 } from "./fullstackStarters";
 import { pinVitePackage } from "./vitePins";
 
-export type FullstackKind = "nextjs" | "nextjs-ts" | "sveltekit" | "sveltekit-demo" | "react-router" | "astro";
+export type FullstackKind = "nextjs" | "nextjs-ts" | "sveltekit" | "react-router" | "astro";
 
 export interface IFullstackRecipe {
   /** Shown in the progress message. */
@@ -225,6 +225,8 @@ export default function Counter() {
 
 // ── SvelteKit ─────────────────────────────────────────────────────────────
 
+// The `sv create` "demo" template (a styled home page with a counter, About, and the Sverdle game with form
+// actions): its own files are loaded on demand (svelteKitDemoStarter.ts); what is here is the project config.
 const sveltekit: IFullstackRecipe = {
   label: "SvelteKit",
   vitePins: true,
@@ -235,6 +237,8 @@ const sveltekit: IFullstackRecipe = {
     type: "module",
     scripts: { dev: "vite dev", build: "vite build", preview: "vite preview", prepare: "svelte-kit sync || echo ''" },
     devDependencies: {
+      "@fontsource/fira-mono": "^5.2.7",
+      "@neoconfetti/svelte": "^2.2.2",
       "@sveltejs/adapter-auto": "^6.0.0",
       "@sveltejs/kit": "^2.40.0",
       "@sveltejs/vite-plugin-svelte": "^6.2.4",
@@ -250,6 +254,8 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 
 export default {
   preprocess: vitePreprocess(),
+  // Force runes mode for the project, except for libraries (the real template does this in vite.config).
+  compilerOptions: { runes: ({ filename }) => (filename.split(/[/\\\\]/).includes("node_modules") ? undefined : true) },
   kit: { adapter: adapter() },
 };
 `,
@@ -263,102 +269,8 @@ export default defineConfig({ plugins: [sveltekit()] });
 `,
     ],
     ["tsconfig.json", `{\n  "extends": "./.svelte-kit/tsconfig.json",\n  "compilerOptions": { "allowJs": true, "checkJs": true, "esModuleInterop": true, "skipLibCheck": true, "strict": true }\n}\n`],
-    [
-      "src/app.html",
-      `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    %sveltekit.head%
-  </head>
-  <body data-sveltekit-preload-data="hover">
-    <div style="display: contents">%sveltekit.body%</div>
-  </body>
-</html>
-`,
-    ],
-    ["src/app.d.ts", `declare global {\n  namespace App {}\n}\n\nexport {};\n`],
-    ["src/routes/+layout.svelte", SVELTEKIT_LAYOUT],
-    ["src/routes/+page.svelte", SVELTEKIT_PAGE],
-    ["src/lib/assets/favicon.svg", SVELTEKIT_FAVICON_SVG],
-    ["src/lib/index.ts", "// place files you want to import through the `$lib` alias in this folder.\n"],
-    [
-      "src/routes/demo/+page.server.ts",
-      `// Runs on the server only - the browser receives the data it returns.
-export function load() {
-  return { renderedOn: "the server" };
-}
-`,
-    ],
-    [
-      "src/routes/demo/+page.svelte",
-      `<script lang="ts">
-  let { data } = $props();
-  let count = $state(0);
-  let message = $state("");
-
-  async function callApi() {
-    const response = await fetch("api/hello");
-    message = JSON.stringify(await response.json());
-  }
-</script>
-
-<h1>Demo</h1>
-<p>Rendered on {data.renderedOn}. Edit <code>src/routes/demo/+page.svelte</code> and save.</p>
-<button onclick={() => count++}>count is {count}</button>
-<button onclick={callApi}>call /api/hello</button>
-<pre>{message}</pre>
-<p><a href="/">Home</a></p>
-`,
-    ],
-    [
-      "src/routes/api/hello/+server.ts",
-      `import { json } from "@sveltejs/kit";
-
-export function GET() {
-  return json({ message: "Hello from SvelteKit" });
-}
-`,
-    ],
     [".gitignore", GITIGNORE],
-    ["README.md", readme("SvelteKit", "The home page is the `sv create` minimal starter; `/demo` renders on the server, hydrates a counter and calls a `+server.ts` endpoint.")],
-  ],
-};
-
-// The `sv create` "demo" template (a styled home page with a counter, About, and the Sverdle game with form
-// actions): the same project config as the minimal recipe above, with the demo's own files (loaded on demand,
-// svelteKitDemoStarter.ts) in place of the minimal home page and `/demo`.
-const sveltekitDemo: IFullstackRecipe = {
-  label: "SvelteKit (demo app)",
-  vitePins: true,
-  installHint: "under a minute",
-  packageJson: {
-    ...sveltekit.packageJson,
-    devDependencies: {
-      ...(sveltekit.packageJson.devDependencies as Record<string, string>),
-      "@fontsource/fira-mono": "^5.2.7",
-      "@neoconfetti/svelte": "^2.2.2",
-    },
-  },
-  files: [
-    ...sveltekit.files.filter(([path]) =>
-      ["vite.config.ts", "tsconfig.json", ".gitignore"].includes(path),
-    ),
-    [
-      "svelte.config.js",
-      `import adapter from "@sveltejs/adapter-auto";
-import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
-
-export default {
-  preprocess: vitePreprocess(),
-  // Force runes mode for the project, except for libraries (the real template does this in vite.config).
-  compilerOptions: { runes: ({ filename }) => (filename.split(/[/\\\\]/).includes("node_modules") ? undefined : true) },
-  kit: { adapter: adapter() },
-};
-`,
-    ],
-    ["README.md", readme("SvelteKit (demo app)", "The `sv create` demo template: a home page with a counter, an About page and the Sverdle word game (server-side form actions). Edit `src/routes/+page.svelte` and save.")],
+    ["README.md", readme("SvelteKit", "The `sv create` demo template: a home page with a counter, an About page and the Sverdle word game (server-side form actions). Edit `src/routes/+page.svelte` and save.")],
   ],
   lazyFiles: async () => {
     const { SVELTEKIT_DEMO_BINARY, SVELTEKIT_DEMO_FILES } = await import("./svelteKitDemoStarter");
@@ -570,7 +482,6 @@ export const FULLSTACK_RECIPES: Record<FullstackKind, IFullstackRecipe> = {
   nextjs: nextRecipe(false),
   "nextjs-ts": nextRecipe(true),
   sveltekit,
-  "sveltekit-demo": sveltekitDemo,
   "react-router": reactRouter,
   astro,
 };

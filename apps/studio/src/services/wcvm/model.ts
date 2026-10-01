@@ -1,5 +1,5 @@
 /** "blank" is a hand-written empty project; "rectify"/"static"/"bootstrap"/"tanstack-router"/
- * "tailwind"/"ember"/"ember-ts"/"angular"/"express"/"express-ts"/"nestjs"/"nextjs"/"nextjs-ts"/"sveltekit"/"sveltekit-demo"/"react-router"/"astro" are manually-wired projects (see the matching src/services/wcvm/templateProjects/*TemplateProject.ts
+ * "tailwind"/"ember"/"ember-ts"/"angular"/"express"/"express-ts"/"nestjs"/"nextjs"/"nextjs-ts"/"sveltekit"/"react-router"/"astro" are manually-wired projects (see the matching src/services/wcvm/templateProjects/*TemplateProject.ts
  * — none of them has an official create-vite template); anything else is a real create-vite
  * `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts) — the
  * project's own persisted "kind". */
@@ -30,7 +30,6 @@ export type IWcvmProjectType =
   | "nextjs"
   | "nextjs-ts"
   | "sveltekit"
-  | "sveltekit-demo"
   | "react-router"
   | "astro";
 
