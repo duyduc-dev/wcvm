@@ -31,6 +31,9 @@ import { dynamicAndMetaEdits, type IEdit } from "./rewrite";
 import { freeReferences } from "./scopeRewrite";
 
 export const CYCLE_EXPORTS_BRIDGE = "__wcvm_cycle_exports__";
+/** `(siblingKey, exportedName, assign)`: calls `assign(value)` as soon as the sibling's registry has
+ * that property (immediately if it already does) - see the local-re-export handling below. */
+export const CYCLE_READY_BRIDGE = "__wcvm_cycle_ready__";
 
 /** A bracket-notation property read/definition key - safe for ANY exported name, including a
  *  reserved word (`.default`/`.import` are fine as PLAIN dot-access, but a rare string export name
@@ -57,6 +60,8 @@ export const rewriteCyclicModule = (
   const edits: IEdit[] = dynamicAndMetaEdits(program, selfKey, acorn);
   const cycleVarFor = new Map<string, string>(); // sibling key -> this module's own local var name
   const replacementFor = new Map<string, string>(); // originally-imported local name -> replacement expr
+  // Where a removed import binding came from, for a local re-export of it (see below).
+  const originFor = new Map<string, { siblingKey: string; imported: string | null }>(); // null = namespace
   const targetNames = new Set<string>();
   let cycleVarCounter = 0;
 
@@ -94,14 +99,17 @@ export const rewriteCyclicModule = (
 
     if (bindings.namespaceLocal) {
       replacementFor.set(bindings.namespaceLocal, cycleVar);
+      originFor.set(bindings.namespaceLocal, { siblingKey, imported: null });
       targetNames.add(bindings.namespaceLocal);
     }
     if (bindings.defaultLocal) {
       replacementFor.set(bindings.defaultLocal, `${cycleVar}${propKey("default")}`);
+      originFor.set(bindings.defaultLocal, { siblingKey, imported: "default" });
       targetNames.add(bindings.defaultLocal);
     }
     for (const { imported, local } of bindings.named) {
       replacementFor.set(local, `${cycleVar}${propKey(imported)}`);
+      originFor.set(local, { siblingKey, imported });
       targetNames.add(local);
     }
   }
@@ -113,22 +121,47 @@ export const rewriteCyclicModule = (
   }
 
   // A LOCAL re-export (`export { a, b as c };`, no `from`) referencing one of the names just
-  // removed above is now a real SyntaxError waiting to happen - real ESM requires every bare
-  // export specifier's local name to be an ACTUALLY DECLARED binding (var/let/const/function/
-  // class/import), and the import that used to declare it is exactly what got removed (found for
-  // real: @tanstack/router-core's own isServer/server.js does `import { loadServerRoute } from
+  // removed above is a real SyntaxError waiting to happen - real ESM requires every bare export
+  // specifier's local name to be an ACTUALLY DECLARED binding (var/let/const/function/class/import),
+  // and the import that used to declare it is exactly what got removed (found for real:
+  // @tanstack/router-core's own isServer/server.js does `import { loadServerRoute } from
   // "../load-server.js"; ...; export { isServer, loadServerRoute };` inside a genuine 3-module
-  // cycle - "Export 'loadServerRoute' is not defined in module", a real V8 link-time error, not
-  // guessed). Fixed the same way as every other export here: the WHOLE statement is removed (even
-  // for a name that ISN'T cyclic, like `isServer` above, mixed in the same statement) and EVERY
-  // one of its names gets a getter in the trailing registry block instead, uniformly - see
-  // `moduleExports`'s own collection of these into `named`, reused below.
+  // cycle - "Export 'loadServerRoute' is not defined in module", a real V8 link-time error).
+  //
+  // Every one of the statement's names still gets a getter in the trailing registry block below, so
+  // SIBLINGS read it live. But a module OUTSIDE the cycle imports this one with a plain native
+  // `import { x }`, and the registry is invisible to it - so the first version of this fix, which
+  // simply deleted the statement, left such a module with no export at all. Found for real with
+  // Astro 6: `astro/runtime/server/index.js` re-exports `createComponent` (imported from a sibling
+  // in its cycle) for the rest of the framework, and its namespace came out EMPTY ("does not
+  // provide an export named 'createComponent'"). So each re-exported name is now a real native
+  // export of this module: `let slot; export { slot as name };`, filled in by the bridge the moment
+  // the sibling's registry has the value (a one-time copy, not a live binding - fine for the
+  // functions/classes/consts that get re-exported, and the only way to have a native export
+  // without a native import). Names in the same statement that are NOT cyclic stay ordinary
+  // `export { ... }`.
+  let reCounter = 0;
   for (const node of program.body as AnyNode[]) {
     if (node.type !== "ExportNamedDeclaration" || node.source || node.declaration) continue;
     const specifiers = node.specifiers as AnyNode[];
-    if (specifiers.some((spec) => replacementFor.has((spec.local as AnyNode & { name: string }).name))) {
-      edits.push({ start: node.start, end: node.end, replacement: "" });
+    const localOf = (spec: AnyNode) => (spec.local as AnyNode & { name: string }).name;
+    const cyclic = specifiers.filter((spec) => replacementFor.has(localOf(spec)));
+    if (cyclic.length === 0) continue;
+    const kept = specifiers.filter((spec) => !replacementFor.has(localOf(spec)));
+    const parts: string[] = [];
+    if (kept.length > 0) parts.push(`export { ${kept.map((spec) => source.slice(spec.start, spec.end)).join(", ")} };`);
+    for (const spec of cyclic) {
+      const slot = `__wcvm_re_${reCounter++}__`;
+      const origin = originFor.get(localOf(spec))!;
+      const exported = spec.exported as AnyNode;
+      parts.push(`let ${slot}; export { ${slot} as ${source.slice(exported.start, exported.end)} };`);
+      parts.push(
+        origin.imported === null
+          ? `${slot} = ${cycleVarFor.get(origin.siblingKey)};`
+          : `${CYCLE_READY_BRIDGE}(${JSON.stringify(origin.siblingKey)}, ${JSON.stringify(origin.imported)}, (value) => { ${slot} = value; });`,
+      );
     }
+    edits.push({ start: node.start, end: node.end, replacement: parts.join("\n") });
   }
 
   const exports = moduleExports(program, source);

@@ -247,7 +247,10 @@ class TCP {
     this.queue.length = 0;
     this.release?.();
     this.release = null;
-    if (callback) queueMicrotask(callback);
+    // Through the event loop, not a bare microtask: the close callback is what emits 'close', and guest
+    // code in a 'close' listener may call process.exit() - which throws ProcessExit. From a raw microtask
+    // that escaped as an uncaught worker error; from the loop it reaches the runtime's own exit handling.
+    if (callback) this.router.loop.post(callback);
   }
 
   ref(): void {

@@ -100,6 +100,9 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   `internal/promise_hooks`, which isn't vendored (`runtime/node/manifest.json`); vendoring it (plus its
   bindings) would let the CLI, and `tsx`-style watchers, run. Fullstack (Next.js, Nuxt, SvelteKit, React
   Router 7, Astro) is shown in the picker as "soon" and is not implemented.
+  UPDATE: `nest start` and SvelteKit's dev server needed `AsyncLocalStorage`; it now works (plain-JS context
+  propagation, one current value per instance - see HISTORY.md "Fullstack templates: what they needed from
+  the runtime"), along with three other runtime fixes found by running Astro.
 - Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
   "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
   `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina
@@ -658,8 +661,9 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   sha224/256, sha384/512 (plain JS, bindings/hash.ts) - no ciphers, keys, certificates, md4,
   sha3-* or blake2*.
 - `tls`/`https`: load, but can't do anything (`ERR_NO_CRYPTO`) - no TLS stack behind wcvm's
-  virtual sockets. `inspector` can't even be required (`ERR_INSPECTOR_NOT_AVAILABLE`), like a Node
-  built without it.
+  virtual sockets. `inspector` loads (`url()` is `undefined`, nothing attached) but anything needing
+  a real V8 inspector - `open`, `waitForDebugger`, `Session#connect` - throws `ERR_INSPECTOR_NOT_AVAILABLE`
+  (it used to fail at require, which broke Next.js).
 - `npm` (`programs/npm/`): only `npm install` (from package.json, or named packages, saved the way
   real npm saves them). No lockfile (read or written), no install/lifecycle scripts (reported, never
   run - esbuild's postinstall included), no git/file/link/workspace/tarball-URL specs

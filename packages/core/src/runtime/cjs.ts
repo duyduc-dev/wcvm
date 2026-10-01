@@ -43,6 +43,9 @@ class Module {
   parent: Module | null;
   paths: string[] = [];
   require!: (id: string) => any;
+  /** Compiles and runs `content` as this module (installed per module - see `loadResolved`). Real
+   *  extension handlers call it, and tools like Next's config loader wrap it to transpile first. */
+  _compile!: (content: string, filename: string) => void;
 
   constructor(filename: string, parent: Module | null) {
     this.id = filename;
@@ -55,7 +58,6 @@ class Module {
 const codedError = (code: string, message: string, extra: object = {}) =>
   Object.assign(new Error(message), { code }, extra);
 
-const MODULE_EXTENSIONS = [".js", ".json"];
 
 // A cheap pre-check, so the parser only ever runs for source that might contain an import():
 // false positives (in a string or comment) just cost a parse that finds nothing to rewrite.
@@ -95,14 +97,32 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
 
   // ---- resolution ------------------------------------------------------------
 
+  // `require.extensions` / `Module._extensions`: extension -> `(module, filename) => void`. Real Node's
+  // own table, and the hook transpiler registrations (ts-node, @babel/register, esbuild-register,
+  // Next's next.config.ts loader) have always used: a handler is added for `.ts` and `require()`
+  // then resolves and loads such files through it. `.node` is listed but cannot load (no dlopen).
+  const extensions: Record<string, (module: Module, filename: string) => void> = Object.create(null);
+  /** What a bare `require("./x")` tries, in order: every registered extension that can hold source. */
+  const resolvableExtensions = () => Object.keys(extensions).filter((ext) => ext !== ".node");
+  /** Node's findLongestRegisteredExtension: `a.test.ts` -> `.test.ts` if registered, else `.ts`, else `.js`. */
+  const registeredExtension = (filename: string): string => {
+    const name = filename.slice(filename.lastIndexOf("/") + 1);
+    for (let index = name.indexOf("."); index !== -1; index = name.indexOf(".", index + 1)) {
+      if (index === 0) continue;
+      const candidate = name.slice(index);
+      if (extensions[candidate]) return candidate;
+    }
+    return ".js";
+  };
+
   const loadAsFile = (p: string): string | null => {
     if (isFile(p)) return p;
-    for (const ext of MODULE_EXTENSIONS) if (isFile(p + ext)) return p + ext;
+    for (const ext of resolvableExtensions()) if (isFile(p + ext)) return p + ext;
     return null;
   };
 
   const loadIndex = (p: string): string | null => {
-    for (const ext of MODULE_EXTENSIONS) {
+    for (const ext of resolvableExtensions()) {
       const candidate = `${p === "/" ? "" : p}/index${ext}`;
       if (isFile(candidate)) return candidate;
     }
@@ -309,6 +329,7 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     };
     req.cache = cache;
     req.main = mainModule;
+    req.extensions = extensions;
     return req;
   };
 
@@ -380,6 +401,44 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     return loadResolved(resolved, parent);
   };
 
+  /** The default `.js` handler's second half: run `source` as this module - an ES module (by its
+   *  format), CommonJS, or CommonJS that turns out to be ESM (Node's syntax detection). */
+  const compileModule = (module: Module, source: string, resolved: string): void => {
+    if (esmSync && esmSync.formatOfPath(resolved) === "esm") {
+      runEsm(module, source, resolved);
+      return;
+    }
+    // Compile first, run second: only a SyntaxError from compiling can mean "this was really an ES
+    // module" - one thrown while RUNNING it came from a dependency, and retrying would execute the
+    // module twice.
+    let fn: (...args: unknown[]) => void;
+    try {
+      fn = compile(source, resolved);
+    } catch (error) {
+      if (esmSync && error instanceof SyntaxError && ESM_SYNTAX_ERROR.test(error.message)) {
+        runEsm(module, source, resolved);
+        return;
+      }
+      throw error;
+    }
+    fn.call(module.exports, module.exports, makeRequire(module), module, resolved, module.path, ...globalValues);
+  };
+
+  extensions[".js"] = (module, filename) => {
+    module._compile(decoder.decode(fs.readFile(filename)), filename);
+  };
+  extensions[".json"] = (module, filename) => {
+    try {
+      module.exports = JSON.parse(decoder.decode(fs.readFile(filename)).replace(/^﻿/, ""));
+    } catch (error) {
+      (error as Error).message = `${filename}: ${(error as Error).message}`;
+      throw error;
+    }
+  };
+  extensions[".node"] = (_module, filename) => {
+    throw codedError("ERR_DLOPEN_FAILED", `Cannot load native addon '${filename}': there is no dlopen in a browser`);
+  };
+
   const loadResolved = (resolved: string, parent: Module | null): any => {
 
     const existing = cache[resolved];
@@ -395,34 +454,10 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     parent?.children.push(module);
     if (!mainModule && !parent) mainModule = module;
 
+    module._compile = (content, filename) => compileModule(module, content, filename);
     try {
-      const source = decoder.decode(fs.readFile(resolved));
-      if (resolved.endsWith(".json")) {
-        try {
-          module.exports = JSON.parse(source.replace(/^﻿/, ""));
-        } catch (error) {
-          (error as Error).message = `${resolved}: ${(error as Error).message}`;
-          throw error;
-        }
-      } else if (esmSync && esmSync.formatOfPath(resolved) === "esm") {
-        runEsm(module, source, resolved);
-      } else {
-        // Compile first, run second: only a SyntaxError from compiling can mean "this was really
-        // an ES module" - one thrown while RUNNING it came from a dependency, and retrying would
-        // execute the module twice.
-        let fn: (...args: unknown[]) => void;
-        try {
-          fn = compile(source, resolved);
-        } catch (error) {
-          if (esmSync && error instanceof SyntaxError && ESM_SYNTAX_ERROR.test(error.message)) {
-            runEsm(module, source, resolved);
-            module.loaded = true;
-            return module.exports;
-          }
-          throw error;
-        }
-        fn.call(module.exports, module.exports, makeRequire(module), module, resolved, module.path, ...globalValues);
-      }
+      const handler = extensions[registeredExtension(resolved)];
+      handler(module, resolved);
     } catch (error) {
       delete cache[resolved];
       parent?.children.splice(parent.children.indexOf(module), 1);
@@ -476,6 +511,7 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
     },
     nodeModulesPaths,
     resolve,
+    extensions,
     Module,
   };
 };

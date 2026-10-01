@@ -304,6 +304,18 @@ const createRuntime = (options: IRuntimeOptions) => {
     for (const [name, value] of Object.entries(globals)) {
       Object.defineProperty(globalObject, name, { value, writable: true, configurable: true, enumerable: false });
     }
+    // The guest is Node, and Node has no `WorkerGlobalScope`. This global IS a real Worker's, so the
+    // class is there - and libraries sniff it to decide they are inside a Web Worker. Found for real
+    // with prismjs (Astro's markdown pipeline): it then adds a `message` listener to the global that
+    // `JSON.parse`s every message's data, and the kernel posts this worker object messages - an
+    // uncaught SyntaxError that killed `astro dev`/`astro sync` before they printed anything.
+    for (const name of ["WorkerGlobalScope", "DedicatedWorkerGlobalScope"]) {
+      try {
+        delete globalObject[name];
+      } catch {
+        /* non-configurable on this platform: leave it */
+      }
+    }
   } else {
     globalObject = Object.create(globalThis, Object.fromEntries(
       Object.entries(globals).map(([k, value]) => [k, { value, writable: true, configurable: true, enumerable: false }]),

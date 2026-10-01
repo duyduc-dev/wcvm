@@ -1,3 +1,5 @@
+import { asyncLocalStorageShim, promiseHooksShim } from "./asyncContext";
+import { createWebStreamAdaptersShim } from "./webStreamAdapters";
 import type { BuiltinFactory } from "./node/types";
 
 interface IShimContext {
@@ -8,7 +10,18 @@ interface IShimContext {
 
 // The platform's own WHATWG classes, captured at module load - before `globalObject: self` can put
 // Node's own same-named globals over them (CLAUDE.md's "never call a global by its bare name").
+const WEB_STREAM_NAMES = [
+  "ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamBYOBReader", "ReadableStreamBYOBRequest",
+  "ReadableByteStreamController", "ReadableStreamDefaultController", "TransformStream",
+  "TransformStreamDefaultController", "WritableStream", "WritableStreamDefaultWriter",
+  "WritableStreamDefaultController", "ByteLengthQueuingStrategy", "CountQueuingStrategy", "TextEncoderStream",
+  "TextDecoderStream", "CompressionStream", "DecompressionStream",
+] as const;
+
 const platform = {
+  /** Chromium's non-standard `performance.memory` (captured now: `globalObject: self` replaces `performance`). */
+  memory: () => (globalThis.performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number } } | undefined)?.memory,
+  webStreams: Object.fromEntries(WEB_STREAM_NAMES.map((name) => [name, (globalThis as any)[name]]).filter(([, value]) => value)),
   crypto: globalThis.crypto,
   WebSocket: globalThis.WebSocket,
   CloseEvent: globalThis.CloseEvent,
@@ -26,6 +39,8 @@ const stripScheme = (id: string) => (id.startsWith("node:") ? id.slice(5) : id);
  *    be vendored verbatim at all (`internal/url`, `internal/encoding`, `internal/blob`,
  *    `v8`). (`internal/perf/observe` used to be one too; it's the real vendored module now, over
  *    bindings/performance.ts, since `perf_hooks` needs a real PerformanceObserver.)
+ *  - Modules that are built on V8 internals a Worker doesn't have (`internal/promise_hooks`, and the
+ *    `AsyncLocalStorage` built on it) - see asyncContext.ts.
  *  - Real, vendorable `lib/` modules this sandbox deliberately answers with a fixed, simplified,
  *    or narrower result instead of fully implementing: `dns`/`cluster` because there's nothing
  *    real behind them to report; `tls`/`https`/`http2`/`inspector` because there's no TLS stack,
@@ -232,7 +247,55 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
         notImplemented();
       }
     }
-    module.exports = { DefaultSerializer, DefaultDeserializer, serialize: notImplemented, deserialize: notImplemented };
+    const { codes } = ctx.requireBuiltin("internal/errors");
+    const unsupported = (name: string) => () => {
+      throw new codes.ERR_METHOD_NOT_IMPLEMENTED(`v8.${name}()`);
+    };
+    // Real Node's field set. Used/total/limit come from Chromium's `performance.memory` when it exists;
+    // the rest (executable memory, handles, native contexts) have no browser counterpart and are 0/1.
+    const getHeapStatistics = () => {
+      const memory = platform.memory();
+      const used = memory?.usedJSHeapSize ?? 0;
+      const total = memory?.totalJSHeapSize ?? used;
+      const limit = memory?.jsHeapSizeLimit ?? 4 * 1024 * 1024 * 1024;
+      return {
+        total_heap_size: total,
+        total_heap_size_executable: 0,
+        total_physical_size: total,
+        total_available_size: Math.max(0, limit - used),
+        used_heap_size: used,
+        heap_size_limit: limit,
+        malloced_memory: 0,
+        peak_malloced_memory: 0,
+        does_zap_garbage: 0,
+        number_of_native_contexts: 1,
+        number_of_detached_contexts: 0,
+        total_global_handles_size: 0,
+        used_global_handles_size: 0,
+        external_memory: 0,
+      };
+    };
+    const noopHook = () => () => {};
+    module.exports = {
+      DefaultSerializer,
+      DefaultDeserializer,
+      Serializer: DefaultSerializer,
+      Deserializer: DefaultDeserializer,
+      serialize: notImplemented,
+      deserialize: notImplemented,
+      getHeapStatistics,
+      getHeapSpaceStatistics: () => [],
+      getHeapCodeStatistics: () => ({ code_and_metadata_size: 0, bytecode_and_metadata_size: 0, external_script_source_size: 0, cpu_profiler_metadata_size: 0 }),
+      // No `--v8-options` to set from inside a Worker (see the process-worker notes in CLAUDE.md).
+      setFlagsFromString: () => {},
+      cachedDataVersionTag: () => 0,
+      getHeapSnapshot: unsupported("getHeapSnapshot"),
+      writeHeapSnapshot: unsupported("writeHeapSnapshot"),
+      setHeapSnapshotNearHeapLimit: () => {},
+      isStringOneByteRepresentation: (value: string) => !/[^\u0000-\u00ff]/.test(value),
+      promiseHooks: { onInit: noopHook, onSettled: noopHook, onBefore: noopHook, onAfter: noopHook, createHook: noopHook },
+      startupSnapshot: { isBuildingSnapshot: () => false, addSerializeCallback: () => {}, addDeserializeCallback: () => {}, setDeserializeMainFunction: () => {} },
+    };
   };
 
   /**
@@ -254,24 +317,101 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
    * sandbox has actually exercised needs it.
    */
   const vmShim: BuiltinFactory = (_exports, _require, module) => {
-    const runInThisContext = (code: string, options?: { filename?: string; lineOffset?: number }) => {
+    interface IRunOptions {
+      filename?: string;
+      lineOffset?: number;
+    }
+    const withSourceUrl = (code: string, options?: IRunOptions) => {
       const lineOffset = options?.lineOffset ?? 0;
       const padded = lineOffset > 0 ? "\n".repeat(lineOffset) + code : code;
-      const withSourceUrl = options?.filename ? `${padded}\n//# sourceURL=${options.filename}` : padded;
-      return (0, eval)(withSourceUrl);
+      return options?.filename ? `${padded}\n//# sourceURL=${options.filename}` : padded;
     };
+    const runInThisContext = (code: string, options?: IRunOptions) => (0, eval)(withSourceUrl(code, options));
+
+    // `createContext`/`runInContext`: a real separate V8 context (own global, own intrinsics) cannot be
+    // made from inside a Worker. What can be: run the code with the sandbox object as its SCOPE, so the
+    // sandbox's properties are the globals it reads and writes - which is how these APIs are used in
+    // practice (webpack evaluates `/* webpackChunkName: "x" */` magic comments in one; Next's edge
+    // sandbox and test runners set up globals). A name the sandbox lacks falls through to this realm's
+    // own global, so `JSON`, `Array`, ... resolve (as the same objects, not a context's own copies - no
+    // `instanceof` isolation), and an assignment to an undeclared name lands on the real global, not
+    // the sandbox. Top-level `var`/function declarations are not sandbox properties either; `globalThis`
+    // and `this` are the sandbox.
+    const contexts = new WeakSet<object>();
+    const createContext = (contextObject?: object, _options?: unknown) => {
+      const sandbox = contextObject ?? {};
+      contexts.add(sandbox);
+      return sandbox;
+    };
+    const isContext = (value: unknown) => typeof value === "object" && value !== null && contexts.has(value);
+    // The scope the code sees: the sandbox's own properties, plus `globalThis` pointing back at the
+    // sandbox (a context's global IS the sandbox - Next's manifests do `globalThis.__RSC_MANIFEST = ...`
+    // and read it off the sandbox afterwards). Cached per sandbox.
+    const scopes = new WeakMap<object, object>();
+    const scopeOf = (sandbox: object): object => {
+      let scope = scopes.get(sandbox);
+      if (!scope) {
+        scope = new Proxy(sandbox, {
+          has: (target, key) => key !== Symbol.unscopables && (key === "globalThis" || Reflect.has(target, key)),
+          get: (target, key, receiver) => {
+            if (key === Symbol.unscopables) return undefined;
+            if (key === "globalThis" && !Reflect.has(target, key)) return target;
+            return Reflect.get(target, key, receiver);
+          },
+        });
+        scopes.set(sandbox, scope);
+      }
+      return scope;
+    };
+    // Sloppy mode on purpose: `with` is a SyntaxError in strict code, and it is what makes the sandbox the scope.
+    const evalInSandbox = new Function("__wcvm_scope", "__wcvm_code", "with (__wcvm_scope) { return eval(__wcvm_code); }") as (scope: object, code: string) => unknown;
+    const runInContext = (code: string, contextifiedObject: object, options?: IRunOptions) => {
+      if (!isContext(contextifiedObject)) {
+        throw new (ctx.requireBuiltin("internal/errors").codes.ERR_INVALID_ARG_TYPE)("contextifiedObject", "vm.Context", contextifiedObject);
+      }
+      // `this` at the top level is the sandbox too.
+      return evalInSandbox.call(contextifiedObject, scopeOf(contextifiedObject), withSourceUrl(code, options));
+    };
+    const runInNewContext = (code: string, contextObject?: object, options?: IRunOptions) =>
+      runInContext(code, createContext(contextObject), options);
+
     class Script {
       private code: string;
-      private options?: { filename?: string; lineOffset?: number };
-      constructor(code: string, options?: { filename?: string; lineOffset?: number }) {
-        this.code = code;
-        this.options = options;
+      private options?: IRunOptions;
+      cachedDataRejected?: boolean;
+      sourceMapURL: string | undefined;
+      constructor(code: string, options?: IRunOptions | string) {
+        this.code = String(code);
+        this.options = typeof options === "string" ? { filename: options } : options;
       }
-      runInThisContext(options?: { filename?: string; lineOffset?: number }) {
+      runInThisContext(options?: IRunOptions) {
         return runInThisContext(this.code, { ...this.options, ...options });
       }
+      runInContext(contextifiedObject: object, options?: IRunOptions) {
+        return runInContext(this.code, contextifiedObject, { ...this.options, ...options });
+      }
+      runInNewContext(contextObject?: object, options?: IRunOptions) {
+        return runInNewContext(this.code, contextObject, { ...this.options, ...options });
+      }
+      createCachedData() {
+        return ctx.requireBuiltin("buffer").Buffer.alloc(0);
+      }
     }
-    module.exports = { runInThisContext, Script };
+
+    /** `vm.compileFunction(body, params)`: a function whose scope is this realm's global. */
+    const compileFunction = (code: string, params: string[] = [], options?: IRunOptions) =>
+      new Function(...params, withSourceUrl(code, options));
+
+    module.exports = {
+      Script,
+      createContext,
+      isContext,
+      runInContext,
+      runInNewContext,
+      runInThisContext,
+      compileFunction,
+      constants: { USE_MAIN_CONTEXT_DEFAULT_LOADER: Symbol("vm_dynamic_import_main_context_default"), DONT_CONTEXTIFY: Symbol("vm_context_no_contextify") },
+    };
   };
 
   /**
@@ -518,7 +658,15 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
       throw new codes.ERR_NO_CRYPTO();
     };
     const pseudo = { HTTP2_HEADER_STATUS: ":status", HTTP2_HEADER_METHOD: ":method", HTTP2_HEADER_AUTHORITY: ":authority", HTTP2_HEADER_SCHEME: ":scheme", HTTP2_HEADER_PATH: ":path", HTTP2_HEADER_PROTOCOL: ":protocol" };
+    // Not constructible in any useful way (no server ever hands one out), but real - and importable by
+    // name: Astro's node adapter does `import { Http2ServerResponse } from "node:http2"` for an
+    // `instanceof` check, and an ESM named import of a missing export is a link-time SyntaxError.
+    const { Readable, Stream } = ctx.requireBuiltin("stream");
+    class Http2ServerRequest extends Readable {}
+    class Http2ServerResponse extends Stream {}
     module.exports = {
+      Http2ServerRequest,
+      Http2ServerResponse,
       constants: { ...pseudo, HTTP2_HEADER_CONTENT_TYPE: "content-type", HTTP2_HEADER_CONTENT_LENGTH: "content-length", HTTP2_METHOD_GET: "GET", HTTP2_METHOD_POST: "POST", NGHTTP2_NO_ERROR: 0, NGHTTP2_CANCEL: 8 },
       sensitiveHeaders: Symbol.for("nodejs.http2.sensitiveHeaders"),
       createServer: notImplemented("createServer"),
@@ -531,10 +679,51 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
   };
 
-  /** Real Node built without the inspector (`--without-inspector`) throws this on require; there's
-   *  no V8 inspector protocol reachable from inside a Worker here either. */
-  const inspectorShim: BuiltinFactory = () => {
-    throw new (ctx.requireBuiltin("internal/errors").codes.ERR_INSPECTOR_NOT_AVAILABLE)();
+  /**
+   * `inspector`: loads, but there is never a V8 inspector behind it - reachable from a Worker or not.
+   * It used to throw `ERR_INSPECTOR_NOT_AVAILABLE` on require, like a Node built `--without-inspector`
+   * (a build almost nobody runs), which broke a module that real Node always loads: Next.js's
+   * `console-dim.external.js` does `require("node:inspector")` unguarded and then asks `inspector.url()`
+   * whether a debugger is attached. Real Node with no debugger attached answers `undefined` to that, so
+   * this does too; everything that needs an actual inspector (`open`, `waitForDebugger`,
+   * `Session#connect`) fails with `ERR_INSPECTOR_NOT_AVAILABLE`, the same error as before, but at the
+   * call that needs it rather than at require. A caller that guards its require in a try/catch still
+   * ends up on the right path, because the first thing it does with the result fails.
+   */
+  const makeInspector = (promises: boolean) => {
+    const { EventEmitter } = ctx.requireBuiltin("events");
+    const { codes } = ctx.requireBuiltin("internal/errors");
+    const unavailable = () => {
+      throw new codes.ERR_INSPECTOR_NOT_AVAILABLE();
+    };
+    class Session extends EventEmitter {
+      connect() {
+        return unavailable();
+      }
+      connectToMainThread() {
+        return unavailable();
+      }
+      disconnect() {}
+      post() {
+        if (promises) return Promise.reject(new codes.ERR_INSPECTOR_NOT_CONNECTED());
+        throw new codes.ERR_INSPECTOR_NOT_CONNECTED();
+      }
+    }
+    return {
+      Session,
+      open: unavailable,
+      close: () => {},
+      url: () => undefined,
+      waitForDebugger: unavailable,
+      console: ctx.requireBuiltin("console"),
+      Network: {},
+    };
+  };
+  const inspectorShim: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = makeInspector(false);
+  };
+  const inspectorPromisesShim: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = makeInspector(true);
   };
 
   /**
@@ -556,13 +745,32 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     };
   };
 
+  /**
+   * `stream/web`: the WHATWG streams, which the browser already ships natively. Node's own
+   * `lib/stream/web.js` re-exports 17 classes from `internal/webstreams/*` - a second, parallel
+   * implementation (with worker-transfer plumbing in `internal/worker/io`) that would make
+   * `require("stream/web").ReadableStream !== ReadableStream`; here they are the same objects, as in
+   * Node. Next.js's edge-runtime primitives, Astro, undici and others `require("stream/web")` at load.
+   */
+  const streamWebShim: BuiltinFactory = (_exports, _require, module) => {
+    module.exports = { ...platform.webStreams };
+  };
+
   return {
+    "stream/web": streamWebShim,
+    "internal/webstreams/adapters": createWebStreamAdaptersShim(
+      platform.webStreams as { ReadableStream: typeof ReadableStream; WritableStream: typeof WritableStream },
+      ctx.requireBuiltin,
+    ),
     "internal/deps/undici/undici": undiciShim,
+    // No V8 PromiseHooks in a Worker; see asyncContext.ts for what stands in.
+    "internal/promise_hooks": promiseHooksShim,
+    "internal/async_local_storage/async_hooks": asyncLocalStorageShim,
     tls: tlsShim,
     https: httpsShim,
     http2: http2Shim,
     inspector: inspectorShim,
-    "inspector/promises": inspectorShim,
+    "inspector/promises": inspectorPromisesShim,
     "internal/blob": internalBlob,
     "internal/encoding": internalEncoding,
     "internal/url": internalUrl,

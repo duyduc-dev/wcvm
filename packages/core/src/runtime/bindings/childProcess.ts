@@ -41,7 +41,13 @@ export interface IChildProcessHost {
 
 export interface IChildProcessContext {
   loop: { post(fn: () => void): void; ref(): () => void };
-  process?: { pid?: number; cwd?: () => string };
+  /** `stdout`/`stderr` are read lazily, per chunk: Node's own getters build the stream on first use. */
+  process?: {
+    pid?: number;
+    cwd?: () => string;
+    stdout?: { write(chunk: Uint8Array): unknown };
+    stderr?: { write(chunk: Uint8Array): unknown };
+  };
   childProcess?: IChildProcessHost;
 }
 
@@ -100,6 +106,8 @@ class Pipe {
   /** Which host methods an "out" pipe's writes/shutdown route through - stdin's or a fork()
    *  IPC channel's (a separate channel so the kernel can route it distinctly from stdin). */
   kind: "stdio" | "ipc" = "stdio";
+  /** Runs a callback through the event loop (see close()). Defaults to a plain microtask for a pipe built outside the router. */
+  post: (fn: () => void) => void = (fn) => queueMicrotask(fn);
   // Not `private`: an exported factory subclasses this, and TS can't emit a
   // declaration type for an exported class with private inherited members.
   queue: QueuedRead[] = [];
@@ -196,7 +204,9 @@ class Pipe {
     }
     this.closed = true;
     this.queue.length = 0;
-    if (callback) queueMicrotask(callback);
+    // Through the event loop so a `process.exit()` in the 'close' listener reaches the runtime's own
+    // exit handling instead of escaping as an uncaught worker error (see net.ts's TCP#close).
+    if (callback) this.post(callback);
   }
 
   /** No-ops by default (matches Process's own ref/unref) - overridden per-instance where a
@@ -244,7 +254,7 @@ interface ISpawnOptions {
   envPairs?: string[];
   /** `getValidStdio` (internal/child_process.js) sets `.ipc: true` on the slot it created for
    *  `fork()`'s IPC channel - everything else about it (type, handle) looks like a plain pipe. */
-  stdio: Array<{ type: string; handle?: Pipe; ipc?: boolean }>;
+  stdio: Array<{ type: string; handle?: Pipe; ipc?: boolean; fd?: number }>;
 }
 
 const envFromPairs = (pairs: string[] | undefined): Record<string, string> => {
@@ -273,6 +283,13 @@ class Process {
 
     let ipc = false;
     options.stdio.forEach((slot, fd) => {
+      // `stdio: "inherit"` (or a bare fd number): the child writes straight to the PARENT's own
+      // fd 1/2 - there is no pipe to read, so its output used to be dropped. Found for real with
+      // `next dev`, which forks its server with `stdio: "inherit"` and so failed with no message at all.
+      if (!(slot?.handle instanceof Pipe) && (fd === 1 || fd === 2)) {
+        const parentFd = slot?.type === "inherit" ? fd : slot?.type === "fd" ? slot.fd : undefined;
+        if (parentFd === 1 || parentFd === 2) this.router.registerInherit(childPid, fd, parentFd);
+      }
       if (slot?.handle instanceof Pipe) {
         if (slot.ipc) {
           ipc = true;
@@ -325,8 +342,12 @@ class ChildRouter {
   private counter = 0;
   private readonly processes = new Map<number, { proc: Process; release: (() => void) | null }>();
   private readonly pipes = new Map<string, Pipe>();
+  /** `${childPid}:${childFd}` -> the PARENT fd (1 or 2) that child fd is inherited onto. */
+  private readonly inherits = new Map<string, 1 | 2>();
+  private readonly parentProcess: IChildProcessContext["process"];
 
   constructor(ctx: IChildProcessContext) {
+    this.parentProcess = ctx.process;
     if (!ctx.childProcess) throw uvException("ENOSYS", "spawn");
     this.host = ctx.childProcess;
     this.ownPid = ctx.process?.pid ?? 0;
@@ -338,6 +359,10 @@ class ChildRouter {
     this.state = streamBaseStateFor(ctx);
 
     this.host.onEvent((event) => this.loop.post(() => this.dispatch(event)));
+  }
+
+  postToLoop(fn: () => void): void {
+    this.loop.post(fn);
   }
 
   mintChildPid(): number {
@@ -363,10 +388,20 @@ class ChildRouter {
     this.pipes.set(`${pid}:${fd}`, pipe);
   }
 
+  registerInherit(pid: number, childFd: number, parentFd: 1 | 2): void {
+    this.inherits.set(`${pid}:${childFd}`, parentFd);
+  }
+
   private dispatch(event: ChildProcessEvent): void {
     if (event.type === "data") {
       const fd = event.stream === "stdout" ? 1 : event.stream === "stderr" ? 2 : IPC_FD;
-      this.pipes.get(`${event.childPid}:${fd}`)?.push(event.chunk);
+      const pipe = this.pipes.get(`${event.childPid}:${fd}`);
+      if (pipe) {
+        pipe.push(event.chunk);
+        return;
+      }
+      const parentFd = this.inherits.get(`${event.childPid}:${fd}`);
+      if (parentFd) (parentFd === 1 ? this.parentProcess?.stdout : this.parentProcess?.stderr)?.write(event.chunk);
       return;
     }
     if (event.type === "ipcDisconnect") {
@@ -376,7 +411,10 @@ class ChildRouter {
     this.pipes.get(`${event.childPid}:1`)?.push(null);
     this.pipes.get(`${event.childPid}:2`)?.push(null);
     this.pipes.get(`${event.childPid}:${IPC_FD}`)?.push(null);
-    for (const fd of [0, 1, 2, IPC_FD]) this.pipes.delete(`${event.childPid}:${fd}`);
+    for (const fd of [0, 1, 2, IPC_FD]) {
+      this.pipes.delete(`${event.childPid}:${fd}`);
+      this.inherits.delete(`${event.childPid}:${fd}`);
+    }
 
     const entry = this.processes.get(event.childPid);
     this.processes.delete(event.childPid);
@@ -415,6 +453,7 @@ export const createPipeWrapBinding = (ctx: IChildProcessContext) => {
     Pipe: class extends Pipe {
       constructor(type: number) {
         super(type, router.state, router.host);
+        this.post = (fn) => router.postToLoop(fn);
       }
     },
     PipeConnectWrap: class PipeConnectWrap {},

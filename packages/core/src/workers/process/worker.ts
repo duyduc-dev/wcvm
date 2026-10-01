@@ -220,6 +220,17 @@ const start = async (init: IProcessInit) => {
   post({ type: "exit", code });
 };
 
+// An error that escapes everything the runtime wraps (a throw from a message handler or a platform
+// callback, outside the event loop's own try/catch) used to vanish: the kernel only learns "the worker
+// errored", with no message, and the host page sees a bare `null`. Say what it was on this process's
+// own stderr first - which is the parent's too when it was spawned with `stdio: "inherit"` (a framework
+// dev server's child, say), so the actual cause lands in the log people are already reading.
+self.addEventListener("error", (event: ErrorEvent) => {
+  const error = event.error as unknown;
+  const text = error instanceof Error ? (error.stack ?? error.message) : event.message || String(error);
+  post({ type: "stderr", chunk: new TextEncoder().encode(`wcvm: uncaught ${text}\n`) });
+});
+
 self.onmessage = (event: MessageEvent<IProcessInit | ChildEvent>) => {
   const data = event.data;
   switch (data.type) {

@@ -44,7 +44,7 @@
 import type { IFsClient } from "../../fs/fsClient";
 import type { EventLoop } from "../eventLoop";
 import { parseModule, parseScript, staticImportSpecifiers, type AnyNode, type IAcorn } from "./ast";
-import { CYCLE_EXPORTS_BRIDGE, rewriteCyclicModule } from "./cyclic";
+import { CYCLE_EXPORTS_BRIDGE, CYCLE_READY_BRIDGE, rewriteCyclicModule } from "./cyclic";
 import { createEsmResolver, EsmResolveError, modulePath, moduleUrlSuffix, type EsmFormat, type IEsmResolveContext } from "./resolve";
 import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
 import { rewriteEsmForSyncRequire } from "./syncRequire";
@@ -127,6 +127,82 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
   // Idempotent (real import() of an already-loading/loaded URL is itself cached by the browser),
   // but tracked anyway so this only ever happens once per key, not once per read.
   const cycleTriggered = new Set<string>();
+  // Which properties of each registry have actually been installed, and who is waiting for one (a
+  // module that natively re-exports a cyclic import - see cyclic.ts's local-re-export handling).
+  const cycleInstalled = new Map<string, Set<string>>();
+  let cycleWaiters: { key: string; prop: string; assign: (value: unknown) => void }[] = [];
+  /** Tries every waiter whose property is installed. A getter can itself read ANOTHER sibling that
+   *  has not finished yet (a re-export of a re-export), which throws - such a waiter just stays
+   *  queued and is retried the next time anything installs. */
+  const flushWaiters = () => {
+    cycleWaiters = cycleWaiters.filter(({ key, prop, assign }) => {
+      if (!cycleInstalled.get(key)?.has(prop)) return true;
+      try {
+        assign(Reflect.get(cycleRegistries.get(key)!, prop));
+        return false;
+      } catch {
+        return true;
+      }
+    });
+  };
+
+  /** The shared registry object for `key` (created on first use), and - once - kicks off the import of
+   *  that module. */
+  const registryFor = (key: string): Record<string, unknown> => {
+    let registry = cycleRegistries.get(key);
+    if (!registry) {
+      // A Proxy, not a plain object: a property that hasn't been installed YET (this
+      // module's own `Object.defineProperties` call - see cyclic.ts - hasn't run yet) throws
+      // instead of silently reading `undefined`. Real live ESM bindings have the exact same
+      // shape of hazard (a TDZ ReferenceError for a binding read before its own declaration
+      // has run) - reading a genuinely circular import's binding SYNCHRONOUSLY, at the
+      // TOP LEVEL, right where the import used to be, is exactly the shape that would ALSO
+      // TDZ-fail in real, un-transformed circular ESM, cycle or not; only a LAZY read (inside
+      // a function, called later - the real, common shape, and the only one either of this
+      // fix's two target cases - zod v4's core.js/util.js, reached through
+      // @tanstack/router-plugin - actually needs) works. `Object.defineProperties`'s own
+      // default (no explicit trap) forwards straight to the real target, so once a getter IS
+      // installed, ordinary reads reach it exactly as if this were a plain object.
+      const target: Record<string, unknown> = {};
+      registry = new Proxy(target, {
+        // `Object.defineProperties` (the end of every cycle member - see cyclic.ts) lands here:
+        // record what is now readable and release anyone waiting for exactly that name.
+        defineProperty(t, prop, descriptor) {
+          const ok = Reflect.defineProperty(t, prop, descriptor);
+          if (ok && typeof prop === "string") {
+            const installed = cycleInstalled.get(key) ?? new Set<string>();
+            installed.add(prop);
+            cycleInstalled.set(key, installed);
+            flushWaiters();
+          }
+          return ok;
+        },
+        get(t, prop, receiver) {
+          if (typeof prop === "symbol" || prop in t) return Reflect.get(t, prop, receiver);
+          throw new ReferenceError(
+            `Cannot access '${String(prop)}' before initialization - a circular ESM import's own binding is only safe to read AFTER the module that declares it has finished running, never synchronously at the top level right where the import used to be (see loader.ts's own doc comment)`,
+          );
+        },
+      });
+      cycleRegistries.set(key, registry);
+    }
+    if (!cycleTriggered.has(key)) {
+      cycleTriggered.add(key);
+      const release = ctx.loop.ref();
+      const reportUncaught = (error: unknown) => ctx.loop.callback(() => { throw error; });
+      try {
+        const url = prepare(key, "esm");
+        import(/* @vite-ignore */ url).then(release, (error: unknown) => {
+          release();
+          reportUncaught(error);
+        });
+      } catch (error) {
+        release();
+        reportUncaught(error);
+      }
+    }
+    return registry;
+  };
 
   const installBridge = () => {
     if (bridgeInstalled) return;
@@ -148,48 +224,12 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
       [IMPORT_META_BRIDGE]: (path: string) => importMeta(path),
       [REQUIRE_BUILTIN_BRIDGE]: (id: string) => ctx.builtins.requireBuiltin(id),
       [REQUIRE_CJS_BRIDGE]: (path: string) => ctx.requireCjs(path),
-      [CYCLE_EXPORTS_BRIDGE]: (key: string) => {
-        let registry = cycleRegistries.get(key);
-        if (!registry) {
-          // A Proxy, not a plain object: a property that hasn't been installed YET (this
-          // module's own `Object.defineProperties` call - see cyclic.ts - hasn't run yet) throws
-          // instead of silently reading `undefined`. Real live ESM bindings have the exact same
-          // shape of hazard (a TDZ ReferenceError for a binding read before its own declaration
-          // has run) - reading a genuinely circular import's binding SYNCHRONOUSLY, at the
-          // TOP LEVEL, right where the import used to be, is exactly the shape that would ALSO
-          // TDZ-fail in real, un-transformed circular ESM, cycle or not; only a LAZY read (inside
-          // a function, called later - the real, common shape, and the only one either of this
-          // fix's two target cases - zod v4's core.js/util.js, reached through
-          // @tanstack/router-plugin - actually needs) works. `Object.defineProperties`'s own
-          // default (no explicit trap) forwards straight to the real target, so once a getter IS
-          // installed, ordinary reads reach it exactly as if this were a plain object.
-          const target: Record<string, unknown> = {};
-          registry = new Proxy(target, {
-            get(t, prop, receiver) {
-              if (typeof prop === "symbol" || prop in t) return Reflect.get(t, prop, receiver);
-              throw new ReferenceError(
-                `Cannot access '${String(prop)}' before initialization - a circular ESM import's own binding is only safe to read AFTER the module that declares it has finished running, never synchronously at the top level right where the import used to be (see loader.ts's own doc comment)`,
-              );
-            },
-          });
-          cycleRegistries.set(key, registry);
-        }
-        if (!cycleTriggered.has(key)) {
-          cycleTriggered.add(key);
-          const release = ctx.loop.ref();
-          const reportUncaught = (error: unknown) => ctx.loop.callback(() => { throw error; });
-          try {
-            const url = prepare(key, "esm");
-            import(/* @vite-ignore */ url).then(release, (error: unknown) => {
-              release();
-              reportUncaught(error);
-            });
-          } catch (error) {
-            release();
-            reportUncaught(error);
-          }
-        }
-        return registry;
+      [CYCLE_EXPORTS_BRIDGE]: (key: string) => registryFor(key),
+      [CYCLE_READY_BRIDGE]: (key: string, prop: string, assign: (value: unknown) => void) => {
+        const registry = registryFor(key);
+        void registry;
+        cycleWaiters.push({ key, prop, assign });
+        flushWaiters();
       },
     });
   };

@@ -145,6 +145,10 @@
     "assert/strict": "builtin",
     "path/posix": "builtin",
     "path/win32": "builtin",
-    "constants": "builtin"
+    "constants": "builtin",
+    "stream/consumers": "builtin",
+    "punycode": "builtin",
+    "sys": "builtin",
+    "console": "builtin"
   }
 }
