@@ -11,6 +11,7 @@ import type { INetHost } from "./bindings/net";
 import type { IUdpHost } from "./bindings/udp";
 import type { IWorkerContext, IWorkerThreadHost } from "./bindings/worker";
 import { createModuleSystem } from "./cjs";
+import { installCallSiteFileNames } from "./callSiteFileNames";
 import { createEsmLoader } from "./esm/loader";
 import { createModuleBuiltin } from "./moduleBuiltin";
 import { createEsmResolver } from "./esm/resolve";
@@ -122,6 +123,11 @@ const createRuntime = (options: IRuntimeOptions) => {
     isMainThread: host.workerSelf === undefined,
     workerSelf: host.workerSelf,
     mintThreadId: host.mintThreadId,
+    // Set from the start, not once globalObject is built below: the messaging binding's factory
+    // runs during Node's own bootstrap, well before that point.
+    installGlobal: options.globalObject
+      ? (name, value) => Object.defineProperty(options.globalObject!, name, { value, writable: true, configurable: true, enumerable: false })
+      : undefined,
   };
   const internalBinding = createInternalBinding(bindingCtx);
   // A binding may need to call another binding (messaging needs symbols' own no_message_symbol) -
@@ -317,6 +323,13 @@ const createRuntime = (options: IRuntimeOptions) => {
     // Only reached for source that might contain an import() - see cjs.ts - so a script that
     // never uses one still never pays to load acorn.
     rewriteDynamicImports: (source, selfPath) => getEsmLoader().rewriteScript(source, selfPath),
+    // require(esm): format detection + specifier resolution need no parser (the resolver is built
+    // eagerly, below); only `transform` reaches for the lazily-built ESM loader (and acorn).
+    esmSync: {
+      formatOfPath: (path) => esmResolver.formatOfPath(path),
+      resolveImport: (specifier, referrerDir) => esmResolver.resolveEsmSpecifier(specifier, referrerDir),
+      transform: (source, filename) => getEsmLoader().transformForSyncRequire(source, filename),
+    },
   });
 
   // ---- lifecycle ---------------------------------------------------------------
@@ -465,6 +478,16 @@ const createRuntime = (options: IRuntimeOptions) => {
   // process can exit mid-compile, before the real native promise ever gets a live realm left to
   // deliver its result into.
   installRawWasm({ ref: () => loop.ref(), globalObject });
+  // Only in a real worker: under Vitest `Error` is the test runner's own.
+  if (options.globalObject) {
+    installCallSiteFileNames(Error);
+    // The browser's own EventTarget/AbortSignal aren't Node's (no `nodejs.event_target` marker on the
+    // constructor), so `events.setMaxListeners(n, signal)` - which listr2, and so @angular/cli's
+    // build spinner, calls - threw 'The "eventTargets" argument must be an instance of EventEmitter
+    // or EventTarget'. The marker is all Node's own isEventTarget() looks at; AbortSignal inherits it
+    // through its constructor chain.
+    (EventTarget as unknown as Record<symbol, unknown>)[Symbol.for("nodejs.event_target")] = true;
+  }
 
   /** Runs the script at `entry` (absolute or cwd-relative). */
   const runMain = (entry: string): Promise<number> => {

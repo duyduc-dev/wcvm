@@ -4,6 +4,27 @@ import { runScript } from "./harness";
 const run = (source: string, extra: Record<string, string> = {}, options = {}) =>
   runScript({ "/app/main.js": source, ...extra }, "/app/main.js", { cwd: "/app", ...options });
 
+describe("staying alive across promise continuations", () => {
+  // Real Node drains process.nextTick and microtasks before deciding it's idle. A promise
+  // continuation that schedules more work (here: a tick, which starts a timer) used to be missed:
+  // the loop decided "nothing left" synchronously, before the microtask ran, and the process
+  // exited silently mid-await (@angular/cli's `ng serve` did exactly this after its port check).
+  it("does not exit while a microtask chain is about to schedule a tick, then a timer", async () => {
+    const r = await run(`
+      setImmediate(() => {
+        Promise.resolve().then(() => Promise.resolve()).then(() => {
+          process.nextTick(() => {
+            console.log("late tick");
+            Promise.resolve().then(() => setTimeout(() => console.log("late timer"), 5));
+          });
+        });
+      });
+      process.on("exit", () => console.log("exit"));
+    `);
+    expect(r).toMatchObject({ code: 0, stdout: "late tick\nlate timer\nexit\n", stderr: "" });
+  });
+});
+
 describe("running a script", () => {
   it("prints with console.log using Node's real formatting", async () => {
     const r = await run(`console.log("Hello", 1, { a: [1, 2] }, "%s!", "x"); console.log("%d%%", 50)`);

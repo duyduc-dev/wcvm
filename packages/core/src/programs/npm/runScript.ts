@@ -105,7 +105,7 @@ const packageEnvs = (pkg: IPackageForScripts): Record<string, string> => {
 
 /** Every ancestor's `node_modules/.bin`, nearest first, down to the root - real npm's own
  *  `@npmcli/run-script/lib/set-path.js` builds it the same way (walking `dirname()` to the root). */
-const binDirsFrom = (cwd: string): string[] => {
+export const binDirsFrom = (cwd: string): string[] => {
   const dirs: string[] = [];
   for (let dir = cwd; ; ) {
     dirs.push(join(dir, "node_modules/.bin"));

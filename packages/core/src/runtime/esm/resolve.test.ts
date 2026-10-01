@@ -169,6 +169,37 @@ describe("bare package specifiers", () => {
   });
 });
 
+describe("exports subpath patterns", () => {
+  it("prefers the longer key when two patterns share a prefix (PATTERN_KEY_COMPARE)", () => {
+    fs.mkdir("/app/node_modules/p/src", { recursive: true });
+    fs.writeFile("/app/node_modules/p/package.json", JSON.stringify({ exports: { "./src/*": "./src/*.js", "./src/*.js": "./src/*.js" } }));
+    fs.writeFile("/app/node_modules/p/src/node.js", "");
+    expect(resolver.resolveEsmSpecifier("p/src/node.js", "/app").key).toBe("/app/node_modules/p/src/node.js");
+    expect(resolver.resolveEsmSpecifier("p/src/node", "/app").key).toBe("/app/node_modules/p/src/node.js");
+  });
+});
+
+describe("packages with no \"exports\" (legacy resolution, like real Node)", () => {
+  it("resolves any subpath to the file inside the package, without extension probing", () => {
+    fs.mkdir("/app/node_modules/legacy/lib", { recursive: true });
+    fs.writeFile("/app/node_modules/legacy/package.json", "{}");
+    fs.writeFile("/app/node_modules/legacy/lib/x.js", "");
+    expect(resolver.resolveEsmSpecifier("legacy/lib/x.js", "/app").key).toBe("/app/node_modules/legacy/lib/x.js");
+    expect(() => resolver.resolveEsmSpecifier("legacy/lib/x", "/app")).toThrow(/Cannot find module/);
+  });
+
+  it("probes \"main\" like legacyMainResolve: as written, then .js, then /index.js", () => {
+    fs.mkdir("/app/node_modules/m1/lib/sub", { recursive: true });
+    fs.writeFile("/app/node_modules/m1/package.json", `{"main":"lib/entry"}`);
+    fs.writeFile("/app/node_modules/m1/lib/entry.js", "");
+    expect(resolver.resolveEsmSpecifier("m1", "/app").key).toBe("/app/node_modules/m1/lib/entry.js");
+    fs.mkdir("/app/node_modules/m2/lib/sub", { recursive: true });
+    fs.writeFile("/app/node_modules/m2/package.json", `{"main":"lib/sub"}`);
+    fs.writeFile("/app/node_modules/m2/lib/sub/index.js", "");
+    expect(resolver.resolveEsmSpecifier("m2", "/app").key).toBe("/app/node_modules/m2/lib/sub/index.js");
+  });
+});
+
 describe("file: URL specifiers", () => {
   // How Vite loads the config file it just bundled: import(pathToFileURL(tmp).href).
   const write = (file: string) => {

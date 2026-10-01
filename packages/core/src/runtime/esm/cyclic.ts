@@ -108,7 +108,8 @@ export const rewriteCyclicModule = (
 
   for (const ref of freeReferences(program, targetNames)) {
     const name = source.slice(ref.start, ref.end);
-    edits.push({ start: ref.start, end: ref.end, replacement: replacementFor.get(name)! });
+    const expr = replacementFor.get(name)!;
+    edits.push({ start: ref.start, end: ref.end, replacement: ref.shorthand ? `${name}: ${expr}` : expr });
   }
 
   // A LOCAL re-export (`export { a, b as c };`, no `from`) referencing one of the names just

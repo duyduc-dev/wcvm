@@ -62,7 +62,18 @@ export const createProcessObject = (params: IProcessParams) => {
   const process: Record<string, any> = {
     title: "node",
     version: NODE_VERSION,
-    versions: { node: NODE_VERSION.slice(1), v8: "13.6.233.17-node.29", uv: "1.51.0", modules: "137" },
+    versions: {
+      node: NODE_VERSION.slice(1),
+      v8: "13.6.233.17-node.29",
+      uv: "1.51.0",
+      modules: "137",
+      // What StackBlitz's WebContainer sets, and what tools key off to adapt to such a sandbox: @angular/build
+      // turns off its persistent cache and native sass, and - the one that matters - tells Piscina
+      // (its worker pool) to use `atomics: 'disabled'`. Piscina's default `sync` mode parks on
+      // `receiveMessageOnPort`, which a browser can't implement (see bindings/messaging.ts), so
+      // without this every Angular build hangs forever waiting for its first worker reply.
+      webcontainer: "wcvm",
+    },
     arch: "x64",
     platform: "linux",
     release: { name: "node" },

@@ -80,6 +80,10 @@
 export interface IMessagingContext {
   loop: { ref(): () => void; post(fn: () => void): void };
   internalBinding: (name: string) => any;
+  /** Replaces a property of the guest's real global object. Only set when the runtime owns a
+   *  real worker global (`globalObject: self`) - under Vitest the "global" is the test runner's
+   *  own, whose MessageChannel must stay untouched. */
+  installGlobal?: (name: string, value: unknown) => void;
 }
 
 interface IBroadcastChannelHandle {
@@ -164,6 +168,12 @@ export const createMessagingBinding = (ctx: IMessagingContext) => {
         // in real Chromium: a worker thread spawning a nested worker thread of its own crashed
         // here ("Cannot read properties of undefined (reading 'get')") before this fix.
         for (const transferred of event.ports ?? []) initPort(transferred);
+        // A port made before internal/worker/io.js finished loading (the oninit hook didn't exist
+        // yet) has no NodeEventTarget state - dispatching into it would crash the whole worker
+        // ("Cannot read properties of undefined (reading 'get')"). Retry the init now; if it still
+        // can't run, nobody can be listening on this port through Node's API, so drop the message.
+        if (!initializedPorts.has(port)) runOninit(port);
+        if (!initializedPorts.has(port)) return;
         (port as Record<symbol, unknown>)[kCurrentlyReceivingPorts] = event.ports?.length ? event.ports : undefined;
         (port as Record<symbol, ((data: unknown, type: string) => void) | undefined>)[kHybridDispatch]?.(event.data, type);
       });
@@ -174,9 +184,16 @@ export const createMessagingBinding = (ctx: IMessagingContext) => {
   // factory time): internal/worker/io.js is what defines onInitSymbol on MessagePort.prototype,
   // and it does so only AFTER its own `internalBinding('messaging')` call (this factory) already
   // returned - the symbol genuinely does not exist yet while this factory itself is running.
-  const initPort = <T>(port: T): T => {
+  const initializedPorts = new WeakSet<object>();
+  const runOninit = (port: object): void => {
     const oninit = (ctx.internalBinding("symbols") as Record<string, symbol> | undefined)?.oninit;
-    if (oninit) (port as Record<symbol, (() => void) | undefined>)[oninit]?.();
+    const init = oninit ? (port as Record<symbol, (() => void) | undefined>)[oninit] : undefined;
+    if (!init) return;
+    init.call(port);
+    initializedPorts.add(port);
+  };
+  const initPort = <T>(port: T): T => {
+    runOninit(port as object);
     bridgeNativeDispatch(port as object);
     return port;
   };
@@ -190,6 +207,19 @@ export const createMessagingBinding = (ctx: IMessagingContext) => {
         }
       } as unknown as new () => MessageChannel)
     : RealMessageChannel;
+
+  // FOURTH PLATFORM GAP: the wrapper above only covers `MessageChannel`s created through THIS
+  // binding (worker_threads' own export, vendored code). Guest code reaching for the bare global -
+  // `rsvp`, pulled in by Ember's build tooling, does `new MessageChannel()` then
+  // `port1.onmessage = fn` - got the raw platform class, whose ports never had oninit() run, so
+  // once internal/worker/io.js had swapped MessagePort.prototype onto NodeEventTarget the
+  // `onmessage` setter threw 'Value of "this" must be of type EventTarget' (validateThisInternal-
+  // Field: no kHandlers, because initNodeEventTarget never ran for that port). Real Node exposes
+  // this same class as the global. Installed only once io.js has loaded (this factory runs from
+  // inside it), so a script that never touches worker_threads keeps the untouched platform class.
+  if (ctx.installGlobal && RealMessageChannel && MessageChannel !== RealMessageChannel && globalThis.MessageChannel === RealMessageChannel) {
+    ctx.installGlobal("MessageChannel", MessageChannel);
+  }
 
   // Real Node's own low-level handle a BroadcastChannel instance wraps (internal/worker/io.js's
   // own public BroadcastChannel class is layered on top of this, not on the real platform

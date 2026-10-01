@@ -144,6 +144,7 @@
     "internal/deps/minimatch/index": "23f1e425aa0813670574fe2c0241f591ef5463aacf2a23e3284654a49245fd4c",
     "assert/strict": "07c94fd4322f33fb366bec83977c7aa4816802a0deb1a4ab54c1093d0c05a524",
     "path/posix": "117a373870d6dd7ff7470e9e5d0eb7f0c284c39f036492da60453ad0615d643e",
-    "path/win32": "cfa5914ed0ada68fbf7891014ddb2db26db353810c8bbc7b25d941537ddf22e5"
+    "path/win32": "cfa5914ed0ada68fbf7891014ddb2db26db353810c8bbc7b25d941537ddf22e5",
+    "constants": "91c9af0602f8f474055e7d87d3138daa18d0cd2912c93940687d9db0af696f9a"
   }
 }

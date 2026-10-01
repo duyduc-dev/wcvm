@@ -150,7 +150,10 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
       const prefix = candidate.slice(0, star);
       const suffix = candidate.slice(star + 1);
       if (key.startsWith(prefix) && key.length >= candidate.length && key.endsWith(suffix)) {
-        if (!best || prefix.length > best.key.indexOf("*")) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
+        // Node's PATTERN_KEY_COMPARE: the longer prefix wins; on a tie, the longer whole key
+        // (`"./src/*.js"` beats `"./src/*"`, as @embroider/macros' own exports map relies on).
+        const bestPrefix = best ? best.key.indexOf("*") : -1;
+        if (!best || prefix.length > bestPrefix || (prefix.length === bestPrefix && candidate.length > best.key.length)) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
       }
     }
     return best ? { target: map[best.key], match: best.match, isPattern: true } : undefined;
@@ -245,11 +248,19 @@ export const createEsmResolver = (ctx: IEsmResolveContext): IEsmResolver => {
       if (!isDir(pkgDir)) continue;
       const pkg = readJson(`${pkgDir}/package.json`);
       if (pkg?.exports != null) return resolveExports(pkgDir, pkg.exports, subpath);
-      if (subpath !== ".") throw new EsmResolveError("ERR_PACKAGE_PATH_NOT_EXPORTED", `Package subpath '${subpath}' is not defined (no "exports" in ${pkgDir}/package.json)`);
+      // No "exports": real Node falls back to the legacy rules. A subpath is just a file inside
+      // the package (exact name, no extension probing - `import "pkg/lib/x.js"`), and the package
+      // itself is its "main", probed the way legacyMainResolve does.
+      if (subpath !== ".") {
+        const file = ctx.path.resolve(pkgDir, subpath);
+        if (!isFile(file)) throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find module '${file}' imported from ${fromDir}`);
+        return file;
+      }
       const main = typeof pkg?.main === "string" ? pkg.main : "index.js";
-      const resolved = ctx.path.resolve(pkgDir, main);
-      if (!isFile(resolved)) throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find module '${specifier}'`);
-      return resolved;
+      const base = ctx.path.resolve(pkgDir, main);
+      const found = [base, `${base}.js`, `${base}.json`, `${base}/index.js`, `${base}/index.json`, ctx.path.resolve(pkgDir, "index.js")].find(isFile);
+      if (!found) throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find module '${specifier}'`);
+      return found;
     }
     throw new EsmResolveError("ERR_MODULE_NOT_FOUND", `Cannot find package '${name}' imported from ${fromDir}`);
   };

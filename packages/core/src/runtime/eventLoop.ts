@@ -84,6 +84,9 @@ class EventLoop {
 
   private inCallback = false;
   private tickCheckScheduled = false;
+  /** Set when a turn found nothing left to do: the NEXT turn (a macrotask, so after every pending
+   *  microtask has run) confirms it before the loop is allowed to finish. */
+  private idleArmed = false;
 
   constructor(host: IEventLoopHost = defaultHost()) {
     this.host = host;
@@ -202,6 +205,7 @@ class EventLoop {
     this.host.setImmediate(() => {
       this.tickCheckScheduled = false;
       this.callback(() => {});
+      this.wake(); // what the ticks did may need another turn (a no-op if the loop isn't running)
     });
   }
 
@@ -249,6 +253,15 @@ class EventLoop {
 
   private turn() {
     if (!this.running) return;
+    // A promise continuation that ran since the last turn may have queued process.nextTick work
+    // or started new handles - real Node drains ticks and microtasks before deciding it's idle.
+    const confirming = this.idleArmed;
+    this.idleArmed = false;
+    let progressed = false;
+    if (confirming) {
+      progressed = Boolean(this.tickInfo[K_HAS_TICK_SCHEDULED] || this.tickInfo[K_HAS_REJECTION_TO_WARN]);
+      this.callback(() => {});
+    }
 
     // timers phase
     if (this.timerDeadline !== null && this.timerDeadline <= this.now() && this.processTimers) {
@@ -281,6 +294,15 @@ class EventLoop {
     if (this.alive()) {
       // Only timers/handles remain: sleep until the timer fires or a handle is released.
       if (this.timerDeadline !== null && !this.cancelTimer) this.arm();
+      return;
+    }
+
+    if (!confirming || progressed || this.tickCheckScheduled) {
+      // Looks idle - but we're still inside the macrotask that may have left microtasks behind
+      // (or, having just drained ticks, may have resumed promise chains that queue more). Look
+      // again after they've run (see idleArmed).
+      this.idleArmed = true;
+      this.wake();
       return;
     }
 
