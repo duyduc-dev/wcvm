@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/duyduc-dev/wcvm/main/assets/logo-dark.svg">
-    <img src="https://raw.githubusercontent.com/duyduc-dev/wcvm/main/assets/logo.svg" alt="wcvm" width="280">
-  </picture>
+  <img src="https://raw.githubusercontent.com/duyduc-dev/wcvm/main/assets/logo-color.svg" alt="wcvm" width="280">
 </p>
 
 <p align="center"><strong>Node.js in your browser tab. No backend.</strong></p>
