@@ -366,6 +366,47 @@ describe("createOpfsMirror", () => {
     expect(root.readFileAt("/a.txt")).toBeUndefined();
   });
 
+  it("retries a delete OPFS refuses while a writer still holds the entry, then succeeds (NoModificationAllowedError)", async () => {
+    const { vfs, root } = setup();
+    vfs.writeFile("/a.txt", new TextEncoder().encode("hi"));
+    await flush();
+    expect(root.readFileAt("/a.txt")).toBeDefined();
+
+    const real = root.removeEntry.bind(root);
+    let refusals = 2;
+    const spy = vi.spyOn(root, "removeEntry").mockImplementation(async (name, options) => {
+      if (refusals-- > 0) throw Object.assign(new Error("An attempt was made to modify an object where modifications are not allowed."), { name: "NoModificationAllowedError" });
+      return real(name, options);
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vfs.unlink("/a.txt");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(root.readFileAt("/a.txt")).toBeUndefined();
+    expect(errors).not.toHaveBeenCalled();
+    spy.mockRestore();
+    errors.mockRestore();
+  });
+
+  it("gives up and reports a delete that stays locked, instead of retrying forever", async () => {
+    const { vfs, root } = setup();
+    vfs.writeFile("/a.txt", new TextEncoder().encode("hi"));
+    await flush();
+
+    const spy = vi.spyOn(root, "removeEntry").mockRejectedValue(Object.assign(new Error("locked"), { name: "NoModificationAllowedError" }));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vfs.unlink("/a.txt");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    expect(spy).toHaveBeenCalledTimes(6); // the first try plus one per retry delay
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("OPFS persistence failed for /a.txt"), expect.anything());
+    spy.mockRestore();
+    errors.mockRestore();
+  });
+
   it("mirrors a directory rename, including its whole existing subtree", async () => {
     const { vfs, root } = setup();
     vfs.mkdir("/src");
