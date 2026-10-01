@@ -5,6 +5,7 @@ inside. The wordmark is drawn from strokes, so none of the SVGs needs a font.
 
 | File | Use |
 |---|---|
+| `logo-color.svg` | Mark + wordmark in one colour that reads on light **and** dark pages. Use this where the background is not known (READMEs: npm and GitHub switch theme independently of the OS, so a `prefers-color-scheme` switch cannot be relied on). |
 | `logo.svg` | Mark + wordmark for light backgrounds. |
 | `logo-dark.svg` | Mark + wordmark for dark backgrounds. |
 | `logo-mark.svg` | The mark alone (favicon, avatar). Studio's favicon is a copy of it. |

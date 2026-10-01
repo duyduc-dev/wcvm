@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img src="assets/logo.svg" alt="wcvm" width="280">
-  </picture>
+  <img src="assets/logo-color.svg" alt="wcvm" width="280">
 </p>
 
 <p align="center"><strong>Node.js in your browser tab. No backend.</strong></p>
