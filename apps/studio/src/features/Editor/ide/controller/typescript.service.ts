@@ -17,6 +17,7 @@ export interface IProjectContext {
 let context: IProjectContext | null = null;
 export const setProjectContext = (next: IProjectContext | null): void => {
   context = next;
+  appliedRootDirs = "";
 };
 export const getProjectContext = (): IProjectContext | null => context;
 
@@ -45,6 +46,8 @@ export const isProjectSource = (path: string): boolean =>
   !path.includes("/node_modules/") &&
   (SOURCE_EXTENSIONS.has(extensionOf(path)) || COMPONENT_EXTENSIONS.has(extensionOf(path)));
 
+let baseCompilerOptions: Monaco.typescript.CompilerOptions = {};
+
 export function configureTypescript(monaco: typeof Monaco): void {
   const ts = monaco.typescript;
   const options: Monaco.typescript.CompilerOptions = {
@@ -69,12 +72,78 @@ export function configureTypescript(monaco: typeof Monaco): void {
     noEmit: true,
     lib: ["esnext", "dom", "dom.iterable"],
   };
+  baseCompilerOptions = options;
   for (const defaults of [ts.typescriptDefaults, ts.javascriptDefaults]) {
     defaults.setCompilerOptions(options);
     // Make every model visible to the worker up front, not only the ones in the active editor.
     defaults.setEagerModelSync(true);
   }
   ts.typescriptDefaults.setDiagnosticsOptions(DIAGNOSTICS_OPTIONS);
+}
+
+/** `tsconfig.json` is JSONC: comments and trailing commas are legal. */
+const parseJsonc = (text: string): unknown => {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      out += "\n";
+    } else if (ch === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 1;
+    } else out += ch;
+  }
+  return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+};
+
+/** `dir` resolved against `base` ("." and ".." collapsed), as an absolute path. */
+const resolveAgainst = (base: string, dir: string): string => {
+  const out: string[] = [];
+  for (const part of (dir.startsWith("/") ? dir : `${base}/${dir}`).split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") out.pop();
+    else out.push(part);
+  }
+  return "/" + out.join("/");
+};
+
+let appliedRootDirs = "";
+
+/** The project's own `tsconfig.json` `rootDirs`, which Monaco's fixed options knew nothing about.
+ * Frameworks that generate types into a parallel tree depend on it: React Router 7 imports
+ * `./+types/root` from `app/root.tsx`, and `rootDirs: [".", "./.react-router/types"]` is what makes
+ * that resolve to `.react-router/types/app/+types/root.ts`. Without it the editor reports
+ * "Cannot find module './+types/root'" even though `react-router dev` generated the file. */
+export async function syncTsconfigOptions(monaco: typeof Monaco): Promise<void> {
+  if (!context) return;
+  const { fs, rootPath } = context;
+  let rootDirs: string[] | undefined;
+  try {
+    const config = parseJsonc(await readTextFile(fs, joinPath(rootPath, "tsconfig.json"))) as {
+      compilerOptions?: { rootDirs?: unknown };
+    };
+    const dirs = config.compilerOptions?.rootDirs;
+    if (Array.isArray(dirs)) {
+      // The worker names files by their URI, so rootDirs have to be URIs too.
+      rootDirs = dirs.filter((d): d is string => typeof d === "string").map((d) => `file://${resolveAgainst(rootPath, d)}`);
+    }
+  } catch {
+    /* no tsconfig, or one this can't parse: keep the defaults */
+  }
+  const signature = JSON.stringify(rootDirs ?? null);
+  if (signature === appliedRootDirs) return;
+  appliedRootDirs = signature;
+  const options = { ...baseCompilerOptions, ...(rootDirs ? { rootDirs } : {}) };
+  for (const defaults of [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults]) {
+    defaults.setCompilerOptions(options);
+  }
+  refreshDiagnostics(monaco);
 }
 
 // 7016: "could not find a declaration file" - noise for untyped packages.

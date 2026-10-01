@@ -8,7 +8,7 @@ import {
   getOrCreateModel,
   renameModel,
 } from "./editor.service";
-import { setProjectContext, syncDependencyTypings, syncProjectModels } from "./typescript.service";
+import { setProjectContext, syncDependencyTypings, syncProjectModels, syncTsconfigOptions } from "./typescript.service";
 import { EditorStatus } from "./editorStatus";
 import { canFormat, setFormatContext } from "./format.service";
 import { basename, mimeTypeFor, readTextFile, tabKindFor, writeTextFile } from "./fs.service";
@@ -240,6 +240,7 @@ export class IdeController {
       this.projectSyncTimer = null;
       const monaco = this.monaco;
       if (!monaco) return;
+      void syncTsconfigOptions(monaco).catch(() => {});
       void syncProjectModels(monaco, new Set(this.models.keys())).catch(() => {});
       void syncDependencyTypings(monaco).catch(() => {});
     }, delay);
