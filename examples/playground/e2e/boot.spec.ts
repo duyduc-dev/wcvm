@@ -2,6 +2,8 @@ import nodeCrypto from "node:crypto";
 import { expect, test } from "@playwright/test";
 import { ANGULAR_FILES, ANGULAR_PACKAGE_JSON, ANGULAR_POST_INSTALL_FILES } from "../../../apps/studio/src/services/wcvm/templateProjects/angularRecipe";
 import { buildEmberFiles, buildEmberPackageJson } from "../../../apps/studio/src/services/wcvm/templateProjects/emberRecipe";
+import { BACKEND_RECIPES, type BackendKind } from "../../../apps/studio/src/services/wcvm/templateProjects/backendRecipes";
+import { buildFullstackPackageJson, FULLSTACK_RECIPES, type FullstackKind } from "../../../apps/studio/src/services/wcvm/templateProjects/fullstackRecipes";
 
 type WcWindow = Window & { wc: import("wcvm").IWcvm; wcvmBoot: typeof import("wcvm").boot };
 
@@ -3781,4 +3783,134 @@ test.describe("Ember template (Studio recipe)", () => {
       await vite.exit;
     });
   });
+});
+
+test.describe("Backend and fullstack templates (Studio recipes)", () => {
+  // apps/studio's backendTemplateProject.ts / fullstackTemplateProject.ts write a recipe's files and
+  // package.json, run `npm install`, create its post-install links, and the user then runs `npm run dev`
+  // in a terminal. This does exactly that and checks the server answers through the preview relay: the
+  // page's own HTML, and its JSON endpoint. (Hydration, clicks and navigation inside the iframe are
+  // checked by hand through the real Studio UI - what each recipe needed is in HISTORY.md.)
+  interface ICase {
+    title: string;
+    files: [string, string][];
+    pkg: Record<string, unknown>;
+    links?: { path: string; target: string }[];
+    port: number;
+    page: { path: string; contains: string };
+    api: { path: string; contains: string };
+    /** Output that means the dev server is up (the first request of Next.js takes ~20s more to compile). */
+    ready?: string;
+  }
+  const fromBackend = (kind: BackendKind, title: string): ICase => ({
+    title,
+    files: BACKEND_RECIPES[kind].files,
+    pkg: { name: kind, ...BACKEND_RECIPES[kind].packageJson },
+    port: 3000,
+    page: { path: "/", contains: "This server is running entirely in your browser" },
+    api: { path: "/api/hello", contains: "Hello, world!" },
+  });
+  const fromFullstack = (kind: FullstackKind, title: string, port: number, contains: string, apiPath: string, apiContains: string): ICase => ({
+    title,
+    files: FULLSTACK_RECIPES[kind].files,
+    pkg: buildFullstackPackageJson(FULLSTACK_RECIPES[kind], kind),
+    links: FULLSTACK_RECIPES[kind].links,
+    port,
+    page: { path: "/", contains },
+    api: { path: apiPath, contains: apiContains },
+  });
+
+  const cases: ICase[] = [
+    fromBackend("express", "Express (JavaScript)"),
+    fromBackend("express-ts", "Express (TypeScript, tsc then node)"),
+    fromBackend("nestjs", "NestJS (tsc then node)"),
+    fromFullstack("astro", "Astro", 4321, "Rendered on", "/api/hello.json", "Hello from Astro"),
+    fromFullstack("sveltekit", "SvelteKit", 5173, "Rendered on", "/api/hello", "Hello from SvelteKit"),
+    fromFullstack("react-router", "React Router 7", 5173, "Rendered on", "/api/hello", "Hello from React Router"),
+    fromFullstack("nextjs-ts", "Next.js (TypeScript)", 3000, "Rendered on", "/api/hello", "Hello from Next.js"),
+  ];
+
+  for (const c of cases) {
+    test(`${c.title} installs, starts and answers`, async ({ page }) => {
+      test.skip(!process.env.WCVM_E2E_VITE, "opt-in: set WCVM_E2E_VITE=1 (installs from registry.npmjs.org)");
+      test.setTimeout(600_000);
+
+      await page.click("#preview-enable");
+      await page.evaluate(
+        async ({ files, pkg, links }) => {
+          const { fs } = (window as unknown as WcWindow).wc;
+          await fs.mkdir("/tmp", { recursive: true });
+          for (const [relative, contents] of files) {
+            const target = `/app/${relative}`;
+            await fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+            await fs.writeFile(target, contents);
+          }
+          await fs.writeFile("/app/package.json", JSON.stringify(pkg, null, 2));
+          // Kept for the install step below.
+          (window as unknown as { __links: typeof links }).__links = links;
+        },
+        { files: c.files, pkg: c.pkg, links: c.links },
+      );
+
+      const install = await spawn(page, "npm", ["install"], "/app");
+      expect(install.code, install.out + install.err).toBe(0);
+
+      // What a `postinstall` would do (wcvm's npm never runs lifecycle scripts).
+      await page.evaluate(async () => {
+        const { fs } = (window as unknown as WcWindow).wc;
+        for (const { path, target } of (window as unknown as { __links?: { path: string; target: string }[] }).__links ?? []) {
+          const link = `/app/${path}`;
+          await fs.mkdir(link.slice(0, link.lastIndexOf("/")), { recursive: true });
+          if (!(await fs.exists(link))) await fs.symlink(target, link);
+        }
+      });
+
+      await page.evaluate(async () => {
+        const wc = (window as unknown as WcWindow).wc;
+        const dev = await wc.spawn("npm", ["run", "dev"], {
+          cwd: "/app",
+          // The environment Studio's shells set (IdeController.ts).
+          env: { FORCE_COLOR: "0", JOBS: "1", NEXT_TELEMETRY_DISABLED: "1", ASTRO_TELEMETRY_DISABLED: "1" },
+        });
+        const w = window as unknown as { __dev: typeof dev; __devOut: string };
+        w.__dev = dev;
+        w.__devOut = "";
+        for (const stream of [dev.stdout, dev.stderr]) {
+          void (async () => {
+            const reader = stream.getReader();
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done) return;
+              w.__devOut += new TextDecoder().decode(value);
+            }
+          })();
+        }
+      });
+
+      const get = (path: string) =>
+        page.evaluate(
+          async ({ port, path }) => {
+            try {
+              const response = await fetch((window as unknown as WcWindow).wc.preview.url(port, path));
+              return { status: response.status, body: (await response.text()).slice(0, 4000) };
+            } catch (error) {
+              return { status: 0, body: String(error) };
+            }
+          },
+          { port: c.port, path },
+        );
+      // Poll: a framework's first request can compile for a long while (Next.js: ~20s) and may fail once on the way.
+      await expect
+        .poll(async () => (await get(c.page.path)).body, { timeout: 300_000, intervals: [3_000] })
+        .toContain(c.page.contains);
+      expect((await get(c.page.path)).status).toBe(200);
+      await expect.poll(async () => (await get(c.api.path)).body, { timeout: 120_000, intervals: [3_000] }).toContain(c.api.contains);
+
+      await page.evaluate(async () => {
+        const dev = (window as unknown as { __dev: { kill: () => void; exit: Promise<unknown> } }).__dev;
+        dev.kill();
+        await dev.exit;
+      });
+    });
+  }
 });

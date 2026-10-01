@@ -67,7 +67,7 @@ built this way" that was probably already answered by a real bug.
 - The playground (`examples/playground`) has four working dev-server examples (Vite+React,
   Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express). Studio's
   own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
-  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Ember (JS and TS)/Angular/Rectify, plus a Backend tab (Express JS/TS, NestJS - 2026-10-01, `apps/studio/.../templateProjects/backendRecipes.ts`: TS is built with `tsc` and run with `node`; `nest start` can't run yet because `@inquirer/core` needs `AsyncLocalStorage` -> `internal/promise_hooks`, not vendored) and a greyed-out "soon" Fullstack tab (Next.js/Nuxt/SvelteKit/React Router 7/Astro) - Svelte was PARKED, then
+  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Ember (JS and TS)/Angular/Rectify, plus a Backend tab (Express JS/TS, NestJS - `apps/studio/.../templateProjects/backendRecipes.ts`; TS is built with `tsc` and run with `node`, no watch) and a Fullstack tab (Next.js TS/JS on webpack + the WASM SWC, SvelteKit, React Router 7, Astro 6 - `fullstackRecipes.ts`; each verified in the real preview iframe: SSR, hydration, a server endpoint, client navigation; Nuxt is a greyed-out "soon" card: `oxc-parser`'s WASM binding hits the napi-rs worker deadlock, and Nuxt 4 needs Vite 8) - Svelte was PARKED, then
   re-verified working once the circular-ESM gap above was fixed; Tailwind CSS v4 hit a real
   `@napi-rs/wasm-runtime` deadlock (any native `Scanner` call spanning more than one line of input
   in a single call freezes the whole thread - a spawned WASI worker's own file reads relay back to
@@ -86,8 +86,8 @@ built this way" that was probably already answered by a real bug.
   languages.ts`, built on Monaco's own html/js/ts grammars), and per-file-type icons (`fileIcon/`).
   `.gjs`/`.gts` formatting uses `content-tag` directly (the community plugin can't be bundled);
   `vite.config.ts` aliases `prettier` to its browser build for prettier-plugin-svelte.
-- Tests: 1051 Vitest (run under Node 24 - on Node 22, 19 fail only because `URLPattern`/`CloseEvent`
-  are missing; `~/.nvm/versions/node/v24.18.0/bin` here) + 151 Playwright (Chromium; the ones needing
+- Tests: 1083 Vitest (run under Node 24 - on Node 22, 19 fail only because `URLPattern`/`CloseEvent`
+  are missing; `~/.nvm/versions/node/v24.18.0/bin` here) + 159 Playwright (Chromium; the ones needing
   the real npm registry are opt-in: `WCVM_E2E_VITE=1`). See "Verifying".
 
 Not done (roadmap order, see PLAN.md): npm workspaces and the rest of `npm exec` (arbitrary local/

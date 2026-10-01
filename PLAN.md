@@ -95,14 +95,19 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   `Error.prepareStackTrace`, and Ember as a Studio template - see HISTORY.md "Ember".
 - Studio's Backend templates (2026-10-01): Express (JS, TS) and NestJS install from the real npm registry and
   serve through the preview relay, verified in real Chromium. TypeScript is compiled with `tsc` and run with
-  `node` (no `tsx`/`ts-node`: native esbuild), so there is no watch-and-restart. Known gap: `nest start`
-  (`@nestjs/cli`) fails - `@inquirer/core` constructs an `AsyncLocalStorage`, which calls
-  `internal/promise_hooks`, which isn't vendored (`runtime/node/manifest.json`); vendoring it (plus its
-  bindings) would let the CLI, and `tsx`-style watchers, run. Fullstack (Next.js, Nuxt, SvelteKit, React
-  Router 7, Astro) is shown in the picker as "soon" and is not implemented.
-  UPDATE: `nest start` and SvelteKit's dev server needed `AsyncLocalStorage`; it now works (plain-JS context
-  propagation, one current value per instance - see HISTORY.md "Fullstack templates: what they needed from
-  the runtime"), along with three other runtime fixes found by running Astro.
+  `node` (no `tsx`/`ts-node`: native esbuild), so there is no watch-and-restart. `nest start` (`@nestjs/cli`) was
+  blocked by `AsyncLocalStorage`, which works now (plain-JS context propagation - see HISTORY.md "Fullstack
+  templates: what they needed from the runtime"); the project still builds with `tsc` for simplicity.
+- Studio's Fullstack templates (2026-10-01): Next.js 16 (TS, JS; webpack + the WebAssembly SWC), SvelteKit,
+  React Router 7 (framework mode) and Astro 6 run in the preview iframe - server-rendered HTML, hydration, a
+  server endpoint, client-side navigation - verified by hand through Studio and by opt-in Playwright tests
+  (`WCVM_E2E_VITE=1`). Known differences / limits: the first Next.js page compiles for 15-30 s; Next's
+  `AsyncLocalStorage` is the one-current-value-per-instance polyfill (one request at a time); `vm` contexts are
+  emulated with `with` + a Proxy (no `instanceof` isolation, `var` at the top level is not a sandbox property);
+  Astro must be 6.x and Nuxt 4 is out (both Vite 8). **Nuxt 3** installs but `nuxt dev` stops at `oxc-parser`:
+  its WebAssembly binding deadlocks the same way Tailwind's `Scanner` and Angular's parser did (a spawned WASI
+  worker's file reads relay back to the creator thread, which is blocked in `Atomics.wait` on that worker). A real
+  fix is to let those relays be served by something other than the thread waiting on the worker.
 - Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
   "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
   `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina

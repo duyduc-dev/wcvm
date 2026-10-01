@@ -445,7 +445,16 @@ export class IdeController {
       // NG_BUILD_*: @angular/build - BABEL_LINKER routes Angular's partial-compilation linking through
       // Babel instead of its oxc-parser based linker (a native WASM parser that deadlocks here);
       // OPTIMIZE_CHUNKS=false skips the one production step that needs the native `rolldown`.
-      env: { FORCE_COLOR: "3", JOBS: "1", NG_BUILD_BABEL_LINKER: "true", NG_BUILD_OPTIMIZE_CHUNKS: "false" },
+      //
+      // *_TELEMETRY_DISABLED: Next.js and Astro otherwise try to report usage to their own servers.
+      env: {
+        FORCE_COLOR: "3",
+        JOBS: "1",
+        NG_BUILD_BABEL_LINKER: "true",
+        NG_BUILD_OPTIMIZE_CHUNKS: "false",
+        NEXT_TELEMETRY_DISABLED: "1",
+        ASTRO_TELEMETRY_DISABLED: "1",
+      },
     });
     const handle = createShellTerminal(process, this.snap.isDark, () => this.markTerminalDead(id), {
       cwd: this.snap.rootPath,
