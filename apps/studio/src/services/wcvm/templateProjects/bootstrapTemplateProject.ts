@@ -11,8 +11,8 @@ export interface BootstrapTemplateCreationResult {
 
 // Bootstrap 5 has no official create-vite template, so - same approach as
 // rectifyTemplateProject.ts - this starts from Vite's own "vanilla-ts" scaffold and swaps in
-// Bootstrap's own index.html/main.ts (ported from vivari's "bootstrap" template). vivari's own
-// version pins Vite 8 + a Rolldown WASM binding wcvm doesn't have (see vitePins.ts's own comment:
+// Bootstrap's own index.html/main.ts Vite 8 and the Rolldown
+// WASM binding it needs aren't available to wcvm (see vitePins.ts's own comment:
 // "no WebAssembly build exists for it in this sandbox"); pinVitePackage() below pins wcvm's own
 // known-good Vite 7 + esbuild-wasm/rollup-wasm instead. Bootstrap itself is plain CSS/JS with no
 // native dependency of its own, so this should carry over cleanly.

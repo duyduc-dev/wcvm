@@ -7,6 +7,3 @@ that code needs - `acorn` and `minimatch` among them. Node.js is licensed under 
 the full Node.js license file, which also reproduces the licenses of those bundled dependencies,
 is `THIRD_PARTY_LICENSES.node.txt` in this package (copied from
 https://github.com/nodejs/node/blob/v24.18.0/LICENSE).
-
-The design follows the MIT-licensed vivari WebContainer as a reference only;
-none of its source is included.

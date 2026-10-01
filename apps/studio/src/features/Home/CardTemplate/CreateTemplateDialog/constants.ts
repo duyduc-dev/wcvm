@@ -55,7 +55,6 @@ export interface IUpcomingOption {
   experimental?: boolean;
 }
 
-// Mirrors vivari's own "Frontend" template picker (~/workspace/vivari/packages/studio/src/vv/templates.ts).
 // Svelte was RE-VERIFIED (2026-09-29) against the circular-ESM fix below and works: create-vite's
 // own official "svelte-ts" template, going through the generic viteTemplateProject.ts path exactly
 // like vue-ts/preact-ts/etc - no hand-written recipe needed, just a plugin pin (vitePins.ts's
@@ -232,7 +231,7 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     icon: AngularLogoIcon,
     category: "Frontend",
   },
-  // Backend (2026-10-01): ported from vivari's own backend templates, verified in real Chromium
+  // Backend (2026-10-01): verified in real Chromium
   // against the real npm registry - see services/wcvm/templateProjects/backendRecipes.ts (TypeScript
   // is built with `tsc` and run with `node`; the NestJS CLI can't run here yet).
   {

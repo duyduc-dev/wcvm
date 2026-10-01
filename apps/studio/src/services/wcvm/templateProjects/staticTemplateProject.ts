@@ -7,8 +7,7 @@ export interface StaticTemplateCreationResult {
 }
 
 /** Plain HTML/CSS/JS served by a zero-dependency Node http server - no bundler, no framework, no
- * real npm install needed (its own package.json has no dependencies at all). Ported from vivari's
- * own "static" template (~/workspace/vivari/packages/studio/src/vv/templates.ts). */
+ * real npm install needed (its own package.json has no dependencies at all). */
 const SERVER_JS = `// A tiny static file server — no dependencies, nothing to install.
 const http = require("http");
 const fs = require("fs");

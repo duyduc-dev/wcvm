@@ -7,7 +7,7 @@ import type { BuiltinFactory } from "./node/types";
 // `AsyncContextFrame`. With neither, `new AsyncLocalStorage()` died in `internal/promise_hooks` -
 // which `@nestjs/cli` (via @inquirer/core), SvelteKit's dev server, Next.js, React Router and Nuxt all
 // construct at startup. This replaces `internal/async_local_storage/async_hooks` (the vendored copy
-// stays in the tree, unused) with the best a plain-JS runtime can do, the same trade vivari makes:
+// stays in the tree, unused) with the best a plain-JS runtime can do:
 //
 //  1. `run(store, cb)` keeps `store` active for the WHOLE call - the synchronous body and, if `cb`
 //     returns a thenable, until that settles (and, for the outermost run, beyond: see `#scoped`). That is what makes a raw `await` inside `cb` see the
@@ -118,7 +118,7 @@ class AsyncLocalStorageShim {
    * What happens when it finishes depends on whether this scope is NESTED in another one. A nested
    * scope puts its parent's value back (once a returned thenable settles). The OUTERMOST scope does
    * not: it leaves its value in place for the next run() to replace. That is a deliberate departure
-   * from Node, taken from vivari where it was found the hard way: a streaming server render (React's
+   * from Node, found the hard way: a streaming server render (React's
    * Flight/Fizz, so Next.js's app router) returns from `run()` - promise and all - as soon as the
    * stream EXISTS, then goes on rendering components detached, across native `await`s nothing here can
    * observe. Restoring "no store" at that boundary zeroes the context mid-render and Next throws

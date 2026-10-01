@@ -1,6 +1,6 @@
 # wcvm implementation plan
 
-Reference design: `~/workspace/duck/vivari` (MIT). See its `ARCHITECTURE.md`.
+`webcontainer` was the first version of wcvm.
 An older, much larger implementation (`duckwc`) once lived in this repo; it is gone from the
 tree but recoverable from git history (see `git show 5e7e388:PROGRESS.md`).
 
@@ -731,7 +731,7 @@ real resolver - UDP itself is now done, see `dgram` above), `process.binding`, `
   accumulated and compressed/decompressed in one shot when the stream ends) - fine for
   whole-package-sized data, a documented memory/latency tradeoff for anything much larger.
 
-## Architecture to build (from vivari)
+## Architecture to build
 
 - One SAB per process worker: 16-byte control (`STATE`, `OPCODE`, `REQ_LEN`,
   `RES_LEN`) + 1 MiB data window. Worker writes a request and parks on
@@ -791,7 +791,7 @@ module: `Thing.test.ts`).
 - Sync CommonJS loader (`node_modules` resolution), per-process event loop
   (nextTick, microtasks, timers, setImmediate), builtins: `process`, `fs`,
   `path`, `events`, `buffer`.
-- Decided: vendor Node's real `lib/` + our `internalBinding` (vivari "Path B").
+- Decided: vendor Node's real `lib/` + our `internalBinding` ("Path B").
 - Done: `fs`, `fs/promises`, `os`, `string_decoder`, `stream`, `assert`, `readline`,
   `readline/promises`, `child_process.spawn`/`exec`/`execFile` (async), `child_process.execSync`/
   `spawnSync` (genuinely blocking, over a second SAB), `child_process.fork`/IPC (see "Current
@@ -1250,7 +1250,7 @@ host -> kernel -> process worker -> SAB -> FS worker -> back.
 ## Decisions
 
 1. Public name: `wcvm` (decided).
-2. Port vs rewrite: rewrite in strict TS using vivari as reference; vendor only Rust crates
+2. Port vs rewrite: rewrite in strict TS; vendor only Rust crates
    and Node `lib/` (decided).
 3. Node runtime: vendored real `lib/` on our own `internalBinding` (decided; implemented).
 

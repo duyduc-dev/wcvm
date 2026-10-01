@@ -11,9 +11,8 @@ git history: `git show 5e7e388:PROGRESS.md`.
 `wcvm` (`packages/core`) is a WebContainer-style sandbox: Node.js projects run 100% in the browser
 tab, in Web Workers, with no backend. Public API: `boot()` -> `{ spawn, fs, diagnostics, ready,
 preview }`.
-The design follows `vivari` (an MIT open-source WebContainer, a sibling checkout at
-`~/workspace/duck/vivari` on the original machine - reference only, not a dependency). We rewrote in
-strict TypeScript; we did NOT copy vivari's JS.
+`webcontainer` is the first version of wcvm (the project was originally named that); this is its
+rewrite in strict TypeScript.
 
 ## Status (update this when it changes)
 
@@ -416,7 +415,7 @@ already to strip this out. Update `PLAN.md` when a capability changes.
 
 ## Decisions already made (do not re-litigate)
 
-Name `wcvm`; rewrite in strict TS with vivari as reference; vendor Node's real `lib/` on our own
+Name `wcvm`; rewrite in strict TS; vendor Node's real `lib/` on our own
 `internalBinding` ("Path B"); in-memory TS `Vfs` first (Rust/Wasm later if needed); process exit
 status field is `exitCode`, and `errorCode` on error replies is the errno.
 

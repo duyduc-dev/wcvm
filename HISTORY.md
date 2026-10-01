@@ -1734,7 +1734,7 @@ in real Chromium against the real registry first, then fixed at the cause rather
    now unused) and added an inert `internal/promise_hooks`. The store is held for the whole `run()` - for
    an async callback, until its promise settles (a raw `await` resumes through a reaction nothing in JS can
    observe) - and `Promise#then`, `queueMicrotask`, `process.nextTick`, timers and `setImmediate` capture
-   every live store when scheduled. Two honest limits, both shared with vivari: ONE current value per
+   every live store when scheduled. Two honest limits: ONE current value per
    instance, not per async chain (two overlapping `run()`s can see each other's store - fine for a dev
    server handling a request at a time); and the OUTERMOST `run()` leaves its store in place afterwards
    (a nested one restores its parent), because a streaming render returns from `run()` as soon as the
@@ -1808,7 +1808,7 @@ Studio notes: Next needs `node_modules/next/wasm/@next/swc-wasm-nodejs` (what `n
 
 ## Studio: Backend and Fullstack template tabs (2026-10-01)
 
-- **Backend** (`templateProjects/backendRecipes.ts`, ported from vivari's): Express JS, Express TS, NestJS.
+- **Backend** (`templateProjects/backendRecipes.ts`): Express JS, Express TS, NestJS.
   Each serves a small page at `/` and `GET /api/hello`. TypeScript is built with `tsc` and run with `node`.
 - **Fullstack** (`fullstackRecipes.ts`): Next.js (TS/JS), SvelteKit, React Router 7, Astro 6. Per recipe:
   Vite-based ones take the shared Vite 7 / WASM pins (`pinVitePackage`); React Router's `app/entry.client.tsx`
