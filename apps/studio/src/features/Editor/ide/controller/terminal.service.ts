@@ -47,6 +47,9 @@ export interface ILineInputOptions {
   /** Directory entries for Tab completion; `isDir` makes a trailing `/` get appended. */
   listDir: (dir: string) => Promise<{ name: string; isDir: boolean }[]>;
   initialCwd: string;
+  /** Ctrl+C. Return true if it was handled (it interrupted something that was running); false
+   *  leaves the default: abandon the line being typed and show a fresh prompt. */
+  onInterrupt?: () => boolean;
 }
 
 const joinPath = (cwd: string, p: string): string => {
@@ -73,7 +76,7 @@ const commonPrefix = (names: string[]): string => {
  * Left/Right/Home/End/Delete, Up/Down command history, Tab file/directory completion, and
  * Ctrl+A/E/U/K/W/L/C. The shell's `cwd` isn't observable from here, so it's tracked by watching
  * `cd` lines (resolved against the previous value) for completion purposes only. */
-function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: () => void } {
+function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: () => void; getCwd: () => string } {
   const { onLine, listDir } = options;
   let buffer = "";
   let cursor = 0;
@@ -225,11 +228,13 @@ function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: (
         cursor = 0;
         setBuffer(saved, savedCursor);
       } else if (ch === "\x03") {
-        term.write("^C\r\n");
         buffer = "";
         cursor = 0;
         historyIndex = history.length;
-        onLine("");
+        if (!options.onInterrupt?.()) {
+          term.write("^C\r\n");
+          onLine("");
+        }
       } else if (ch >= " ") {
         // Take a run of printable characters at once (a paste arrives as one chunk).
         let j = i;
@@ -239,19 +244,30 @@ function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: (
       }
     }
   });
-  return { dispose: () => subscription.dispose() };
+  return { dispose: () => subscription.dispose(), getCwd: () => cwd };
 }
+
+/** The default prompt (`PS1`) of wcvm's `sh`: output that ends with it means the shell is back at
+ *  its prompt, i.e. whatever it was running has finished. */
+const PROMPT = /\$ $/;
 
 /** A real interactive shell (`sh` with no args is wcvm's line-buffered REPL — see the wcvm
  * `sh` docs and `wireLineInput`'s own doc comment) wired to a fresh xterm instance: stdout/
  * stderr are written to the terminal as they arrive, and completed lines (echoed and edited
  * locally by `wireLineInput`) are sent to the process's real stdin. `onExit` fires once
- * (process exit is terminal — nothing more will ever come from these streams). */
+ * (process exit is terminal — nothing more will ever come from these streams).
+ *
+ * There is no job control: `npm run dev`, `next dev` and every other command run INSIDE the
+ * shell's own worker, so a signal can't interrupt one without leaving its listeners and globals
+ * behind. Ctrl+C while a command is running therefore ends the shell (its whole process subtree,
+ * which frees the ports it held) and starts a fresh one in the same tab and working directory
+ * with `respawn` - what a user expects Ctrl+C to leave them with: a prompt and a free port. */
 export function createShellTerminal(
   process: IProcess,
   isDark: boolean,
   onExit: () => void,
   fs: { listDir: ILineInputOptions["listDir"]; cwd: string },
+  respawn: (cwd: string) => Promise<IProcess>,
 ): TerminalHandle {
   const term = new Terminal({
     convertEol: true,
@@ -263,19 +279,62 @@ export function createShellTerminal(
   const fit = new FitAddon();
   term.loadAddon(fit);
 
-  void pump(process.stdout, (text) => term.write(text));
-  void pump(process.stderr, (text) => term.write(text));
+  let current = process;
+  let writer = current.stdin.getWriter();
+  // A line was sent and the shell has not printed its prompt again yet.
+  let busy = false;
+  let restarting = false;
 
-  const writer = process.stdin.getWriter();
+  const attach = (target: IProcess) => {
+    const onChunk = (text: string) => {
+      term.write(text);
+      if (target === current && PROMPT.test(text)) busy = false;
+    };
+    void pump(target.stdout, onChunk);
+    void pump(target.stderr, onChunk);
+    // A shell we replaced on purpose exiting is not the terminal dying.
+    void target.exit.then(() => {
+      if (target === current) onExit();
+    });
+  };
+  attach(current);
+
+  const restart = async (): Promise<void> => {
+    restarting = true;
+    const old = current;
+    term.write("^C\r\n");
+    void writer.close().catch(() => {});
+    old.kill();
+    await old.exit;
+    try {
+      const next = await respawn(inputSub.getCwd());
+      current = next;
+      writer = next.stdin.getWriter();
+      busy = false;
+      attach(next);
+    } catch (error) {
+      term.write(`\r\nwcvm: could not restart the shell: ${error instanceof Error ? error.message : String(error)}\r\n`);
+      onExit();
+    } finally {
+      restarting = false;
+    }
+  };
+
   const inputSub = wireLineInput(term, {
     initialCwd: fs.cwd,
     listDir: fs.listDir,
     onLine: (line) => {
+      if (restarting) return;
+      if (line.trim() !== "") busy = true;
       void writer.write(encoder.encode(line + "\n")).catch(() => {});
     },
+    onInterrupt: () => {
+      if (restarting) return true;
+      if (!busy) return false;
+      void restart();
+      return true;
+    },
   });
-
-  void process.exit.then(() => onExit());
 
   const dispose = () => {
     inputSub.dispose();
@@ -283,7 +342,14 @@ export function createShellTerminal(
     term.dispose();
   };
 
-  return { term, fit, process, dispose };
+  return {
+    term,
+    fit,
+    get process() {
+      return current;
+    },
+    dispose,
+  };
 }
 
 export const shellTerminalLabel = (index: number) => `sh #${index}`;

@@ -431,14 +431,14 @@ export class IdeController {
   }
 
   // ── terminals ───────────────────────────────────────────────────────────
-  async newShellTerminal(): Promise<void> {
-    const id = uuidv6();
-    this.terminalCount += 1;
-    // FORCE_COLOR: this shell has no real TTY, so chalk/picocolors-based CLIs (npm, vite, ...)
-    // detect that and disable their own colored output by default — forcing it back on is what
-    // gets Vite's real, colorful startup banner (and anything else's) to actually show here.
-    const process: IProcess = await this.wc.spawn("sh", [], {
-      cwd: this.snap.rootPath,
+  /** One interactive shell with the environment every Studio terminal gets. */
+  private spawnShell(cwd: string): Promise<IProcess> {
+    return this.wc.spawn("sh", [], {
+      cwd,
+      // FORCE_COLOR: this shell has no real TTY, so chalk/picocolors-based CLIs (npm, vite, ...)
+      // detect that and disable their own colored output by default — forcing it back on is what
+      // gets Vite's real, colorful startup banner (and anything else's) to actually show here.
+      //
       // JOBS=1: broccoli-babel-transpiler (Ember's build) otherwise starts a worker-process pool
       // that never answers in this sandbox and the build hangs forever; 1 makes it transpile inline.
       //
@@ -456,6 +456,12 @@ export class IdeController {
         ASTRO_TELEMETRY_DISABLED: "1",
       },
     });
+  }
+
+  async newShellTerminal(): Promise<void> {
+    const id = uuidv6();
+    this.terminalCount += 1;
+    const process = await this.spawnShell(this.snap.rootPath);
     const handle = createShellTerminal(process, this.snap.isDark, () => this.markTerminalDead(id), {
       cwd: this.snap.rootPath,
       listDir: async (dir) => {
@@ -468,7 +474,7 @@ export class IdeController {
           })),
         );
       },
-    });
+    }, (cwd) => this.spawnShell(cwd));
     this.terminals.set(id, handle);
     const entry = { id, label: shellTerminalLabel(this.terminalCount), alive: true };
     this.set({
