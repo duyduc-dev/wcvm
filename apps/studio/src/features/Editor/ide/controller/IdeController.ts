@@ -9,6 +9,7 @@ import {
   renameModel,
 } from "./editor.service";
 import { EditorStatus } from "./editorStatus";
+import { canFormat, setFormatContext } from "./format.service";
 import { basename, mimeTypeFor, readTextFile, tabKindFor, writeTextFile } from "./fs.service";
 import { STATUS_MESSAGE_TIMEOUT_MS } from "./constants";
 import { applyTheme, getInitialIsDark } from "@/lib/theme";
@@ -121,6 +122,7 @@ export class IdeController {
 
   dispose(): void {
     this.stopPreviewListener?.();
+    setFormatContext(null);
     // Kill each terminal's own process, not just its UI - the wcvm instance itself is a singleton
     // that outlives this editor (see @/lib/wcvm), so leaving this page (Home, or back into a
     // different project) would otherwise leave every shell - and anything it spawned, like a
@@ -176,7 +178,24 @@ export class IdeController {
       if (path && this.snap.tabKinds[path] === "text") this.refreshDirty(path);
     });
     this.wireEditorStatus(this.editor);
+    // Prettier (registered once, with the Monaco instance) reads the project it formats from here.
+    setFormatContext({ fs: this.fs, rootPath: this.snap.rootPath, report: (message) => this.status(message) });
     if (this.snap.activeTab) this.showInEditor(this.snap.activeTab);
+  }
+
+  /** Formats the active file with Prettier - Monaco's own "Format Document" action, so the
+   * result is one undoable edit and the cursor/scroll position survive. ⇧⌥F, the toolbar button
+   * and the command palette all land here. */
+  async formatActiveDocument(): Promise<void> {
+    const editor = this.editor;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    if (!canFormat(model.getLanguageId())) {
+      this.status(`Prettier can't format ${model.getLanguageId()} files`);
+      return;
+    }
+    await editor.getAction("editor.action.formatDocument")?.run();
+    editor.focus();
   }
 
   /** Cursor position, selection and language mode, mirrored onto `editorStatus` — its own tiny

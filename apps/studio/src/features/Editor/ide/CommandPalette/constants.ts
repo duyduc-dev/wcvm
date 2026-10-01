@@ -4,6 +4,7 @@ export type CommandId =
   | "toggle-preview"
   | "new-terminal"
   | "save-file"
+  | "format-document"
   | "toggle-theme";
 
 export interface CommandDef {
@@ -20,6 +21,7 @@ export const COMMANDS: CommandDef[] = [
   { id: "toggle-preview", label: "Toggle Preview", keys: "⌥⌘B" },
   { id: "new-terminal", label: "New Terminal", keys: "⇧⌘C" },
   { id: "save-file", label: "Save File", keys: "⌘S" },
+  { id: "format-document", label: "Format Document (Prettier)", keys: "⇧⌥F" },
   { id: "toggle-theme", label: "Toggle Theme" },
 ];
 

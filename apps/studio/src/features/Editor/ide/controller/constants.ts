@@ -46,6 +46,14 @@ export const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   rb: "ruby",
   toml: "ini",
   ini: "ini",
+  // No built-in Monaco grammar for these - registered in languages.ts.
+  vue: "vue",
+  svelte: "svelte",
+  gjs: "gjs",
+  gts: "gts",
+  hbs: "handlebars",
+  handlebars: "handlebars",
+  svg: "xml",
 };
 
 /** Never shown in the Explorer tree (VS Code hides `.git` by default too) — the VFS and a real

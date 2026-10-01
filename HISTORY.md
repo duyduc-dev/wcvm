@@ -1702,3 +1702,22 @@ chain of real wcvm gaps, found one at a time by making each failure visible firs
 Verified in real Chromium against the real registry: install (~30s), `ng serve` (~12s to "Local:"),
 "Hello, ng-app" rendered in the preview iframe, and in the real Studio UI through Chrome. Also new:
 `process.versions.webcontainer`, `sh` fd redirects, the `EventTarget` marker.
+
+## Studio editor: formatting, highlighting, file icons (2026-10-01)
+
+- **Prettier** (`format.service.ts`): registered as Monaco's document formatter for every supported
+  language, so the Format button, ⇧⌥F (also from outside the editor, via AppShell), the command
+  palette and Monaco's context menu share one path. Vue/Svelte blocks use the real script/style
+  plugins. `.gjs`/`.gts`: each `<template>` is masked with an identifier placeholder (not a template
+  literal - ASI would parse it as a tagged template), the JS/TS is formatted, bodies go through the
+  Handlebars parser and are spliced back indented; regions come from `content-tag`'s parser.
+  Dead end: `prettier-plugin-ember-template-tag` is CommonJS that `require()`s a top-level-await module,
+  which Vite's optimizer rejects. A production build also failed until `prettier` was aliased to
+  `prettier/standalone` (prettier-plugin-svelte imports the Node entry, `index.cjs`).
+- **Highlighting**: Monaco has no grammar for Vue/Svelte/gjs/gts, so they were plain text. `languages.ts`
+  clones Monaco's own html/javascript/typescript Monarch grammars and prepends rules (mustache and
+  Svelte blocks as embedded JavaScript, `lang="ts"`/`scss`/`less` on script/style, `<template>` as
+  embedded Handlebars).
+- **Icons**: `fileIcon/` - framework brand marks plus labelled badges, exact file names before extensions.
+- Also: Studio's preview tab reloads when its port listens again (Angular's port check bound and
+  released 4200 before the real server started, so the tab opened on a dead port).

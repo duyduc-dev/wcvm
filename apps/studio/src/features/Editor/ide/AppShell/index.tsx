@@ -27,6 +27,16 @@ export function AppShell() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ⇧⌥F (VS Code's Format Document) from anywhere in the IDE. Monaco already handles it
+      // while the editor has focus - and marks the event handled - so this only fills the gap
+      // when focus is elsewhere (explorer, terminal header...). `e.code`, since ⌥ rewrites `e.key`
+      // on macOS ("Ï").
+      if (e.shiftKey && e.altKey && !e.metaKey && !e.ctrlKey && e.code === "KeyF") {
+        if (e.defaultPrevented) return;
+        e.preventDefault();
+        void c.formatActiveDocument();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
       const key = e.key.toLowerCase();
