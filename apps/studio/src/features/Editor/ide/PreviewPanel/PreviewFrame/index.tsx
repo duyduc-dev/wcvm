@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
-import type { PreviewTab } from "../controller/types";
-import { PREVIEW_IFRAME_SANDBOX } from "./constants";
+import type { PreviewTab } from "../../controller/types";
+import { PREVIEW_IFRAME_SANDBOX } from "../constants";
+import { disposeFrameConsole, getFrameConsole } from "../DevtoolsPane/service/frameConsole";
 
 interface PreviewFrameProps {
   tab: PreviewTab;
@@ -25,6 +26,13 @@ export function PreviewFrame({ tab, active, src, setFrame, onLoad }: PreviewFram
     lastSrc.current = src;
     el.src = src;
   }, [src]);
+
+  // Console capture + the Elements inspector hook the frame's document as soon as it exists, so
+  // this runs for every tab whether or not DevTools is open - otherwise early logs would be lost.
+  useEffect(() => {
+    getFrameConsole(tab.id).attach(ref.current);
+    return () => disposeFrameConsole(tab.id);
+  }, [tab.id]);
 
   return (
     <iframe
