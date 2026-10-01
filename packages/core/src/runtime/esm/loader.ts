@@ -47,6 +47,7 @@ import { parseModule, parseScript, staticImportSpecifiers, type AnyNode, type IA
 import { CYCLE_EXPORTS_BRIDGE, rewriteCyclicModule } from "./cyclic";
 import { createEsmResolver, EsmResolveError, modulePath, moduleUrlSuffix, type EsmFormat, type IEsmResolveContext } from "./resolve";
 import { DYNAMIC_IMPORT_BRIDGE, IMPORT_META_BRIDGE, rewriteModule } from "./rewrite";
+import { rewriteEsmForSyncRequire } from "./syncRequire";
 
 const REQUIRE_BUILTIN_BRIDGE = "__wcvm_require_builtin__";
 const REQUIRE_CJS_BRIDGE = "__wcvm_require_cjs__";
@@ -131,10 +132,12 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
     if (bridgeInstalled) return;
     bridgeInstalled = true;
     Object.assign(ctx.globalObject, {
-      [DYNAMIC_IMPORT_BRIDGE]: (specifier: string, selfUrl: string) => {
+      [DYNAMIC_IMPORT_BRIDGE]: (specifier: unknown, selfUrl: string) => {
         const release = ctx.loop.ref();
         try {
-          const resolved = resolver.resolveEsmSpecifier(specifier, ctx.path.dirname(modulePath(selfUrl)));
+          // import() converts its argument with ToString (a `URL` object is legal and common:
+          // `import(pathToFileURL(file))`, which is how ember-cli loads ember-cli-build.mjs).
+          const resolved = resolver.resolveEsmSpecifier(String(specifier), ctx.path.dirname(modulePath(selfUrl)));
           const url = prepare(resolved.key, resolved.format);
           return import(/* @vite-ignore */ url).finally(release);
         } catch (error) {
@@ -434,7 +437,14 @@ export const createEsmLoader = (ctx: IEsmLoaderContext) => {
     return prepare(path, resolver.formatOfPath(path));
   };
 
-  return { importEntry, rewriteScript, formatOfPath: resolver.formatOfPath, blobUrlForFile };
+  /** ES module source -> a synchronous function body, for `require(esm)` (see syncRequire.ts). */
+  const transformForSyncRequire = (source: string, path: string): string => {
+    const program = parseModule(ctx.acorn, source, path);
+    installBridge();
+    return rewriteEsmForSyncRequire(source, program, path, ctx.acorn);
+  };
+
+  return { importEntry, rewriteScript, transformForSyncRequire, resolveEsmSpecifier: resolver.resolveEsmSpecifier, formatOfPath: resolver.formatOfPath, blobUrlForFile };
 };
 
 export { EsmResolveError };

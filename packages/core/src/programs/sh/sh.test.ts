@@ -126,6 +126,43 @@ describe("sh -c", () => {
   }, 20_000); // boots a whole Node runtime: ~2s alone, occasionally past 5s under full-suite load
 });
 
+describe("file descriptor redirects", () => {
+  it("2>&1 merges stderr into stdout (what `getconf ... 2>&1 || true` needs)", async () => {
+    const r = await t.sh("cat missing.txt 2>&1 || true");
+    expect(r.status).toBe(0);
+    expect(r.err).toBe("");
+    expect(r.out).toContain("missing.txt");
+  });
+
+  it("2>/dev/null discards stderr, and >&2 sends stdout to stderr", async () => {
+    const quiet = await t.sh("cat missing.txt 2>/dev/null");
+    expect(quiet.err).toBe("");
+    expect(quiet.out).toBe("");
+    const toErr = await t.sh("echo hi >&2");
+    expect(toErr).toMatchObject({ out: "", err: "hi\n" });
+  });
+
+  it("applies redirects left to right: `> f 2>&1` puts both in f, `2>&1 > f` only stdout", async () => {
+    t.fs.mkdir("/w", { recursive: true });
+    await t.sh("cat missing.txt > both.txt 2>&1", "/w");
+    expect(new TextDecoder().decode(t.fs.readFile("/w/both.txt"))).toContain("missing.txt");
+    const r = await t.sh("cat missing.txt 2>&1 > only.txt", "/w");
+    expect(r.out).toContain("missing.txt");
+    expect(new TextDecoder().decode(t.fs.readFile("/w/only.txt"))).toBe("");
+  });
+
+  it("&> and 2> write to files; a digit that isn't glued to an operator stays an argument", async () => {
+    t.fs.mkdir("/w2", { recursive: true });
+    await t.sh("echo out &> all.txt", "/w2");
+    expect(new TextDecoder().decode(t.fs.readFile("/w2/all.txt"))).toBe("out\n");
+    await t.sh("cat missing.txt 2> err.txt", "/w2");
+    expect(new TextDecoder().decode(t.fs.readFile("/w2/err.txt"))).toContain("missing.txt");
+    const r = await t.sh("echo 2 > n.txt", "/w2");
+    expect(r.status).toBe(0);
+    expect(new TextDecoder().decode(t.fs.readFile("/w2/n.txt"))).toBe("2\n");
+  });
+});
+
 describe("PATH-resolved executables (a bare name that isn't a builtin)", () => {
   it("resolves a bare name through PATH to a node-shebang script and runs it", async () => {
     t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
@@ -150,6 +187,16 @@ describe("PATH-resolved executables (a bare name that isn't a builtin)", () => {
     t.fs.writeFile("/app/tools/hello.js", "#!/usr/bin/env node\nconsole.log('direct');\n");
     const r = await t.sh("tools/hello.js", "/app");
     expect(r).toMatchObject({ status: 0, out: "direct\n" });
+  }, 20_000);
+
+  it("npx runs a locally installed bin from any ancestor node_modules/.bin, quoting its arguments", async () => {
+    t.fs.mkdir("/app/node_modules/.bin", { recursive: true });
+    t.fs.writeFile("/app/node_modules/.bin/greet", "#!/usr/bin/env node\nconsole.log(JSON.stringify(process.argv.slice(2)));\n");
+    t.fs.mkdir("/app/sub", { recursive: true });
+    const r = await t.sh("npx --yes greet 'a b' --flag", "/app/sub");
+    expect(r).toMatchObject({ status: 0, out: '["a b","--flag"]\n' });
+    const missing = await t.sh("npx ghost", "/app/sub");
+    expect(missing.status).toBe(127);
   }, 20_000);
 
   it("a name not found anywhere on PATH is still command-not-found (127)", async () => {

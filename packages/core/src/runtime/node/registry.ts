@@ -11,6 +11,7 @@ import f_assert_strict from "./lib/assert/strict.js";
 import f_async_hooks from "./lib/async_hooks.js";
 import f_buffer from "./lib/buffer.js";
 import f_child_process from "./lib/child_process.js";
+import f_constants from "./lib/constants.js";
 import f_dgram from "./lib/dgram.js";
 import f_diagnostics_channel from "./lib/diagnostics_channel.js";
 import f_events from "./lib/events.js";
@@ -159,6 +160,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "async_hooks": f_async_hooks,
   "buffer": f_buffer,
   "child_process": f_child_process,
+  "constants": f_constants,
   "dgram": f_dgram,
   "diagnostics_channel": f_diagnostics_channel,
   "events": f_events,

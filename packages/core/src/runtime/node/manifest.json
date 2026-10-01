@@ -144,6 +144,7 @@
     "internal/deps/minimatch/index": "builtin",
     "assert/strict": "builtin",
     "path/posix": "builtin",
-    "path/win32": "builtin"
+    "path/win32": "builtin",
+    "constants": "builtin"
   }
 }

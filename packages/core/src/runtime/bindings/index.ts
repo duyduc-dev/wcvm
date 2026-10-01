@@ -46,6 +46,9 @@ interface IBindingContext {
    *  trick kernel/index.ts already uses for processes/kernelSyncServer. */
   internalBinding?(name: string): any;
   loop: EventLoop;
+  /** Replaces a property on the guest's real global object - only present when the runtime owns
+   *  one (a real worker); see messaging.ts's IMessagingContext.installGlobal. */
+  installGlobal?: (name: string, value: unknown) => void;
   /** The process object, for bindings that read its environment. */
   process?: any;
   /** The sync fs client; without it the `fs` binding is unavailable. */
@@ -98,7 +101,8 @@ const factories: Record<string, BindingFactory> = {
   fs_event_wrap: (ctx) => createFsEventWrapBinding(ctx),
   http_parser: () => createHttpParserBinding(),
   locks: () => createLocksBinding(),
-  messaging: (ctx) => createMessagingBinding({ loop: ctx.loop, internalBinding: (name) => ctx.internalBinding!(name) }),
+  messaging: (ctx) =>
+    createMessagingBinding({ loop: ctx.loop, internalBinding: (name) => ctx.internalBinding!(name), installGlobal: ctx.installGlobal }),
   mksnapshot: () => createMksnapshotBinding(),
   options: () => createOptionsBinding(),
   credentials: (ctx) => createCredentialsBinding({ env: () => ctx.process?.env ?? {} }),

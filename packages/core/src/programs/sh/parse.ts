@@ -1,8 +1,10 @@
 import { ShellSyntaxError, Token, tokenize } from "./tokenize";
 
 export interface IRedirect {
-  type: ">" | ">>" | "<";
+  type: ">" | ">>" | "<" | ">&" | "&>" | "&>>";
   target: string;
+  /** The descriptor written before the operator (`2>file`); absent = stdout (or stdin for `<`). */
+  fd?: number;
 }
 export interface ISimpleCommand {
   /** words[0] is the command name. */
@@ -17,7 +19,8 @@ export interface IScript {
   parts: Array<{ op?: ";" | "&&" | "||"; pipeline: IPipeline }>;
 }
 
-const isRedirectOp = (value: string): value is IRedirect["type"] => value === ">" || value === ">>" || value === "<";
+const isRedirectOp = (value: string): value is IRedirect["type"] =>
+  value === ">" || value === ">>" || value === "<" || value === ">&" || value === "&>" || value === "&>>";
 
 /** Parses one `sh` script: `pipeline (( ; | && | || ) pipeline)*`, trailing `;` allowed. */
 export const parse = (source: string): IScript => {
@@ -42,7 +45,7 @@ export const parse = (source: string): IScript => {
         if (!target || target.type !== "word") {
           throw new ShellSyntaxError(`expected a filename after '${tok.value}'`);
         }
-        redirects.push({ type: tok.value, target: target.value });
+        redirects.push({ type: tok.value, target: target.value, ...(tok.fd !== undefined ? { fd: tok.fd } : {}) });
         pos++;
         continue;
       }

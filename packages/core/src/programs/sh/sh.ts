@@ -183,16 +183,47 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
     }
     const { program, args: programArgs } = resolution;
 
-    const outRedirect = cmd.redirects.filter((r) => r.type === ">" || r.type === ">>").at(-1) as { type: ">" | ">>"; target: string } | undefined;
     const inRedirect = cmd.redirects.filter((r) => r.type === "<").at(-1);
 
-    let captured: Uint8Array[] | undefined;
-    const stdout = (data: string | Uint8Array) => {
-      const bytes = toBytes(data);
-      if (outRedirect) (captured ??= []).push(bytes);
-      else if (index < pipes.length) pipes[index].write(bytes);
-      else ctx.stdout(bytes);
+    // Where fd 1 / fd 2 go. Redirects apply left to right like a real shell, so `>f 2>&1` sends
+    // both to f but `2>&1 >f` sends stderr to the ORIGINAL stdout. A file target is a shared sink
+    // (two fds pointing at one file write into one buffer, in call order); /dev/null is a sink
+    // that's simply never flushed.
+    type Sink = { path: string; append: boolean; chunks: Uint8Array[]; discard: boolean };
+    type Dest = "stdout" | "stderr" | Sink;
+    const sinks = new Map<string, Sink>();
+    const sinkFor = (target: string, append: boolean): Sink => {
+      const path = absolute(state.cwd, target);
+      let sink = sinks.get(path);
+      if (!sink) {
+        sink = { path, append, chunks: [], discard: path === "/dev/null" };
+        sinks.set(path, sink);
+      }
+      return sink;
     };
+    const dest: Record<number, Dest> = { 1: "stdout", 2: "stderr" };
+    for (const r of cmd.redirects) {
+      if (r.type === "<") continue;
+      if (r.type === "&>" || r.type === "&>>") {
+        dest[1] = dest[2] = sinkFor(r.target, r.type === "&>>");
+      } else if (r.type === ">&") {
+        // `>&N` duplicates fd N's destination; `>&file` (bash) means `&>file`.
+        if (/^\d+$/.test(r.target)) dest[r.fd ?? 1] = dest[Number(r.target)] ?? "stdout";
+        else dest[1] = dest[2] = sinkFor(r.target, false);
+      } else {
+        dest[r.fd ?? 1] = sinkFor(r.target, r.type === ">>");
+      }
+    }
+    const emit = (fd: 1 | 2, data: string | Uint8Array) => {
+      const target = dest[fd];
+      if (target === "stderr") ctx.stderr(data);
+      else if (target !== "stdout") {
+        if (!target.discard) target.chunks.push(toBytes(data));
+      } else if (index < pipes.length) pipes[index].write(toBytes(data));
+      else ctx.stdout(toBytes(data));
+    };
+    const stdout = (data: string | Uint8Array) => emit(1, data);
+    const stderr = (data: string | Uint8Array) => emit(2, data);
 
     let stdin: IStdinHost | undefined;
     if (inRedirect) {
@@ -215,6 +246,7 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
         cwd: state.cwd,
         stdin,
         stdout,
+        stderr,
       });
     } catch (error) {
       ctx.stderr(`sh: ${name}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -222,7 +254,9 @@ const runPipeline = async (pipeline: IPipeline, ctx: IProgramContext, state: { c
     }
 
     if (index < pipes.length) pipes[index].end();
-    if (outRedirect) writeRedirect(ctx.fs, state.cwd, outRedirect.target, outRedirect.type === ">>", concat(captured ?? []));
+    for (const sink of sinks.values()) {
+      if (!sink.discard) writeRedirect(ctx.fs, "/", sink.path, sink.append, concat(sink.chunks));
+    }
     return status;
   };
 

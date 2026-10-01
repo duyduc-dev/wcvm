@@ -1,6 +1,7 @@
 import type { IFsClient } from "../fs/fsClient";
 import { node } from "./node";
 import { createNpm } from "./npm/npm";
+import { binDirsFrom } from "./npm/runScript";
 import { sh } from "./sh/sh";
 import type { IProgramContext, Program } from "./types";
 
@@ -180,6 +181,25 @@ const npm = createNpm({
   now: () => Date.now(),
 });
 
+const shellQuote = (arg: string): string => `'${arg.replaceAll("'", `'\\''`)}'`;
+
+/** `npx [-y|--yes|--no-install|--] <command> [args...]`: runs `<command>` with every ancestor's
+ *  `node_modules/.bin` on PATH, like real npx does for a locally installed bin. Nothing is ever
+ *  downloaded - real `npm exec` (fetching and running a package that isn't installed) isn't
+ *  implemented; only `npm create` reaches the registry. Exists because tools shell out to it
+ *  (`@embroider/vite` runs `npx vite build`). */
+const npx: Program = (ctx) => {
+  const args = [...ctx.args];
+  while (args[0] === "-y" || args[0] === "--yes" || args[0] === "--no-install" || args[0] === "--no") args.shift();
+  if (args[0] === "--") args.shift();
+  if (args.length === 0) {
+    ctx.stderr("npx: missing command (wcvm's npx only runs bins already installed under node_modules/.bin)\n");
+    return 1;
+  }
+  const env = { ...ctx.env, PATH: [...binDirsFrom(ctx.cwd), ctx.env.PATH].filter(Boolean).join(":") };
+  return sh({ ...ctx, env, args: ["-c", args.map(shellQuote).join(" ")] });
+};
+
 const builtins: Record<string, Program> = {
   echo,
   pwd,
@@ -191,6 +211,7 @@ const builtins: Record<string, Program> = {
   clear,
   node,
   npm,
+  npx,
   // `sh` resolves other builtins (including itself) by name, so this module
   // and sh/sh.ts import each other. A plain `sh` property would capture
   // whatever sh/sh.ts's binding happened to be AT THIS LINE, which is

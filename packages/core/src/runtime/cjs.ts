@@ -7,6 +7,7 @@
 // `exports` (string, conditions, subpath maps and `*` patterns).
 
 import type { IFsClient } from "../fs/fsClient";
+import { EXPORTS_PARAM, IMPORT_SYNC_BRIDGE } from "./esm/syncRequire";
 
 export interface ICjsParams {
   fs: IFsClient;
@@ -20,6 +21,16 @@ export interface ICjsParams {
   /** Rewrites a module's `import(...)` calls so they resolve from `selfPath` (runtime/esm/
    *  loader.ts's rewriteScript); only ever called for source that might contain one. */
   rewriteDynamicImports?: (source: string, selfPath: string) => string;
+  /** Synchronous `require(esm)` (see runtime/esm/syncRequire.ts). Without it, requiring an ES
+   *  module fails with a SyntaxError, as it did before this existed. */
+  esmSync?: {
+    /** Extension + nearest package.json "type", the same rule `import` uses. */
+    formatOfPath(path: string): "esm" | "cjs" | "json" | "builtin";
+    /** An ESM `import` specifier resolved with the "import" conditions (not "require"). */
+    resolveImport(specifier: string, referrerDir: string): { format: "esm" | "cjs" | "json" | "builtin"; key: string };
+    /** ES module source -> a function body (see rewriteEsmForSyncRequire). */
+    transform(source: string, filename: string): string;
+  };
 }
 
 class Module {
@@ -50,7 +61,7 @@ const MODULE_EXTENSIONS = [".js", ".json"];
 // false positives (in a string or comment) just cost a parse that finds nothing to rewrite.
 const MIGHT_IMPORT = /\bimport\s*\(/;
 
-const createModuleSystem = ({ fs, path, builtins, process, globals, conditions = [], rewriteDynamicImports }: ICjsParams) => {
+const createModuleSystem = ({ fs, path, builtins, process, globals, conditions = [], rewriteDynamicImports, esmSync }: ICjsParams) => {
   const cache: Record<string, Module> = Object.create(null);
   const conditionSet = new Set(["node", "require", "module-sync", "default", ...conditions]);
   const decoder = new TextDecoder();
@@ -153,7 +164,10 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
       const prefix = candidate.slice(0, star);
       const suffix = candidate.slice(star + 1);
       if (key.startsWith(prefix) && key.length >= candidate.length && key.endsWith(suffix)) {
-        if (!best || prefix.length > best.key.indexOf("*")) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
+        // Node's PATTERN_KEY_COMPARE: the longer prefix wins; on a tie, the longer whole key
+        // (`"./src/*.js"` beats `"./src/*"`, as @embroider/macros' own exports map relies on).
+        const bestPrefix = best ? best.key.indexOf("*") : -1;
+        if (!best || prefix.length > bestPrefix || (prefix.length === bestPrefix && candidate.length > best.key.length)) best = { key: candidate, match: key.slice(prefix.length, key.length - suffix.length) };
       }
     }
     return best ? { target: map[best.key], match: best.match, isPattern: true } : undefined;
@@ -300,9 +314,73 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
 
   let mainModule: Module | undefined;
 
+  // What V8 reports when a CommonJS-compiled file turns out to be an ES module. Node 24 does the
+  // same "syntax detection" for a `.js` file with no package.json "type" to go by.
+  const ESM_SYNTAX_ERROR = /Cannot use import statement outside a module|Unexpected token 'export'|Cannot use 'import\.meta' outside a module/;
+
+  /** What `import x, { a } from "cjs-or-builtin"` sees: the whole value as `default`, plus a
+   *  snapshot of its own enumerable keys as named exports (real Node derives those statically). */
+  const namespaceOf = (value: any) => {
+    const ns: Record<string | symbol, unknown> = Object.create(null);
+    if (value !== null && (typeof value === "object" || typeof value === "function")) {
+      for (const key of Object.keys(value)) {
+        if (key === "default") continue;
+        try {
+          ns[key] = value[key];
+        } catch {
+          // a lazy getter this sandbox can't satisfy: leave the name out rather than fail them all
+        }
+      }
+    }
+    ns.default = value;
+    Object.defineProperty(ns, Symbol.toStringTag, { value: "Module" });
+    return ns;
+  };
+
+  const compileEsm = (source: string, filename: string) => {
+    const body = esmSync!.transform(source, filename);
+    const wrapper = `(function (${EXPORTS_PARAM}, ${IMPORT_SYNC_BRIDGE}${globalNames.length ? ", " : ""}${globalNames.join(", ")}) {"use strict";${body}\n})\n//# sourceURL=${filename}`;
+    try {
+      return (0, eval)(wrapper) as (...args: unknown[]) => void;
+    } catch (error) {
+      if (error instanceof SyntaxError && /\bawait\b/.test(error.message)) {
+        throw codedError("ERR_REQUIRE_ASYNC_MODULE", `require() cannot be used on an ESM graph with top-level await: ${filename}`);
+      }
+      throw error;
+    }
+  };
+
+  /** Runs `source` as an ES module, synchronously: `module.exports` becomes its namespace object. */
+  const runEsm = (module: Module, source: string, resolved: string, fn = compileEsm(source, resolved)) => {
+    const ns = Object.create(null);
+    Object.defineProperty(ns, Symbol.toStringTag, { value: "Module" });
+    module.exports = ns; // installed before evaluating, so a circular import sees the live getters
+    const importSync = (specifier: string) => {
+      const target = esmSync!.resolveImport(specifier, module.path);
+      if (target.format !== "builtin" && !isFile(target.key)) {
+        throw codedError("ERR_MODULE_NOT_FOUND", `Cannot find module '${target.key}' imported from ${module.filename} (specifier '${specifier}')`);
+      }
+      switch (target.format) {
+        case "builtin":
+          return namespaceOf(builtins.requireBuiltin(`node:${target.key}`));
+        case "esm":
+          return loadResolved(target.key, module);
+        case "json":
+          return namespaceOf(loadResolved(target.key, module));
+        default:
+          return namespaceOf(loadResolved(target.key, module));
+      }
+    };
+    fn.call(undefined, ns, importSync, ...globalValues);
+  };
+
   const load = (request: string, parent: Module | null): any => {
     const resolved = resolve(request, parent, parent ? parent.path : process.cwd());
     if (resolved.startsWith("node:")) return builtins.requireBuiltin(resolved);
+    return loadResolved(resolved, parent);
+  };
+
+  const loadResolved = (resolved: string, parent: Module | null): any => {
 
     const existing = cache[resolved];
     if (existing) {
@@ -326,16 +404,24 @@ const createModuleSystem = ({ fs, path, builtins, process, globals, conditions =
           (error as Error).message = `${resolved}: ${(error as Error).message}`;
           throw error;
         }
+      } else if (esmSync && esmSync.formatOfPath(resolved) === "esm") {
+        runEsm(module, source, resolved);
       } else {
-        compile(source, resolved).call(
-          module.exports,
-          module.exports,
-          makeRequire(module),
-          module,
-          resolved,
-          module.path,
-          ...globalValues,
-        );
+        // Compile first, run second: only a SyntaxError from compiling can mean "this was really
+        // an ES module" - one thrown while RUNNING it came from a dependency, and retrying would
+        // execute the module twice.
+        let fn: (...args: unknown[]) => void;
+        try {
+          fn = compile(source, resolved);
+        } catch (error) {
+          if (esmSync && error instanceof SyntaxError && ESM_SYNTAX_ERROR.test(error.message)) {
+            runEsm(module, source, resolved);
+            module.loaded = true;
+            return module.exports;
+          }
+          throw error;
+        }
+        fn.call(module.exports, module.exports, makeRequire(module), module, resolved, module.path, ...globalValues);
       }
     } catch (error) {
       delete cache[resolved];

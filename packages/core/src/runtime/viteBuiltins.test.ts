@@ -200,3 +200,13 @@ describe("builtins Vite needs", () => {
     expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "true false\ntrue false true true true\n" }));
   });
 });
+
+describe("constants (deprecated umbrella module - graceful-fs requires it at load)", () => {
+  it("merges the os and fs constants like Node's own lib/constants.js", async () => {
+    const result = await run(
+      "const c = require('constants'); console.log(c.O_RDONLY, c.ENOENT, c.SIGINT, c.RTLD_LAZY, c.PRIORITY_LOW, c.S_IFMT === require('fs').constants.S_IFMT);",
+    );
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe("0 2 2 1 19 true");
+  });
+});

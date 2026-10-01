@@ -17,6 +17,9 @@ import type { AnyNode } from "./ast";
 export interface IReference {
   start: number;
   end: number;
+  /** The reference is a shorthand property (`{ x }`): a replacement must keep the key, i.e. be
+   *  written `x: <expr>`, not just `<expr>` (which would be a syntax error inside the braces). */
+  shorthand?: boolean;
 }
 
 const collectPatternNames = (node: AnyNode | null | undefined, into: string[]): void => {
@@ -137,6 +140,9 @@ export const freeReferences = (program: AnyNode, targetNames: Set<string>): IRef
       collectBlockScoped((fn.body as AnyNode).body as AnyNode[], names);
     }
     scopes.push(names);
+    // Parameter DEFAULTS (`function f(x = target())`, `({ a = target() }) => ...`) are evaluated in
+    // the parameter scope - real references to outer bindings, which the walk used to skip.
+    for (const param of fn.params as AnyNode[]) visitPatternDefaults(param);
     if ((fn.body as AnyNode).type === "BlockStatement") for (const stmt of (fn.body as AnyNode).body as AnyNode[]) visit(stmt);
     else visit(fn.body as AnyNode); // a concise arrow body is an expression, not a block
     scopes.pop();
@@ -181,7 +187,13 @@ export const freeReferences = (program: AnyNode, targetNames: Set<string>): IRef
         // is not. Shorthand (`{ x }`) has `key` and `value` as the SAME reference - visiting
         // `value` alone already covers it once.
         if (node.computed) visit(node.key as AnyNode);
-        if (node.value) visit(node.value as AnyNode);
+        const value = node.value as AnyNode | undefined;
+        if (node.shorthand && value?.type === "Identifier") {
+          const name = value.name as string;
+          if (targetNames.has(name) && !scopes.isShadowed(name)) refs.push({ start: value.start, end: value.end, shorthand: true });
+          return;
+        }
+        if (value) visit(value);
         return;
       }
 
