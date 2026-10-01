@@ -422,8 +422,9 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
 
 ## Loose ends worth knowing
 
-- `.github/workflows/deploy-docs.yml` builds `apps/docs`, which does not exist in this tree (it will
-  fail on push). `PUBLISHING.md` is outdated (still says `duckwc`).
+- Publishing: `PUBLISHING.md` is current (package `wcvm`; first releases go out under the `next` dist-tag). The two
+  old GitHub workflows (docs deploy, GitHub Packages mirror) were removed - they targeted `duckwc` and files that do not
+  exist. The licence is ISC (`LICENSE`), with Node's MIT licence shipped as `packages/core/THIRD_PARTY_LICENSES.node.txt`.
 - The process worker bundle is ~1.94 MB (acorn added real weight for ESM parsing, `zlib.js` and
   `worker_threads`'s own vendored modules some more) and every process parses it, even `echo`;
   split `node` into its own worker entry if startup cost matters.
