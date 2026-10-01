@@ -3915,13 +3915,12 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
     fromBackend("express-ts", "Express (TypeScript, tsc then node)"),
     fromBackend("nestjs", "NestJS (tsc then node)"),
     fromFullstack("astro", "Astro", 4321, "To get started, open the", "/api/hello.json", "Hello from Astro"),
-    fromFullstack("sveltekit", "SvelteKit", 5173, "Welcome to SvelteKit", "/api/hello", "Hello from SvelteKit"),
     {
       // `sv create`'s demo template: the home page, About, and the Sverdle game (server-rendered, with form actions).
-      title: "SvelteKit (demo app)",
-      files: [...FULLSTACK_RECIPES["sveltekit-demo"].files, ...SVELTEKIT_DEMO_FILES],
+      title: "SvelteKit",
+      files: [...FULLSTACK_RECIPES.sveltekit.files, ...SVELTEKIT_DEMO_FILES],
       binary: SVELTEKIT_DEMO_BINARY,
-      pkg: buildFullstackPackageJson(FULLSTACK_RECIPES["sveltekit-demo"], "sveltekit-demo"),
+      pkg: buildFullstackPackageJson(FULLSTACK_RECIPES.sveltekit, "sveltekit"),
       port: 5173,
       home: { contains: "to your new" },
       page: { path: "/about", contains: "About this app" },

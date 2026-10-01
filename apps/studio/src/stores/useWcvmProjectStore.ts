@@ -70,7 +70,7 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
                           ? await createAngularTemplateProject(input, onProgress)
                           : type === "express" || type === "express-ts" || type === "nestjs"
                             ? await createBackendTemplateProject(input, type, onProgress)
-                            : type === "nextjs" || type === "nextjs-ts" || type === "sveltekit" || type === "sveltekit-demo" || type === "react-router" || type === "astro"
+                            : type === "nextjs" || type === "nextjs-ts" || type === "sveltekit" || type === "react-router" || type === "astro"
                               ? await createFullstackTemplateProject(input, type, onProgress)
                               : await createViteTemplateProject(input, type, onProgress);
 
