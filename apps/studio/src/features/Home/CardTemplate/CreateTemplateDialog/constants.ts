@@ -282,6 +282,13 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     category: "Fullstack",
   },
   {
+    id: "sveltekit-demo",
+    label: "SvelteKit",
+    description: "Demo app (TypeScript)",
+    icon: SvelteLogoIcon,
+    category: "Fullstack",
+  },
+  {
     id: "react-router",
     label: "React Router 7",
     description: "TypeScript",

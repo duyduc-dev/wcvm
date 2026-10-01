@@ -4,6 +4,7 @@ import { ANGULAR_FILES, ANGULAR_PACKAGE_JSON, ANGULAR_POST_INSTALL_FILES } from 
 import { buildEmberFiles, buildEmberPackageJson } from "../../../apps/studio/src/services/wcvm/templateProjects/emberRecipe";
 import { BACKEND_RECIPES, type BackendKind } from "../../../apps/studio/src/services/wcvm/templateProjects/backendRecipes";
 import { buildFullstackPackageJson, FULLSTACK_RECIPES, type FullstackKind } from "../../../apps/studio/src/services/wcvm/templateProjects/fullstackRecipes";
+import { SVELTEKIT_DEMO_BINARY, SVELTEKIT_DEMO_FILES } from "../../../apps/studio/src/services/wcvm/templateProjects/svelteKitDemoStarter";
 
 type WcWindow = Window & { wc: import("wcvm").IWcvm; wcvmBoot: typeof import("wcvm").boot };
 
@@ -3877,6 +3878,8 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
   interface ICase {
     title: string;
     files: [string, string][];
+    /** Base64 files (images). */
+    binary?: [string, string][];
     pkg: Record<string, unknown>;
     links?: { path: string; target: string }[];
     port: number;
@@ -3913,6 +3916,17 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
     fromBackend("nestjs", "NestJS (tsc then node)"),
     fromFullstack("astro", "Astro", 4321, "To get started, open the", "/api/hello.json", "Hello from Astro"),
     fromFullstack("sveltekit", "SvelteKit", 5173, "Welcome to SvelteKit", "/api/hello", "Hello from SvelteKit"),
+    {
+      // `sv create`'s demo template: the home page, About, and the Sverdle game (server-rendered, with form actions).
+      title: "SvelteKit (demo app)",
+      files: [...FULLSTACK_RECIPES["sveltekit-demo"].files, ...SVELTEKIT_DEMO_FILES],
+      binary: SVELTEKIT_DEMO_BINARY,
+      pkg: buildFullstackPackageJson(FULLSTACK_RECIPES["sveltekit-demo"], "sveltekit-demo"),
+      port: 5173,
+      home: { contains: "to your new" },
+      page: { path: "/about", contains: "About this app" },
+      api: { path: "/sverdle", contains: "Sverdle" },
+    },
     fromFullstack("react-router", "React Router 7", 5173, "React Router", "/api/hello", "Hello from React Router"),
     fromFullstack("nextjs-ts", "Next.js (TypeScript)", 3000, "To get started, edit the", "/api/hello", "Hello from Next.js"),
   ];
@@ -3924,7 +3938,7 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
 
       await page.click("#preview-enable");
       await page.evaluate(
-        async ({ files, pkg, links }) => {
+        async ({ files, binary, pkg, links }) => {
           const { fs } = (window as unknown as WcWindow).wc;
           await fs.mkdir("/tmp", { recursive: true });
           for (const [relative, contents] of files) {
@@ -3932,11 +3946,16 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
             await fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
             await fs.writeFile(target, contents);
           }
+          for (const [relative, base64] of binary) {
+            const target = `/app/${relative}`;
+            await fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+            await fs.writeFile(target, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+          }
           await fs.writeFile("/app/package.json", JSON.stringify(pkg, null, 2));
           // Kept for the install step below.
           (window as unknown as { __links: typeof links }).__links = links;
         },
-        { files: c.files, pkg: c.pkg, links: c.links },
+        { files: c.files, binary: c.binary ?? [], pkg: c.pkg, links: c.links },
       );
 
       const install = await spawn(page, "npm", ["install"], "/app");

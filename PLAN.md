@@ -118,6 +118,12 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
   uncontrolled (hard reload, bypass for network) used to stay uncontrolled and its preview iframe fell through to
   the host's own dev server. An id in the preview URL would be exact, but recipes read `/__wcvm_preview__/<port>/`
   to compute their base path, so the URL shape is left alone.
+- SvelteKit has a second Studio template (2026-10-01): the `sv create` "demo" app (styled home page, counter, About,
+  the Sverdle game with form actions), verbatim from the scaffolder (`svelteKitDemoStarter.ts`, loaded on demand;
+  the PNG fallback is left out). Verified with an opt-in Playwright test (`/`, `/about`, `/sverdle`). Studio's editor
+  also shows TypeScript's type on hover in Vue/Svelte `<script>` blocks and for the script bindings used in a
+  template (`templates/hover.ts`, over the hidden shadow models); bindings created inside the markup
+  (`{#each ... as item}`) get no hover yet.
 - Angular 22 and Ember (JS + TS) run as Studio templates (2026-10-01; see HISTORY.md "Ember" and
   "Angular"). Capabilities that came with them: `sh` file-descriptor redirects (`2>&1`, `>&2`, `&>`,
   `2>/dev/null`, applied left to right), `process.versions.webcontainer` (what `@angular/build`/Piscina

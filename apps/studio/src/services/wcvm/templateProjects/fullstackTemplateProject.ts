@@ -34,6 +34,19 @@ const createFullstackTemplateProject = async (
     await wc.fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
     await wc.fs.writeFile(target, contents);
   }
+  if (recipe.lazyFiles) {
+    const { files, binary } = await recipe.lazyFiles();
+    for (const [relative, contents] of files) {
+      const target = `${projectPath}/${relative}`;
+      await wc.fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+      await wc.fs.writeFile(target, contents);
+    }
+    for (const [relative, base64] of binary) {
+      const target = `${projectPath}/${relative}`;
+      await wc.fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
+      await wc.fs.writeFile(target, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+    }
+  }
   const name = projectPath.split("/").at(-1)!;
   await wc.fs.writeFile(`${projectPath}/package.json`, `${JSON.stringify(buildFullstackPackageJson(recipe, name), null, 2)}\n`);
 
