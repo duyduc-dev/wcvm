@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestLoader } from "../testing";
 import { parseModule } from "./ast";
-import { CYCLE_EXPORTS_BRIDGE, rewriteCyclicModule } from "./cyclic";
+import { CYCLE_EXPORTS_BRIDGE, CYCLE_READY_BRIDGE, rewriteCyclicModule } from "./cyclic";
 
 const acorn = createTestLoader().require("internal/deps/acorn/acorn/dist/acorn");
 
@@ -63,16 +63,34 @@ describe("rewriteCyclicModule - shape", () => {
     expect(out).toContain(`const outer = __wcvm_cyc_0__["a"];`);
   });
 
-  it("a local re-export of a cyclic-imported name (export { a, b } with no source) is dropped and re-exported via the registry getter instead - real @tanstack/router-core shape", () => {
+  it("a local re-export of a cyclic-imported name is a NATIVE export filled in by the ready bridge, and keeps its non-cyclic neighbours as plain exports - real @tanstack/router-core and astro shapes", () => {
     // isServer/server.js's own real shape: imports a cyclic name, then re-exports it BARE
     // alongside a genuinely local const in the SAME statement - a real SyntaxError otherwise
     // ("Export 'loadServerRoute' is not defined in module"), since the import that used to
-    // declare it is gone.
+    // declare it is gone. A module OUTSIDE the cycle importing this one natively also needs the
+    // names to really exist as exports (astro/runtime/server/index.js came out with none).
     const source = `import { loadServerRoute } from './load-server.js';\nconst isServer = true;\nexport { isServer, loadServerRoute };\n`;
     const out = rewrite(source, new Set(["./load-server.js"]), "/isServer/server.js");
-    expect(out).not.toMatch(/export\s*\{/); // the whole statement is gone, not patched in place
+    expect(out).toContain("export { isServer };"); // not cyclic: untouched
+    expect(out).toContain("let __wcvm_re_0__; export { __wcvm_re_0__ as loadServerRoute };");
+    expect(out).toContain(`${CYCLE_READY_BRIDGE}("./load-server.js", "loadServerRoute", (value) => { __wcvm_re_0__ = value; });`);
+    // Siblings still read every name live through the registry.
     expect(out).toContain(`["isServer"]: { get() { return isServer; }, enumerable: true },`);
     expect(out).toContain(`["loadServerRoute"]: { get() { return __wcvm_cyc_0__["loadServerRoute"]; }, enumerable: true },`);
+  });
+
+  it("keeps the exported name when it differs from the local one, including `as default` and a string name", () => {
+    const source = `import { a, b } from './sibling.js';\nexport { a as default, b as "the b" };\n`;
+    const out = rewrite(source, new Set(["./sibling.js"]), "/self.mjs");
+    expect(out).toContain("export { __wcvm_re_0__ as default };");
+    expect(out).toContain('export { __wcvm_re_1__ as "the b" };');
+  });
+
+  it("re-exports a cyclic NAMESPACE import by assigning the bridge object itself", () => {
+    const source = `import * as ns from './sibling.js';\nexport { ns };\n`;
+    const out = rewrite(source, new Set(["./sibling.js"]), "/self.mjs");
+    expect(out).toContain("let __wcvm_re_0__; export { __wcvm_re_0__ as ns };");
+    expect(out).toContain("__wcvm_re_0__ = __wcvm_cyc_0__;");
   });
 
   it("a default export that's just a bare identifier re-exports live too, if that identifier is a cyclic import", () => {
@@ -185,5 +203,66 @@ describe("rewriteCyclicModule - real execution (the actual point of all this)", 
 
     expect(core.globalConfig.installed).toBe(true);
     expect(util.readCount()).toBe(9);
+  });
+
+  it("a cycle member's native re-export of a sibling's name ends up holding the sibling's real value, whichever runs first", () => {
+    const registries = new Map<string, Record<string, unknown>>();
+    const waiting: { key: string; prop: string; assign: (v: unknown) => void }[] = [];
+    const bridge = (key: string) => {
+      let registry = registries.get(key);
+      if (!registry) registries.set(key, (registry = {}));
+      return registry;
+    };
+    const ready = (key: string, prop: string, assign: (v: unknown) => void) => {
+      const registry = bridge(key);
+      if (prop in registry) assign(registry[prop]);
+      else waiting.push({ key, prop, assign });
+    };
+    // What the loader's Proxy does when a sibling's `Object.defineProperties` lands.
+    const flush = () => {
+      for (const w of waiting.splice(0)) {
+        const registry = bridge(w.key);
+        if (w.prop in registry) w.assign(registry[w.prop]);
+        else waiting.push(w);
+      }
+    };
+    const run = (rewritten: string) => {
+      const body = rewritten
+        .replaceAll(`${CYCLE_EXPORTS_BRIDGE}(`, "__bridge(")
+        .replaceAll(`${CYCLE_READY_BRIDGE}(`, "__ready(")
+        .replace(/export \{[^}]*\};?/g, "") // `export {}` is module syntax; the slot itself is what is checked
+        .replace(/^(\s*)export const /gm, "$1var ")
+        .replace(/^(\s*)export function /gm, "$1function ");
+      return new Function("__bridge", "__ready", `${body}\nreturn exportsForTest();`)(bridge, ready);
+    };
+
+    // index.js re-exports `createComponent` from its cycle sibling component.js.
+    const indexSource = `
+      import { createComponent } from './component.js';
+      export const other = 1;
+      export { createComponent };
+      function exportsForTest() { return { slot: () => __wcvm_re_0__ }; }
+    `;
+    const componentSource = `
+      import { other } from './index.js';
+      export function createComponent() { return 'made'; }
+      export const readOther = () => other;
+      function exportsForTest() { return {}; }
+    `;
+    const indexOut = rewrite(indexSource, new Map([["./component.js", "/component.js"]]), "/index.js");
+    const componentOut = rewrite(componentSource, new Map([["./index.js", "/index.js"]]), "/component.js");
+
+    // Order 1: the re-exporting module runs first - the slot is empty until the sibling finishes.
+    const first = run(indexOut);
+    expect(first.slot()).toBeUndefined();
+    run(componentOut);
+    flush();
+    expect(first.slot()()).toBe("made");
+
+    // Order 2 (fresh registries): the sibling is already finished when the re-exporter runs.
+    registries.clear();
+    run(componentOut);
+    const second = run(indexOut);
+    expect(second.slot()()).toBe("made");
   });
 });

@@ -205,6 +205,18 @@ test.describe("node", () => {
     expect(r).toEqual({ code: 0, out: "hello 2 [ 1, { a: 2 } ]\n", err: "" });
   });
 
+  test("guest code does not see the Worker globals real Node lacks (prismjs treated it as a web worker)", async ({ page }) => {
+    // prismjs's own check - `typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope`
+    // - was true in a process worker, so it registered a `message` listener that JSON.parses every
+    // message the kernel posts (objects) and threw an uncaught SyntaxError.
+    const r = await spawn(page, "node", ["-e", `
+      console.log(typeof WorkerGlobalScope, typeof DedicatedWorkerGlobalScope);
+      const prismLikeIsWorker = typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+      console.log(prismLikeIsWorker);
+    `]);
+    expect(r).toEqual({ code: 0, out: "undefined undefined\nfalse\n", err: "" });
+  });
+
   test("runs a script that requires other files and modules from node_modules", async ({ page }) => {
     await writeFiles(page, {
       "/app/main.js": `

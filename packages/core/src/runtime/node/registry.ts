@@ -11,6 +11,7 @@ import f_assert_strict from "./lib/assert/strict.js";
 import f_async_hooks from "./lib/async_hooks.js";
 import f_buffer from "./lib/buffer.js";
 import f_child_process from "./lib/child_process.js";
+import f_console from "./lib/console.js";
 import f_constants from "./lib/constants.js";
 import f_dgram from "./lib/dgram.js";
 import f_diagnostics_channel from "./lib/diagnostics_channel.js";
@@ -131,12 +132,15 @@ import f_path_posix from "./lib/path/posix.js";
 import f_path_win32 from "./lib/path/win32.js";
 import f_perf_hooks from "./lib/perf_hooks.js";
 import f_process from "./lib/process.js";
+import f_punycode from "./lib/punycode.js";
 import f_querystring from "./lib/querystring.js";
 import f_readline from "./lib/readline.js";
 import f_readline_promises from "./lib/readline/promises.js";
 import f_stream from "./lib/stream.js";
+import f_stream_consumers from "./lib/stream/consumers.js";
 import f_stream_promises from "./lib/stream/promises.js";
 import f_string_decoder from "./lib/string_decoder.js";
+import f_sys from "./lib/sys.js";
 import f_timers from "./lib/timers.js";
 import f_timers_promises from "./lib/timers/promises.js";
 import f_tty from "./lib/tty.js";
@@ -160,6 +164,7 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "async_hooks": f_async_hooks,
   "buffer": f_buffer,
   "child_process": f_child_process,
+  "console": f_console,
   "constants": f_constants,
   "dgram": f_dgram,
   "diagnostics_channel": f_diagnostics_channel,
@@ -279,12 +284,15 @@ export const builtinFactories: Record<string, BuiltinFactory> = {
   "path/win32": f_path_win32,
   "perf_hooks": f_perf_hooks,
   "process": f_process,
+  "punycode": f_punycode,
   "querystring": f_querystring,
   "readline": f_readline,
   "readline/promises": f_readline_promises,
   "stream": f_stream,
+  "stream/consumers": f_stream_consumers,
   "stream/promises": f_stream_promises,
   "string_decoder": f_string_decoder,
+  "sys": f_sys,
   "timers": f_timers,
   "timers/promises": f_timers_promises,
   "tty": f_tty,

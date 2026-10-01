@@ -186,4 +186,18 @@ describe("accepted connections (server side)", () => {
     expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "listening\nstill listening: true\n", stderr: "" }));
     expect(fake.unlistens).toEqual([]);
   });
+
+  it("process.exit() inside a socket 'close' listener ends the process with that code (it used to escape as an uncaught worker error)", async () => {
+    const fake = createFakeNet();
+    fake.host.connect = (ticket) => {
+      fake.emit({ type: "connectResult", ticket, ok: true, connId: 9 });
+      setTimeout(() => fake.emit({ type: "close", connId: 9 }), 5);
+    };
+    const r = await runScript(
+      { "/main.js": "const net = require('net'); const s = net.connect(3000); s.on('close', () => { console.log('closed'); process.exit(3); }); s.on('error', () => {});" },
+      "/main.js",
+      { childProcess: noopChildProcessHost, net: fake.host },
+    );
+    expect(r).toEqual(expect.objectContaining({ code: 3, stdout: "closed\n" }));
+  });
 });

@@ -121,6 +121,29 @@ describe("builtins Vite needs", () => {
     expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "443 https: true 0 0\n" + "ERR_NO_CRYPTO\n".repeat(5) }));
   });
 
+  it("http2 exports Http2ServerRequest/Http2ServerResponse by name (Astro's node adapter imports them)", async () => {
+    const r = await run(`
+      const http2 = require("http2");
+      const { Readable, Stream } = require("stream");
+      console.log(typeof http2.Http2ServerRequest, typeof http2.Http2ServerResponse, http2.Http2ServerRequest.prototype instanceof Readable, http2.Http2ServerResponse.prototype instanceof Stream);
+    `);
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "function function true true\n" }));
+  });
+
+  it("stream/web is the platform's own web streams, and stream/consumers, punycode, sys and console load", async () => {
+    const r = await run(`
+      const web = require("stream/web");
+      console.log(web.ReadableStream === globalThis.ReadableStream, web.TransformStream === TransformStream, Object.keys(web).length >= 15);
+      const { text, json, buffer } = require("stream/consumers");
+      const { Readable } = require("stream");
+      (async () => {
+        console.log(await text(Readable.from(["a", "b"])), JSON.stringify(await json(Readable.from(['{"x":', "1}"]))), (await buffer(Readable.from([Buffer.from("hi")]))).toString());
+        console.log(require("punycode").toASCII("mañana.com"), require("sys") === require("util"), typeof require("console").log);
+      })();
+    `);
+    expect(r).toEqual(expect.objectContaining({ code: 0, stdout: "true true true\nab {\"x\":1} hi\nxn--maana-pta.com true function\n" }));
+  });
+
   it("dns.promises and dns/promises answer lookups in the promise API's own shape", async () => {
     const r = await run(`
       const dns = require("dns");
@@ -157,13 +180,58 @@ describe("builtins Vite needs", () => {
     );
   });
 
-  it("inspector fails to load like a Node built without it", async () => {
+  it("v8 reports heap statistics in real Node's shape and accepts the no-op flag calls", async () => {
     const r = await run(`
-      for (const id of ["inspector", "node:inspector/promises"]) {
-        try { require(id); } catch (e) { console.log(e.code); }
-      }
+      const v8 = require("v8");
+      const s = v8.getHeapStatistics();
+      console.log(Object.keys(s).length, typeof s.used_heap_size, s.heap_size_limit > 0, s.total_available_size >= 0);
+      console.log(v8.getHeapSpaceStatistics().length, Object.keys(v8.getHeapCodeStatistics()).length, v8.cachedDataVersionTag(), v8.setFlagsFromString("--x"));
+      try { v8.writeHeapSnapshot(); } catch (e) { console.log(e.code); }
     `);
-    expect(r.stdout).toBe("ERR_INSPECTOR_NOT_AVAILABLE\nERR_INSPECTOR_NOT_AVAILABLE\n");
+    expect(r.stdout).toBe("14 number true true\n0 4 0 undefined\nERR_METHOD_NOT_IMPLEMENTED\n");
+  });
+
+  it("inspector loads with no debugger attached; anything needing a real inspector fails with ERR_INSPECTOR_NOT_AVAILABLE", async () => {
+    // Next.js does `require("node:inspector")` unguarded and asks `url()` (undefined = nothing attached).
+    const r = await run(`
+      const inspector = require("node:inspector");
+      const promises = require("node:inspector/promises");
+      console.log(inspector.url(), typeof inspector.Session, typeof inspector.console.log, promises.Session !== inspector.Session);
+      for (const attempt of [() => inspector.open(), () => inspector.waitForDebugger(), () => new inspector.Session().connect()]) {
+        try { attempt(); console.log("no error"); } catch (e) { console.log(e.code); }
+      }
+      try { new inspector.Session().post("Runtime.enable"); } catch (e) { console.log(e.code); }
+      new promises.Session().post("Runtime.enable").catch((e) => console.log("promise", e.code));
+    `);
+    expect(r.stdout).toBe(
+      "undefined function function true\n" + "ERR_INSPECTOR_NOT_AVAILABLE\n".repeat(3) + "ERR_INSPECTOR_NOT_CONNECTED\npromise ERR_INSPECTOR_NOT_CONNECTED\n",
+    );
+  });
+
+  it("vm contexts run code with the sandbox as its scope - what webpack's magic-comment parser and Next's sandboxes need", async () => {
+    const r = await run(`
+      const vm = require("vm");
+      // webpack: vm.createContext(undefined, opts) once, then runInContext for each \`webpackChunkName\` comment.
+      const magic = vm.createContext(undefined, { name: "Webpack Magic Comment Parser", codeGeneration: { strings: false, wasm: false } });
+      console.log(vm.isContext(magic), vm.isContext({}), JSON.stringify(vm.runInContext('(function(){return {webpackChunkName: "x", webpackPrefetch: true};})()', magic)));
+      const box = vm.createContext({ a: 2, out: [] });
+      console.log(vm.runInContext("a * 21", box), vm.runInContext("out.push(a); typeof JSON + typeof Array", box), box.out);
+      console.log(new vm.Script("a + 1", { filename: "s.js" }).runInContext(box), vm.runInNewContext("x + y", { x: 1, y: 2 }));
+      console.log(vm.runInThisContext("1 + 1"), vm.compileFunction("return a + b", ["a", "b"])(3, 4), typeof new vm.Script("1").createCachedData().length);
+      try { vm.runInContext("1", {}); } catch (e) { console.log(e.code); }
+      // Next's manifest files: they write to \`globalThis\` and the caller reads the sandbox back.
+      const manifest = {};
+      vm.runInNewContext('globalThis.__RSC_MANIFEST = globalThis.__RSC_MANIFEST || {}; globalThis.__RSC_MANIFEST["/page"] = { ok: 1 }; this.viaThis = 2;', manifest);
+      console.log(JSON.stringify(manifest), typeof __RSC_MANIFEST);
+    `);
+    expect(r.stdout).toBe(
+      'true false {"webpackChunkName":"x","webpackPrefetch":true}\n' +
+        "42 objectfunction [ 2 ]\n" +
+        "3 3\n" +
+        "2 7 number\n" +
+        "ERR_INVALID_ARG_TYPE\n" +
+        '{"__RSC_MANIFEST":{"/page":{"ok":1}},"viaThis":2} undefined\n',
+    );
   });
 
   it("vm.runInThisContext runs code in the real global scope only, like an indirect eval - what jiti (Vite's own vite.config.ts loader) actually calls", async () => {

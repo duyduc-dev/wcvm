@@ -50,7 +50,7 @@ export const createModuleBuiltin = (ctx: IModuleBuiltinContext) => {
     createRequire: (filename: unknown) => modules.createRequire(toPath(filename)),
     _cache: modules.cache,
     _pathCache: Object.create(null),
-    _extensions: Object.assign(Object.create(null), { ".js": notSupported("_extensions['.js']"), ".json": notSupported("_extensions['.json']"), ".node": notSupported("_extensions['.node']") }),
+    _extensions: modules.extensions,
     globalPaths: [],
     _nodeModulePaths: (from: string) => modules.nodeModulesPaths(from),
     _resolveFilename: (request: string, parent?: { path?: string } | null) => {

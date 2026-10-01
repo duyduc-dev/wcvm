@@ -1721,3 +1721,87 @@ Verified in real Chromium against the real registry: install (~30s), `ng serve` 
 - **Icons**: `fileIcon/` - framework brand marks plus labelled badges, exact file names before extensions.
 - Also: Studio's preview tab reloads when its port listens again (Angular's port check bound and
   released 4200 before the real server started, so the tab opened on a dead port).
+
+## Fullstack templates: what they needed from the runtime (2026-10-01)
+
+Bringing SvelteKit, React Router 7 and Astro to Studio's picker exposed four real gaps (each reproduced
+in real Chromium against the real registry first, then fixed at the cause rather than worked around):
+
+1. **`AsyncLocalStorage`** (`runtime/asyncContext.ts`). `new AsyncLocalStorage()` died in
+   `internal/promise_hooks` (not vendored; it drives V8 PromiseHooks, which a Worker doesn't have). That
+   one constructor call is made at startup by `@nestjs/cli` (via `@inquirer/core`), SvelteKit's dev server,
+   Next.js, React Router and Nuxt. Replaced `internal/async_local_storage/async_hooks` (the vendored copy is
+   now unused) and added an inert `internal/promise_hooks`. The store is held for the whole `run()` - for
+   an async callback, until its promise settles (a raw `await` resumes through a reaction nothing in JS can
+   observe) - and `Promise#then`, `queueMicrotask`, `process.nextTick`, timers and `setImmediate` capture
+   every live store when scheduled. Two honest limits, both shared with vivari: ONE current value per
+   instance, not per async chain (two overlapping `run()`s can see each other's store - fine for a dev
+   server handling a request at a time); and the OUTERMOST `run()` leaves its store in place afterwards
+   (a nested one restores its parent), because a streaming render returns from `run()` as soon as the
+   stream exists and keeps rendering detached - restoring "no store" there made Next.js throw "Expected
+   workUnitAsyncStorage to have a store". `getStore()` outside a run therefore answers with the latest
+   request's store, not `undefined`; `disable()` clears it. `process.nextTick` is patched on the `process` the loader hands the
+   module, which is not necessarily `globalThis.process`.
+2. **Cyclic ESM, local re-exports** (`runtime/esm/cyclic.ts`, `loader.ts`). `export { createComponent }`
+   of a binding imported from a sibling in the same cycle was deleted from the rewritten module (the
+   import it named is gone), so a module OUTSIDE the cycle importing it natively found no export at all -
+   `astro/runtime/server/index.js` came out with an EMPTY namespace ("does not provide an export named
+   'createComponent'"). Each such name is now a real native `let slot; export { slot as name }`, filled in
+   by a new `__wcvm_cycle_ready__` bridge the moment the sibling's registry has the value (a one-time
+   copy, not a live binding). A waiter whose getter reads yet another unfinished sibling throws, so it
+   stays queued and is retried after the next install (found by running Astro, not by the unit test).
+3. **`node:http2` named exports.** Astro's node adapter does `import { Http2ServerResponse } from
+   "node:http2"`; an ESM named import of a missing export is a link-time SyntaxError. The shim now exports
+   `Http2ServerRequest`/`Http2ServerResponse`.
+4. **`WorkerGlobalScope` is hidden from guest code** (`runtime.ts`). Real Node has none; a process worker's
+   global does, so libraries sniffing it believed they were in a web worker. prismjs (Astro's markdown
+   pipeline) then added a `message` listener that `JSON.parse`s every message - and the kernel posts this
+   worker object messages: an uncaught `"[object Object]" is not valid JSON` that killed `astro dev` and
+   `astro sync` before they printed a line. Chromium-only (Vitest's `globalObject` is never `self`).
+
+Studio notes: Astro 7 needs Vite 8 (Rolldown, no WASM build here) - Astro 6 (`^6.4`, vite ^7) is the
+version that runs. React Router's client router must be told the preview prefix at runtime
+(`window.__reactRouterContext.basename`, set in `app/entry.client.tsx`), exactly like the TanStack Router
+template; SvelteKit needs nothing (its dev HTML derives `base` from `location`).
+
+Next.js 16 (webpack + WASM SWC) added more, each found by running it and reading the real error:
+
+5. **`require.extensions` / `Module._extensions`** (`runtime/cjs.ts`). `next dev` died on
+   `require.extensions['.js']` ("Cannot read properties of undefined") - the hook Next's `next.config.ts`
+   loader, ts-node, @babel/register and esbuild-register all register transpilers through. The loader
+   now dispatches through a real handler table (`.js`, `.json`, `.node` defaults; resolution tries every
+   registered extension; the longest registered extension wins), and each module gets a `_compile` that
+   hooks wrap. `.node` now fails with `ERR_DLOPEN_FAILED` instead of being run as JavaScript.
+6. **More public builtins.** `stream/consumers`, `punycode`, `sys` and `console` are vendored verbatim;
+   `stream/web` is the platform's own classes (Node's version is a second implementation behind
+   `internal/webstreams/*`, so `require("stream/web").ReadableStream` would not equal the global one).
+7. **`stdio: "inherit"` for async `spawn`/`fork`** (`bindings/childProcess.ts`). The child's output was
+   silently dropped - `next dev` forks its server that way, so it just exited with no message at all.
+   A child's fd 1/2 inherited (or given as bare fd numbers) now forwards to the parent's own stdout/stderr.
+8. **`inspector` loads** (`shims.ts`). It threw on require like a Node built `--without-inspector`; Next
+   requires it unguarded and asks `inspector.url()` (undefined = no debugger). `open`/`waitForDebugger`/
+   `Session#connect` still throw `ERR_INSPECTOR_NOT_AVAILABLE`.
+9. **`v8`** gained the commonly used surface (`getHeapStatistics` from `performance.memory`, heap
+   space/code statistics, `setFlagsFromString` no-op, `cachedDataVersionTag`, ...).
+10. **`vm` contexts.** webpack evaluates `/* webpackChunkName */` comments with `vm.createContext` +
+    `runInContext`. A real separate V8 context is impossible in a Worker; sandbox properties become the
+    code's scope (`with` + a Proxy), `globalThis`/`this` are the sandbox (Next's manifests do
+    `globalThis.__RSC_MANIFEST = ...` and read it off the sandbox), anything else falls through to this
+    realm - so no `instanceof` isolation. Also `Script#runInContext`, `runInNewContext`, `compileFunction`.
+11. **`internal/webstreams/adapters`** (`runtime/webStreamAdapters.ts`): `Readable/Writable/Duplex
+    .fromWeb/.toWeb` over the platform's streams. Next calls `Readable.toWeb(req)` for every request; the
+    missing module destroyed every page response before a byte was written (the log still said `GET / 200`).
+12. **Errors that used to vanish.** A process worker now writes an uncaught glue-level error to its own
+    stderr (it was a nameless `null` on the host page); a socket/pipe `close` callback runs through the
+    event loop so `process.exit()` in a `'close'` listener exits instead of escaping.
+
+How it was found (worth repeating): `next dev` printed nothing and exited 1. Fixing `stdio: "inherit"`
+first made the child's real errors visible, one after another. Then `GET / 200` with zero bytes on the wire:
+tracing `http.ServerResponse`/`net.Socket` from the forked child (a tracer `require`d first by patching
+`start-server.js`, appending to a file synchronously) showed `res.destroy(err)` with err = the missing
+adapters module. Patching `pipe-readable.js` instead showed nothing for pages: the app-page runtime
+bundles its own copy.
+
+Studio notes: Next needs `node_modules/next/wasm/@next/swc-wasm-nodejs` (what `next dev` falls back to
+"downloading"; wcvm's npm never runs `postinstall`, so the template creation links it from the installed
+`@next/swc-wasm-nodejs` - a symlink, not a 30 MB copy). The first page request compiles for ~15-25 s.

@@ -155,4 +155,45 @@ describe("child_process over a fake kernel host", () => {
     expect(written).toBe("hello world");
     expect(fake.stdinEnds).toEqual([childPid]);
   });
+
+  it('stdio: "inherit" forwards the child\'s stdout and stderr to the parent\'s own (they used to vanish)', async () => {
+    const fake = createFakeHost();
+    fake.onSpawn((childPid) => {
+      fake.emit({ type: "data", childPid, stream: "stdout", chunk: new TextEncoder().encode("child out\n") });
+      fake.emit({ type: "data", childPid, stream: "stderr", chunk: new TextEncoder().encode("child err\n") });
+      fake.emit({ type: "exit", childPid, exitCode: 0 });
+    });
+    const r = await run(
+      `
+      const { spawn } = require("child_process");
+      const child = spawn("x", [], { stdio: "inherit" });
+      console.log("stdout is", child.stdout, "stderr is", child.stderr);
+      child.on("exit", (code) => console.log("exit", code));
+      `,
+      fake.host,
+    );
+    expect(r.stdout).toBe("stdout is null stderr is null\nchild out\nexit 0\n");
+    expect(r.stderr).toBe("child err\n");
+  });
+
+  it("a bare fd number inherits the same way, and an explicit pipe still captures instead", async () => {
+    const fake = createFakeHost();
+    fake.onSpawn((childPid) => {
+      fake.emit({ type: "data", childPid, stream: "stdout", chunk: new TextEncoder().encode("A") });
+      fake.emit({ type: "data", childPid, stream: "stderr", chunk: new TextEncoder().encode("B") });
+      fake.emit({ type: "exit", childPid, exitCode: 0 });
+    });
+    const r = await run(
+      `
+      const { spawn } = require("child_process");
+      // [stdin pipe, stdout -> parent's stdout (fd 1), stderr piped]
+      const child = spawn("x", [], { stdio: ["pipe", 1, "pipe"] });
+      let captured = "";
+      child.stderr.on("data", (c) => { captured += c; });
+      child.on("exit", () => console.log("|captured", captured));
+      `,
+      fake.host,
+    );
+    expect(r.stdout).toBe("A|captured B\n");
+  });
 });
