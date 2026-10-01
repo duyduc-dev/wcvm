@@ -1,9 +1,12 @@
 import type { IKernelBridge } from "../bridges/kernel";
 import {
   PREVIEW_PATH_PREFIX,
+  type IPreviewClaimMessage,
   type IPreviewFetchMessage,
   type IPreviewFetchReply,
   type IPreviewFetchResult,
+  type IPreviewProbeMessage,
+  type IPreviewProbeReply,
   type IPreviewWebSocketOpen,
   type IPreviewWebSocketRequest,
   type PreviewWebSocketCommand,
@@ -73,11 +76,27 @@ const createPreviewWebSocketRelay = (kernelBridge: IKernelBridge) => {
   return { handleMessage };
 };
 
+/** The virtual ports this page's own guest servers currently listen on - what a preview probe from
+ *  the Service Worker is answered with (see IPreviewProbeMessage). */
+const trackListeningPorts = (kernelBridge: IKernelBridge): { has: (port: number) => boolean } => {
+  const ports = new Set<number>();
+  kernelBridge.on("net:listen", (m) => ports.add(m.port as number));
+  kernelBridge.on("net:unlisten", (m) => ports.delete(m.port as number));
+  return { has: (port) => ports.has(port) };
+};
+
 const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   let enabled: Promise<void> | undefined;
   const webSockets = createPreviewWebSocketRelay(kernelBridge);
+  const listeningPorts = trackListeningPorts(kernelBridge);
 
   const handleMessage = (event: MessageEvent) => {
+    const probe = event.data as IPreviewProbeMessage | null;
+    if (probe?.type === "wcvm:previewProbe") {
+      const reply: IPreviewProbeReply = { type: "wcvm:previewProbeResult", requestId: probe.requestId, listening: listeningPorts.has(probe.port) };
+      (event.source as ServiceWorker | null)?.postMessage(reply);
+      return;
+    }
     const message = event.data as IPreviewFetchMessage | null;
     if (!message || message.type !== "wcvm:previewFetch") return;
     const source = event.source as ServiceWorker | null;
@@ -104,16 +123,23 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   const enable = (): Promise<void> => {
     if (!enabled) {
       enabled = (async () => {
-        await navigator.serviceWorker.register(new URL("workers/preview/PreviewServiceWorker.js", import.meta.url), { scope: "/" });
-        await navigator.serviceWorker.ready;
+        const registration = await navigator.serviceWorker.register(new URL("workers/preview/PreviewServiceWorker.js", import.meta.url), { scope: "/" });
+        const ready = await navigator.serviceWorker.ready;
         // A registration that's already active+claiming from an earlier page load leaves
         // `controller` set immediately - only wait for the event when it isn't, or a page whose
         // preview worker was already installed would hang here forever waiting for an event that
         // (correctly) never fires again.
         if (!navigator.serviceWorker.controller) {
-          await new Promise<void>((resolve) => {
+          const controlled = new Promise<void>((resolve) => {
             navigator.serviceWorker.addEventListener("controllerchange", () => resolve(), { once: true });
           });
+          // A freshly installed worker claims this page itself when it activates. One that was
+          // already active will not do so again, so a page that loaded without being controlled
+          // (a hard reload, "Bypass for network") has to ask - otherwise it stays uncontrolled
+          // forever and every preview iframe falls through to the host's own server.
+          const claim: IPreviewClaimMessage = { type: "wcvm:previewClaim" };
+          (ready.active ?? registration.active)?.postMessage(claim);
+          await controlled;
         }
         navigator.serviceWorker.addEventListener("message", handleMessage);
         // Every previewed HTML document is served by the Service Worker registered above, which
@@ -139,4 +165,4 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   return { enable, url, onListen };
 };
 
-export { createPreviewApi, createPreviewWebSocketRelay };
+export { createPreviewApi, createPreviewWebSocketRelay, trackListeningPorts };

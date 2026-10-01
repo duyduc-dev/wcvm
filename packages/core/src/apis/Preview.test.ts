@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IKernelBridge } from "../bridges/kernel";
 import type { Handler, KernelMessage } from "../bridges/models";
-import { createPreviewApi, createPreviewWebSocketRelay } from "./Preview";
+import { createPreviewApi, createPreviewWebSocketRelay, trackListeningPorts } from "./Preview";
 
 /** A fake kernelBridge with just enough of `on()` to drive onListen: real handler storage and
  *  dispatch, so unsubscribing actually stops future events (unlike a bare vi.fn() would catch). */
@@ -169,5 +169,20 @@ describe("createPreviewApi", () => {
       a.page.close();
       b.page.close();
     });
+  });
+});
+
+describe("trackListeningPorts", () => {
+  it("knows which ports have a guest server listening right now", () => {
+    const { bridge, emit } = createFakeKernelBridge();
+    const ports = trackListeningPorts(bridge);
+    expect(ports.has(3000)).toBe(false);
+
+    emit({ type: "net:listen", pid: 1, port: 3000 });
+    expect(ports.has(3000)).toBe(true);
+    expect(ports.has(3001)).toBe(false);
+
+    emit({ type: "net:unlisten", pid: 1, port: 3000 });
+    expect(ports.has(3000)).toBe(false);
   });
 });

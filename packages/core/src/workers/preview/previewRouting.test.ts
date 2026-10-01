@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewPortOf, routePreviewRequest, type IRoutableRequest, type PreviewClientPorts } from "./previewRouting";
+import { chooseHost, previewPortOf, routePreviewRequest, type IHostCandidate, type IRoutableRequest, type PreviewClientPorts } from "./previewRouting";
 
 const ORIGIN = "http://localhost:4173";
 
@@ -91,5 +91,40 @@ describe("routePreviewRequest", () => {
     });
     // A fetch() of the same bare URL is just relayed - only a document's own base URL matters.
     expect(routePreviewRequest(request({ url: `${ORIGIN}/__wcvm_preview__/3000` }), ORIGIN, ports)).toEqual({ kind: "guest", port: 3000, path: "/" });
+  });
+});
+
+describe("chooseHost", () => {
+  const host = (client: string, overrides: Partial<IHostCandidate<string>> = {}): IHostCandidate<string> => ({
+    client,
+    listening: false,
+    visible: false,
+    focused: false,
+    ...overrides,
+  });
+
+  it("picks the only page that has a server on the port, even when another is focused", () => {
+    // The reported bug: the first/focused tab has nothing on :3000, the other tab runs the server.
+    expect(chooseHost([host("a", { visible: true, focused: true }), host("b", { listening: true })])).toBe("b");
+  });
+
+  it("among several that listen, prefers the focused one, then a visible one, then the first", () => {
+    expect(chooseHost([host("a", { listening: true }), host("b", { listening: true, visible: true, focused: true })])).toBe("b");
+    expect(chooseHost([host("a", { listening: true }), host("b", { listening: true, visible: true })])).toBe("b");
+    expect(chooseHost([host("a", { listening: true }), host("b", { listening: true })])).toBe("a");
+    expect(chooseHost([host("a", { listening: true, visible: true }), host("b", { listening: true, focused: true })])).toBe("b");
+  });
+
+  it("ignores focus and visibility of pages that are not listening when another one is", () => {
+    expect(chooseHost([host("a", { visible: true, focused: true }), host("b", { listening: true }), host("c", { listening: true, visible: true })])).toBe("c");
+  });
+
+  it("when nobody listens, still picks one (the guest's own ECONNREFUSED comes back), the visible one first", () => {
+    expect(chooseHost([host("a"), host("b", { visible: true })])).toBe("b");
+    expect(chooseHost([host("a"), host("b")])).toBe("a");
+  });
+
+  it("has nothing to choose from no pages", () => {
+    expect(chooseHost([])).toBeUndefined();
   });
 });
