@@ -383,7 +383,19 @@ export class IdeController {
       // OPTIMIZE_CHUNKS=false skips the one production step that needs the native `rolldown`.
       env: { FORCE_COLOR: "3", JOBS: "1", NG_BUILD_BABEL_LINKER: "true", NG_BUILD_OPTIMIZE_CHUNKS: "false" },
     });
-    const handle = createShellTerminal(process, this.snap.isDark, () => this.markTerminalDead(id));
+    const handle = createShellTerminal(process, this.snap.isDark, () => this.markTerminalDead(id), {
+      cwd: this.snap.rootPath,
+      listDir: async (dir) => {
+        const fs = this.wc.fs;
+        const names = await fs.readdir(dir);
+        return Promise.all(
+          names.map(async (name) => ({
+            name,
+            isDir: await fs.stat(`${dir === "/" ? "" : dir}/${name}`).then((s) => s.kind === "dir", () => false),
+          })),
+        );
+      },
+    });
     this.terminals.set(id, handle);
     const entry = { id, label: shellTerminalLabel(this.terminalCount), alive: true };
     this.set({
