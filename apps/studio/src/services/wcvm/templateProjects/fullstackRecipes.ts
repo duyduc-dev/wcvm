@@ -31,12 +31,15 @@ import {
 } from "./fullstackStarters";
 import { pinVitePackage } from "./vitePins";
 
-export type FullstackKind = "nextjs" | "nextjs-ts" | "sveltekit" | "react-router" | "astro";
+export type FullstackKind = "nextjs" | "nextjs-ts" | "sveltekit" | "sveltekit-demo" | "react-router" | "astro";
 
 export interface IFullstackRecipe {
   /** Shown in the progress message. */
   label: string;
   files: [path: string, contents: string][];
+  /** More files, loaded on demand because they are big (the SvelteKit demo's images and word list).
+   *  `binary` is base64. Written after `files`, so these win a path collision. */
+  lazyFiles?: () => Promise<{ files: [path: string, contents: string][]; binary: [path: string, base64: string][] }>;
   /** `name` is filled in with the project's own name. */
   packageJson: Record<string, unknown>;
   /** Applies the shared Vite 7 / WASM pins to the package.json. */
@@ -323,6 +326,46 @@ export function GET() {
   ],
 };
 
+// The `sv create` "demo" template (a styled home page with a counter, About, and the Sverdle game with form
+// actions): the same project config as the minimal recipe above, with the demo's own files (loaded on demand,
+// svelteKitDemoStarter.ts) in place of the minimal home page and `/demo`.
+const sveltekitDemo: IFullstackRecipe = {
+  label: "SvelteKit (demo app)",
+  vitePins: true,
+  installHint: "under a minute",
+  packageJson: {
+    ...sveltekit.packageJson,
+    devDependencies: {
+      ...(sveltekit.packageJson.devDependencies as Record<string, string>),
+      "@fontsource/fira-mono": "^5.2.7",
+      "@neoconfetti/svelte": "^2.2.2",
+    },
+  },
+  files: [
+    ...sveltekit.files.filter(([path]) =>
+      ["vite.config.ts", "tsconfig.json", ".gitignore"].includes(path),
+    ),
+    [
+      "svelte.config.js",
+      `import adapter from "@sveltejs/adapter-auto";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+
+export default {
+  preprocess: vitePreprocess(),
+  // Force runes mode for the project, except for libraries (the real template does this in vite.config).
+  compilerOptions: { runes: ({ filename }) => (filename.split(/[/\\\\]/).includes("node_modules") ? undefined : true) },
+  kit: { adapter: adapter() },
+};
+`,
+    ],
+    ["README.md", readme("SvelteKit (demo app)", "The `sv create` demo template: a home page with a counter, an About page and the Sverdle word game (server-side form actions). Edit `src/routes/+page.svelte` and save.")],
+  ],
+  lazyFiles: async () => {
+    const { SVELTEKIT_DEMO_BINARY, SVELTEKIT_DEMO_FILES } = await import("./svelteKitDemoStarter");
+    return { files: SVELTEKIT_DEMO_FILES, binary: SVELTEKIT_DEMO_BINARY };
+  },
+};
+
 // ── React Router 7 (framework mode) ───────────────────────────────────────
 
 const reactRouter: IFullstackRecipe = {
@@ -527,6 +570,7 @@ export const FULLSTACK_RECIPES: Record<FullstackKind, IFullstackRecipe> = {
   nextjs: nextRecipe(false),
   "nextjs-ts": nextRecipe(true),
   sveltekit,
+  "sveltekit-demo": sveltekitDemo,
   "react-router": reactRouter,
   astro,
 };
