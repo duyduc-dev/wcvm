@@ -1,6 +1,6 @@
 # wcvm - context for a fresh session
 
-Read this first, then `PLAN.md` (roadmap + known differences), `HISTORY.md` (detailed
+Read this first, then `ARCHITECTURE.md` (how the pieces fit, with diagrams), `PLAN.md` (roadmap + known differences), `HISTORY.md` (detailed
 per-feature implementation history and postmortems - this file only keeps a short inventory),
 and `AGENTS.md` (conventions).
 An older implementation (`duckwc`) once lived here; its notes (`PROGRESS.md`) were removed but are in
