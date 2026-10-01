@@ -20,6 +20,19 @@ export const setProjectContext = (next: IProjectContext | null): void => {
 };
 export const getProjectContext = (): IProjectContext | null => context;
 
+/** Single-file components (not TS-service sources, so they get no background model) - kept as a
+ * path list so a template can offer them as auto-importable tags. */
+export const COMPONENT_EXTENSIONS = new Set(["vue", "svelte"]);
+let componentFiles: string[] = [];
+export const getComponentFiles = (): readonly string[] => componentFiles;
+
+const componentListeners = new Set<() => void>();
+/** Fires after a project sync changed the set of `.vue` / `.svelte` files. */
+export const onComponentFilesChange = (cb: () => void): (() => void) => {
+  componentListeners.add(cb);
+  return () => componentListeners.delete(cb);
+};
+
 export const SOURCE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]);
 const SKIPPED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".turbo", "coverage"]);
 const MAX_SOURCE_FILES = 1500;
@@ -30,7 +43,7 @@ export const isProjectSource = (path: string): boolean =>
   context != null &&
   path.startsWith(context.rootPath + "/") &&
   !path.includes("/node_modules/") &&
-  SOURCE_EXTENSIONS.has(extensionOf(path));
+  (SOURCE_EXTENSIONS.has(extensionOf(path)) || COMPONENT_EXTENSIONS.has(extensionOf(path)));
 
 export function configureTypescript(monaco: typeof Monaco): void {
   const ts = monaco.typescript;
@@ -87,8 +100,9 @@ export const invalidateSyncedPath = (path: string): void => {
   syncedMtime.delete(path);
 };
 
-async function listSources(fs: IFs, root: string): Promise<ISourceFile[]> {
+async function listSources(fs: IFs, root: string): Promise<{ sources: ISourceFile[]; components: string[] }> {
   const out: ISourceFile[] = [];
+  const components: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     if (out.length >= MAX_SOURCE_FILES) return;
     let names: string[];
@@ -104,8 +118,14 @@ async function listSources(fs: IFs, root: string): Promise<ISourceFile[]> {
         try {
           const info = await fs.stat(path);
           if (info.kind === "dir") await walk(path);
-          else if (info.kind === "file" && SOURCE_EXTENSIONS.has(extensionOf(path)) && info.size <= MAX_SOURCE_BYTES) {
+          else if (
+            info.kind === "file" &&
+            (SOURCE_EXTENSIONS.has(extensionOf(path)) || COMPONENT_EXTENSIONS.has(extensionOf(path))) &&
+            info.size <= MAX_SOURCE_BYTES
+          ) {
             out.push({ path, mtimeMs: info.mtimeMs });
+            // `.vue` / `.svelte` also get a (background) model - go-to-definition needs a model to land in.
+            if (COMPONENT_EXTENSIONS.has(extensionOf(path))) components.push(path);
           }
         } catch {
           /* removed mid-listing */
@@ -114,7 +134,7 @@ async function listSources(fs: IFs, root: string): Promise<ISourceFile[]> {
     );
   };
   await walk(root);
-  return out;
+  return { sources: out, components };
 }
 
 let sourceSync: Promise<void> | null = null;
@@ -126,7 +146,11 @@ export function syncProjectModels(monaco: typeof Monaco, openPaths: ReadonlySet<
   const run = async (): Promise<void> => {
     if (!context) return;
     const { fs, rootPath } = context;
-    const files = await listSources(fs, rootPath);
+    const { sources: files, components } = await listSources(fs, rootPath);
+    const sorted = components.sort();
+    const componentsChanged = sorted.join("\n") !== componentFiles.join("\n");
+    componentFiles = sorted;
+    if (componentsChanged) for (const cb of componentListeners) cb();
     const wanted = new Set(files.map((f) => f.path));
     let changed = false;
 
@@ -191,6 +215,18 @@ interface IPackageJson {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
 }
+
+/** Direct dependencies that ship (or have @types for) typings - the packages whose exports can be
+ * auto-imported. `typingsVersion` bumps whenever that set (or their typings) was reloaded. */
+let typedPackages: string[] = [];
+let typingsVersion = 0;
+export const getTypedPackages = (): readonly string[] => typedPackages;
+export const getTypingsVersion = (): number => typingsVersion;
+const typingsListeners = new Set<() => void>();
+export const onTypingsChange = (cb: () => void): (() => void) => {
+  typingsListeners.add(cb);
+  return () => typingsListeners.delete(cb);
+};
 
 let typingsSignature = "";
 let typingLibs: Monaco.IDisposable[] = [];
@@ -294,16 +330,22 @@ export async function syncDependencyTypings(monaco: typeof Monaco): Promise<void
   };
 
   const direct = Object.keys({ ...rootPkg.dependencies, ...rootPkg.devDependencies });
+  const typed: string[] = [];
   for (const name of direct) {
     if (name.startsWith("@types/")) {
       await loadPackage(name);
       continue;
     }
     const hasOwn = await loadPackage(name);
-    if (!hasOwn) await loadPackage(`@types/${name.startsWith("@") ? name.slice(1).replace("/", "__") : name}`);
+    if (hasOwn || (await loadPackage(`@types/${name.startsWith("@") ? name.slice(1).replace("/", "__") : name}`))) {
+      typed.push(name);
+    }
   }
 
   for (const old of typingLibs) old.dispose();
   typingLibs = libs;
+  typedPackages = typed;
+  typingsVersion++;
+  for (const cb of typingsListeners) cb();
   if (libs.length > 0) refreshDiagnostics(monaco);
 }

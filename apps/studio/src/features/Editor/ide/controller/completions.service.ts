@@ -1,6 +1,7 @@
 import type * as Monaco from "monaco-editor";
-import { basename, dirname } from "./fs.service";
-import { getProjectContext, isProjectSource } from "./typescript.service";
+import { basename, dirname, extensionOf } from "./fs.service";
+import { getPackageExports, warmPackageExports } from "./packageExports.service";
+import { COMPONENT_EXTENSIONS, getProjectContext, isProjectSource, onTypingsChange } from "./typescript.service";
 
 // Monaco's TypeScript worker answers completions without the "include exports from other modules"
 // preference, so it never suggests a symbol that still needs importing. This provider adds them:
@@ -70,10 +71,12 @@ function exportsOf(monaco: typeof Monaco, model: Monaco.editor.ITextModel): IExp
   return out;
 }
 
-/** `./utils`, `../lib/format` - extension and `/index` dropped, always with a leading `./` or `../`. */
-export function relativeSpecifier(fromFile: string, toFile: string): string {
+/** `./utils`, `../lib/format` - extension and `/index` dropped (unless `keepExtension`, which
+ * `.vue`/`.svelte` imports need), always with a leading `./` or `../`. */
+export function relativeSpecifier(fromFile: string, toFile: string, keepExtension = false): string {
   const from = dirname(fromFile).split("/").filter(Boolean);
-  const to = toFile.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/, "").replace(/\/index$/, "").split("/").filter(Boolean);
+  const target = keepExtension ? toFile : toFile.replace(/\.(?:[cm]?[jt]s|[jt]sx)$/, "").replace(/\/index$/, "");
+  const to = target.split("/").filter(Boolean);
   let common = 0;
   while (common < from.length && common < to.length && from[common] === to[common]) common++;
   const ups = from.length - common;
@@ -148,11 +151,33 @@ const SNIPPETS: { label: string; detail: string; body: string }[] = [
   { label: "prom", detail: "new Promise", body: "new Promise((resolve, reject) => {\n\t$0\n})" },
 ];
 
+const packageKind = (K: typeof Monaco.languages.CompletionItemKind, tsKind: string): Monaco.languages.CompletionItemKind => {
+  switch (tsKind) {
+    case "function":
+      return K.Function;
+    case "class":
+      return K.Class;
+    case "interface":
+    case "type":
+      return K.Interface;
+    case "enum":
+      return K.Enum;
+    case "module":
+    case "alias":
+      return K.Module;
+    default:
+      return K.Variable;
+  }
+};
+
 export function registerProjectCompletions(monaco: typeof Monaco): void {
   const { CompletionItemKind: K, CompletionItemInsertTextRule } = monaco.languages;
+  // Read the dependencies' exports in the background as soon as their typings are (re)loaded, so
+  // the first completion doesn't have to wait for them.
+  onTypingsChange(() => void warmPackageExports(monaco).catch(() => {}));
 
   monaco.languages.registerCompletionItemProvider(LANGUAGES, {
-    provideCompletionItems(model, position) {
+    async provideCompletionItems(model, position) {
       const word = model.getWordUntilPosition(position);
       const range = {
         startLineNumber: position.lineNumber,
@@ -184,7 +209,7 @@ export function registerProjectCompletions(monaco: typeof Monaco): void {
 
       for (const other of monaco.editor.getModels()) {
         const path = other.uri.path;
-        if (other === model || other.uri.scheme !== "file" || !isProjectSource(path) || /\.d\.[cm]?ts$/.test(path)) continue;
+        if (other === model || other.uri.scheme !== "file" || !isProjectSource(path) || COMPONENT_EXTENSIONS.has(extensionOf(path)) || /\.d\.[cm]?ts$/.test(path)) continue;
         const spec = relativeSpecifier(here, path);
         for (const exp of exportsOf(monaco, other)) {
           if (count >= MAX_AUTO_IMPORTS) break;
@@ -202,8 +227,31 @@ export function registerProjectCompletions(monaco: typeof Monaco): void {
           });
         }
       }
+
+      // Exports of installed packages (`OnInit`, `useState`, ...) - at least two characters typed,
+      // since a package like @angular/core exports hundreds of names.
+      if (word.word.length >= 2) {
+        const lower = word.word.toLowerCase();
+        let packageCount = 0;
+        const taken = new Set(suggestions.map((s) => (typeof s.label === "string" ? s.label : s.label.label)));
+        for (const [pkg, names] of await getPackageExports(monaco)) {
+          for (const exp of names) {
+            if (packageCount >= MAX_AUTO_IMPORTS) break;
+            if (!exp.name.toLowerCase().startsWith(lower) || taken.has(exp.name) || isBound(text, exp.name)) continue;
+            packageCount++;
+            suggestions.push({
+              label: { label: exp.name, description: pkg },
+              kind: packageKind(K, exp.kind),
+              detail: `Auto import from "${pkg}"`,
+              insertText: exp.name,
+              range,
+              sortText: "zz" + exp.name,
+              additionalTextEdits: [importEdit(model, pkg, exp.name, false)],
+            });
+          }
+        }
+      }
       return { suggestions };
     },
   });
-
 }
