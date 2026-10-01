@@ -457,14 +457,29 @@ const mirrorFile = async (ensureDirCached: (dirPath: string) => Promise<IOpfsDir
   await writable.close();
 };
 
+const isLocked = (error: unknown): boolean => (error as { name?: string } | null)?.name === "NoModificationAllowedError";
+
+// An entry OPFS refuses to remove while a writer holds it open: one of OUR OWN in-flight writes to
+// a file under it (the mirror serializes writes per path, but removing a directory and writing a
+// file inside it are different paths - a dev server rewriting `.next/dev/logs/*.log` while
+// `rm -rf .next` runs), or another tab of the same origin writing the same file. The writer is
+// short-lived, so waiting briefly and trying again nearly always works; only a lock that outlasts
+// all of the waits below is reported.
+const REMOVE_RETRY_DELAYS_MS = [25, 50, 100, 200, 400];
+
 const removeMirrored = async (root: IOpfsDirHandle, path: string): Promise<void> => {
   const { dir, name } = splitPath(path);
   const dirHandle = await findDir(root, dir);
   if (!dirHandle) return;
-  try {
-    await dirHandle.removeEntry(name, { recursive: true });
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await dirHandle.removeEntry(name, { recursive: true });
+      return;
+    } catch (error) {
+      if (isNotFound(error)) return;
+      if (!isLocked(error) || attempt >= REMOVE_RETRY_DELAYS_MS.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, REMOVE_RETRY_DELAYS_MS[attempt]));
+    }
   }
 };
 
