@@ -21,7 +21,7 @@ const CACHE_ROOT = "/home/user/.template-cache";
 // recipe file(s) does. (5: the Ember recipe's package.json name became fixed - a clone made before
 // that failed to resolve its own `ember-app/*` imports; 6: Ember got a Vite-style starter page and a
 // TypeScript variant.)
-const CACHE_SCHEMA_VERSION = 6;
+const CACHE_SCHEMA_VERSION = 8;
 
 /** A tiny non-cryptographic string hash (FNV-1a) - this keys a local cache, not a security
  *  boundary, so deterministic + low collision risk for a handful of short config strings is all

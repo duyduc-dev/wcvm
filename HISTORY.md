@@ -1827,3 +1827,24 @@ Studio notes: Next needs `node_modules/next/wasm/@next/swc-wasm-nodejs` (what `n
   recipes)` in `examples/playground/e2e/boot.spec.ts` (opt-in, `WCVM_E2E_VITE=1`: install, start, GET the page
   and the endpoint through the relay). Creation takes ~13-45 s, a cached clone is much faster; Next.js's first
   page takes 15-30 s more.
+- **Real starters** (`fullstackStarters.ts`: what each scaffolder writes with its DEFAULT options - create-next-app,
+  `sv create` minimal, Astro `basics`, create-react-router's default): `/` is the framework's own starter, so a new
+  project opens on the page its documentation shows. The recipes add `/demo` (server-rendered text, a counter that
+  must hydrate, a call to a server endpoint). Two adaptations: React Router's Tailwind utilities became plain CSS
+  (same look, no Tailwind to install), and Next.js's `next/font/google` layout was replaced by a CSS `@import` of
+  Geist - the build-time font download did not take effect here and left `var(--font-geist-sans)` unset, so the
+  whole page fell back to the browser's serif default. The recipes' `fetch` is `api/hello`, relative: from
+  `/demo` under the preview prefix `../api/hello` resolves one level too high.
+- **`.astro` highlighting** (`languages.ts`): a `---` fenced TypeScript frontmatter as the file's first thing,
+  then HTML with `{expressions}` (TypeScript) and `<script>`/`<style>`. The frontmatter fence is a separate start
+  state that `switchTo`s the HTML grammar, so a `---` line later in the markup is plain text. Monaco loads the
+  embedded grammars on demand, so tokenizing a string before any TypeScript/CSS model exists shows no tokens -
+  not a bug in the grammar (found while testing it).
+- **Starter fidelity check**: the first version copied files from each repo's `main`, and Next.js was visibly
+  different - `create-next-app`'s DEFAULT is the Tailwind template (`app-tw`), not the CSS-modules one in the
+  repo's `templates/app`. Compare against the real thing, not the repo: run the scaffolder (`NODE_USE_ENV_PROXY=1`
+  makes Node's `fetch` honour the sandbox proxy; `create-astro` refuses to run without DNS, so its template is
+  fetched from the `latest` ref it uses), install, run both dev servers and screenshot at one viewport. React
+  Router and Astro came out pixel-identical; Next.js did not until it used the Tailwind template. Tailwind itself
+  is not installed in the recipe: `app/globals.css` holds the CSS Tailwind compiles for the starter's own classes
+  (taken from the real dev server's output), so classes the user adds later are not generated.

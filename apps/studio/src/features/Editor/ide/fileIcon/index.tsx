@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   AngularLogoIcon,
+  AstroLogoIcon,
   EmberLogoIcon,
   ReactLogoIcon,
   SvelteLogoIcon,
@@ -29,6 +30,7 @@ const BRAND_ICONS: Record<IBrand["brand"], React.ComponentType<{ size?: number }
   react: ReactLogoIcon,
   vue: VueLogoIcon,
   svelte: SvelteLogoIcon,
+  astro: AstroLogoIcon,
   ember: EmberLogoIcon,
   angular: AngularLogoIcon,
   tailwind: TailwindLogoIcon,

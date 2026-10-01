@@ -11,7 +11,7 @@ export interface IBadge {
 /** A brand mark from the template picker (React, Vue, Svelte, Ember, Angular...). */
 export interface IBrand {
   kind: "brand";
-  brand: "react" | "vue" | "svelte" | "ember" | "angular" | "tailwind";
+  brand: "react" | "vue" | "svelte" | "astro" | "ember" | "angular" | "tailwind";
 }
 
 export type IFileIconSpec = IBadge | IBrand;
@@ -68,6 +68,7 @@ export const ICON_BY_EXTENSION: Record<string, IFileIconSpec> = {
   log: badge("LOG", "#6b7280"),
   vue: brand("vue"),
   svelte: brand("svelte"),
+  astro: brand("astro"),
   // Ember: component/template files
   gjs: brand("ember"),
   gts: brand("ember"),

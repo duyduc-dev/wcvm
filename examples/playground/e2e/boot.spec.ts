@@ -3797,6 +3797,8 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
     pkg: Record<string, unknown>;
     links?: { path: string; target: string }[];
     port: number;
+    /** The framework's own starter, on `/`. */
+    home?: { contains: string };
     page: { path: string; contains: string };
     api: { path: string; contains: string };
     /** Output that means the dev server is up (the first request of Next.js takes ~20s more to compile). */
@@ -3810,13 +3812,15 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
     page: { path: "/", contains: "This server is running entirely in your browser" },
     api: { path: "/api/hello", contains: "Hello, world!" },
   });
-  const fromFullstack = (kind: FullstackKind, title: string, port: number, contains: string, apiPath: string, apiContains: string): ICase => ({
+  const fromFullstack = (kind: FullstackKind, title: string, port: number, home: string, apiPath: string, apiContains: string): ICase => ({
     title,
     files: FULLSTACK_RECIPES[kind].files,
     pkg: buildFullstackPackageJson(FULLSTACK_RECIPES[kind], kind),
     links: FULLSTACK_RECIPES[kind].links,
     port,
-    page: { path: "/", contains },
+    home: { contains: home },
+    // `/demo` is what the recipe adds: server-rendered text (a counter and a fetch live there too).
+    page: { path: "/demo", contains: "Rendered on" },
     api: { path: apiPath, contains: apiContains },
   });
 
@@ -3824,10 +3828,10 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
     fromBackend("express", "Express (JavaScript)"),
     fromBackend("express-ts", "Express (TypeScript, tsc then node)"),
     fromBackend("nestjs", "NestJS (tsc then node)"),
-    fromFullstack("astro", "Astro", 4321, "Rendered on", "/api/hello.json", "Hello from Astro"),
-    fromFullstack("sveltekit", "SvelteKit", 5173, "Rendered on", "/api/hello", "Hello from SvelteKit"),
-    fromFullstack("react-router", "React Router 7", 5173, "Rendered on", "/api/hello", "Hello from React Router"),
-    fromFullstack("nextjs-ts", "Next.js (TypeScript)", 3000, "Rendered on", "/api/hello", "Hello from Next.js"),
+    fromFullstack("astro", "Astro", 4321, "To get started, open the", "/api/hello.json", "Hello from Astro"),
+    fromFullstack("sveltekit", "SvelteKit", 5173, "Welcome to SvelteKit", "/api/hello", "Hello from SvelteKit"),
+    fromFullstack("react-router", "React Router 7", 5173, "React Router", "/api/hello", "Hello from React Router"),
+    fromFullstack("nextjs-ts", "Next.js (TypeScript)", 3000, "To get started, edit the", "/api/hello", "Hello from Next.js"),
   ];
 
   for (const c of cases) {
@@ -3892,7 +3896,7 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
           async ({ port, path }) => {
             try {
               const response = await fetch((window as unknown as WcWindow).wc.preview.url(port, path));
-              return { status: response.status, body: (await response.text()).slice(0, 4000) };
+              return { status: response.status, body: (await response.text()).slice(0, 200_000) };
             } catch (error) {
               return { status: 0, body: String(error) };
             }
@@ -3904,6 +3908,7 @@ test.describe("Backend and fullstack templates (Studio recipes)", () => {
         .poll(async () => (await get(c.page.path)).body, { timeout: 300_000, intervals: [3_000] })
         .toContain(c.page.contains);
       expect((await get(c.page.path)).status).toBe(200);
+      if (c.home) expect((await get("/")).body).toContain(c.home.contains);
       await expect.poll(async () => (await get(c.api.path)).body, { timeout: 120_000, intervals: [3_000] }).toContain(c.api.contains);
 
       await page.evaluate(async () => {

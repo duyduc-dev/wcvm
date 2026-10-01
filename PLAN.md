@@ -101,7 +101,8 @@ Done: Phases 0-5. `boot()` returns `{ spawn, fs, diagnostics, ready }`.
 - Studio's Fullstack templates (2026-10-01): Next.js 16 (TS, JS; webpack + the WebAssembly SWC), SvelteKit,
   React Router 7 (framework mode) and Astro 6 run in the preview iframe - server-rendered HTML, hydration, a
   server endpoint, client-side navigation - verified by hand through Studio and by opt-in Playwright tests
-  (`WCVM_E2E_VITE=1`). Known differences / limits: the first Next.js page compiles for 15-30 s; Next's
+  (`WCVM_E2E_VITE=1`). Their home pages are the frameworks' own default starters (Next.js is the Tailwind
+  template, with the compiled CSS inlined - Tailwind itself isn't installed). Known differences / limits: the first Next.js page compiles for 15-30 s; Next's
   `AsyncLocalStorage` is the one-current-value-per-instance polyfill (one request at a time); `vm` contexts are
   emulated with `with` + a Proxy (no `instanceof` isolation, `var` at the top level is not a sandbox property);
   Astro must be 6.x and Nuxt 4 is out (both Vite 8). **Nuxt 3** installs but `nuxt dev` stops at `oxc-parser`:
