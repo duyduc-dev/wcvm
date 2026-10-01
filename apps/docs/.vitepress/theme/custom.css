@@ -1,0 +1,25 @@
+/* wcvm brand: violet. */
+:root {
+  --vp-c-brand-1: #5236e0;
+  --vp-c-brand-2: #6a52f0;
+  --vp-c-brand-3: #7c68ff;
+  --vp-c-brand-soft: rgba(143, 124, 255, 0.14);
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(120deg, #8f7cff, #5236e0);
+  --vp-home-hero-image-background-image: linear-gradient(-45deg, #8f7cff 40%, #5236e0 60%);
+  --vp-home-hero-image-filter: blur(44px);
+}
+.dark {
+  --vp-c-brand-1: #9d8dff;
+  --vp-c-brand-2: #8f7cff;
+  --vp-c-brand-3: #7a63ff;
+}
+/* The diagrams are SVGs with their own white background; keep them from looking pasted-on in dark mode. */
+.vp-doc img[src*="/architecture/"] {
+  border-radius: 10px;
+  border: 1px solid var(--vp-c-divider);
+}
+
+/* the live demo on the home page */
+.home-demo { max-width: 1152px; margin: 56px auto 24px; padding: 0 24px; }
+.home-demo h2 { border: 0; margin-top: 0; padding-top: 0; }

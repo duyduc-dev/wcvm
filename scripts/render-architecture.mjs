@@ -7,7 +7,8 @@
 //    inline Mermaid) because npm does not render Mermaid, and GitHub's dark mode would clash with a transparent
 //    diagram: each SVG carries its own white background. Text is plain SVG <text>, not <foreignObject>, so the
 //    files render the same wherever they are shown as an image.
-// 2. Rewrites the block between the architecture markers in README.md and packages/core/README.md, with the
+// 2. Writes the docs site's architecture page (apps/docs/architecture.md) and copies the SVGs next to it.
+// 3. Rewrites the block between the architecture markers in README.md and packages/core/README.md, with the
 //    diagrams replaced by those images (relative paths in the root README, raw GitHub URLs in the package README,
 //    which npm shows without the repository around it).
 //
@@ -107,6 +108,35 @@ const files = rendered.map((svg, i) => {
   return file;
 });
 
+// The docs site page: the same body, images served from /architecture/ by the docs site.
+const docsImages = path.join(root, "apps/docs/public/architecture");
+fs.rmSync(docsImages, { recursive: true, force: true });
+fs.mkdirSync(docsImages, { recursive: true });
+for (const file of files) fs.copyFileSync(path.join(root, file), path.join(docsImages, path.basename(file)));
+const docsBody = (() => {
+  let n = 0;
+  return architecture
+    .slice(architecture.indexOf("## 1. "))
+    .replace(/```mermaid\n[\s\S]*?```/g, () => {
+      const i = n++;
+      return `![${DIAGRAMS[i][1]}](/architecture/${path.basename(files[i])})`;
+    });
+})();
+fs.writeFileSync(
+  path.join(root, "apps/docs/architecture.md"),
+  `---
+outline: [2, 3]
+---
+
+<!-- Generated from ARCHITECTURE.md by scripts/render-architecture.mjs. Edit ARCHITECTURE.md, then run the script. -->
+
+# Architecture
+
+wcvm runs a Node.js project **inside one browser tab**, with no backend. This page explains how: which threads exist, how they talk to each other, and why it is built this way. The source of truth, with the diagrams as Mermaid, is [ARCHITECTURE.md](https://github.com/duyduc-dev/wcvm/blob/main/ARCHITECTURE.md).
+
+${docsBody}`,
+);
+
 // The README copy: everything from "## 1." on, one heading level deeper, diagrams as images.
 const body = (imageBase) => {
   let n = 0;
@@ -142,4 +172,4 @@ for (const [readme, imageBase, docBase] of [["README.md", "", ""], ["packages/co
   }
   fs.writeFileSync(file, text);
 }
-console.log(`rendered ${files.length} diagrams and updated both READMEs`);
+console.log(`rendered ${files.length} diagrams, wrote the docs architecture page and updated both READMEs`);

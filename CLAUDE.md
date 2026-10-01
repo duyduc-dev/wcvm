@@ -421,6 +421,9 @@ status field is `exitCode`, and `errorCode` on error replies is the errno.
 
 ## Loose ends worth knowing
 
+- Websites (2026-10-02): `apps/landing` (wcvmjs.com), `apps/studio` (studio.wcvmjs.com) and `apps/docs` (docs.wcvmjs.com, VitePress) are
+  three Cloudflare Pages projects - see `DEPLOYING.md`. `apps/docs/architecture.md` and the README's Architecture section are generated from
+  `ARCHITECTURE.md` by `scripts/render-architecture.mjs`.
 - Publishing: `PUBLISHING.md` is current (package `wcvm`; first releases go out under the `next` dist-tag). The two
   old GitHub workflows (docs deploy, GitHub Packages mirror) were removed - they targeted `duckwc` and files that do not
   exist. The licence is ISC (`LICENSE`), with Node's MIT licence shipped as `packages/core/THIRD_PARTY_LICENSES.node.txt`.

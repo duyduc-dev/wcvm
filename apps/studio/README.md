@@ -22,24 +22,16 @@ pnpm --filter "studio..." build     # builds wcvm first, then Studio -> apps/stu
 pnpm --filter studio preview        # serves dist/ with the required headers
 ```
 
-## Deploy (Cloudflare Pages)
+## Deploy
 
-Studio is a static site, but it **must be served with cross-origin isolation headers**. `public/_headers`
-(copied to the site root by the build) sets them, and `Service-Worker-Allowed` for the preview Service Worker.
-Cloudflare Pages and Netlify both read that file; GitHub Pages cannot set these headers, so it will not work.
+Studio is published at **https://studio.wcvmjs.com** as a Cloudflare Pages project. It is a static site, but it **must be served
+with cross-origin isolation headers**: `public/_headers` (copied into the build) sets them, and `Service-Worker-Allowed` for the
+preview Service Worker. Cloudflare Pages and Netlify read that file; GitHub Pages cannot set these headers, so it will not work.
 
-Create a Cloudflare Pages project connected to this repository (or use `wrangler pages deploy`) with:
-
-| Setting | Value |
-|---|---|
-| Framework preset | None |
-| Build command | `pnpm install --frozen-lockfile && pnpm --filter "studio..." build` |
-| Build output directory | `apps/studio/dist` |
-| Environment variable | `NODE_VERSION` = `24` |
-
-Cloudflare serves `index.html` for unknown paths when there is no `404.html`, so client-side routes such as
-`/editor/<id>` work without a rewrite rule.
+Build settings: build command `pnpm install --frozen-lockfile && pnpm --filter "studio..." build`, output directory
+`apps/studio/dist`, environment variable `NODE_VERSION=24`. The full setup for Studio, the landing page and the docs, including the
+domains, is in [`DEPLOYING.md`](../../DEPLOYING.md).
 
 After a deploy, check in DevTools that the document response has `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`, and that `crossOriginIsolated` is `true` in the console. Template
-installs fetch packages from `registry.npmjs.org`, so the visitor's network must reach it.
+`Cross-Origin-Embedder-Policy: require-corp`, and that `crossOriginIsolated` is `true` in the console. Template installs fetch packages
+from `registry.npmjs.org`, so the visitor's network must reach it.
