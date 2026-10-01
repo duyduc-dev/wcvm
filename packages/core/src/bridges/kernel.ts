@@ -37,7 +37,7 @@ const createKernelBridge = (params: IKernelBridgeParams): IKernelBridge => {
 
   try {
     diagnostics.log("kernel-bridge", { message: "Creating kernel worker..." });
-    kernelWorker = registerKernelWorker({ name: "KernelWorker" });
+    kernelWorker = registerKernelWorker();
     kernelWorkerHandler({
       worker: kernelWorker,
       diagnostics,
