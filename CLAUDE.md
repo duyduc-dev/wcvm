@@ -67,7 +67,7 @@ built this way" that was probably already answered by a real bug.
 - The playground (`examples/playground`) has four working dev-server examples (Vite+React,
   Vite+Vue, `npm create vite@latest` with real interactive prompts, plain Node+Express). Studio's
   own template picker (`apps/studio`) separately offers React/Vue/Vanilla/Static/Bootstrap 5/
-  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Ember (JS and TS)/Angular/Rectify - Svelte was PARKED, then
+  Preact/Lit/Solid/Qwik/TanStack Router/Svelte/Tailwind CSS/Ember (JS and TS)/Angular/Rectify, plus a Backend tab (Express JS/TS, NestJS - 2026-10-01, `apps/studio/.../templateProjects/backendRecipes.ts`: TS is built with `tsc` and run with `node`; `nest start` can't run yet because `@inquirer/core` needs `AsyncLocalStorage` -> `internal/promise_hooks`, not vendored) and a greyed-out "soon" Fullstack tab (Next.js/Nuxt/SvelteKit/React Router 7/Astro) - Svelte was PARKED, then
   re-verified working once the circular-ESM gap above was fixed; Tailwind CSS v4 hit a real
   `@napi-rs/wasm-runtime` deadlock (any native `Scanner` call spanning more than one line of input
   in a single call freezes the whole thread - a spawned WASI worker's own file reads relay back to

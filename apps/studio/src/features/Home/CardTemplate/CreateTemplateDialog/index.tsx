@@ -32,6 +32,7 @@ import { useWcvmProjectStore } from "@/stores/useWcvmProjectStore";
 import {
   FRAMEWORK_OPTIONS,
   TEMPLATE_CATEGORIES,
+  UPCOMING_OPTIONS,
   type IFrameworkOption,
 } from "./constants";
 
@@ -73,6 +74,8 @@ const CreateTemplateDialog = () => {
   const selected =
     FRAMEWORK_OPTIONS.find((f) => f.id === framework) ?? FRAMEWORK_OPTIONS[0];
   const [activeCategory, setActiveCategory] = useState(selected.category);
+  // A tab with only "coming soon" cards (Fullstack) has nothing to create.
+  const hasCreatable = FRAMEWORK_OPTIONS.some((option) => option.category === activeCategory);
 
   const onSubmit = async (values: CreateTemplateValues) => {
     setFailure(null);
@@ -116,8 +119,10 @@ const CreateTemplateDialog = () => {
             </div>
           </DialogTitle>
           <DialogDescription>
-            Scaffolding a real Vite + {selected.label} + {selected.description} project —
-            this can take up to a minute the first time.
+            {selected.category === "Backend"
+              ? `Setting up a ${selected.label} ${selected.description} server and installing its dependencies`
+              : `Scaffolding a real Vite + ${selected.label} + ${selected.description} project`}{" "}
+            — this can take up to a minute the first time.
           </DialogDescription>
         </DialogHeader>
         <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
@@ -133,7 +138,15 @@ const CreateTemplateDialog = () => {
       <DialogHeader>
         <DialogTitle>New project from template</DialogTitle>
         <DialogDescription>
-          Scaffolded for real with <code>npm create vite@latest</code>.
+          {selected.category === "Backend" ? (
+            <>
+              A real server installed from the npm registry, running in your browser.
+            </>
+          ) : (
+            <>
+              Scaffolded for real with <code>npm create vite@latest</code>.
+            </>
+          )}
         </DialogDescription>
       </DialogHeader>
       <FieldGroup className="mt-4">
@@ -145,9 +158,16 @@ const CreateTemplateDialog = () => {
             render={({ field }) => (
               <Tabs
                 value={activeCategory}
-                onValueChange={(value) =>
-                  setActiveCategory(value as typeof activeCategory)
-                }
+                onValueChange={(value) => {
+                  const category = value as typeof activeCategory;
+                  setActiveCategory(category);
+                  // The form must follow the tab: otherwise "Create" would build whatever was
+                  // selected on the PREVIOUS tab while this one shows different cards.
+                  if (selected.category !== category) {
+                    const first = FRAMEWORK_OPTIONS.find((option) => option.category === category);
+                    if (first) field.onChange(first.id);
+                  }
+                }}
               >
                 <TabsList variant="line" className="mb-2 w-full">
                   {TEMPLATE_CATEGORIES.map((category) => (
@@ -184,6 +204,27 @@ const CreateTemplateDialog = () => {
                           </button>
                         );
                       })}
+                      {UPCOMING_OPTIONS.filter(
+                        (option) => option.category === category,
+                      ).map((option) => (
+                        <div
+                          key={`${option.label}-${option.description}`}
+                          aria-disabled
+                          title="Coming soon"
+                          className="flex cursor-not-allowed flex-col items-center gap-1 border border-dashed p-3 text-center opacity-50"
+                        >
+                          <option.icon size={24} />
+                          <span className="flex items-center gap-1 text-sm font-medium">
+                            {option.label}
+                            <span className="rounded bg-amber-500/15 px-1 text-[10px] font-normal text-amber-600 dark:text-amber-400">
+                              {option.experimental ? "exp · soon" : "soon"}
+                            </span>
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </TabsContent>
                 ))}
@@ -230,6 +271,11 @@ const CreateTemplateDialog = () => {
           )}
         </Field>
       </FieldGroup>
+      {!hasCreatable && (
+        <p className="mt-4 text-sm text-muted-foreground">
+          These templates are planned and not available yet.
+        </p>
+      )}
       {failure && (
         <p className="mt-4 text-sm text-destructive whitespace-pre-wrap">
           {failure}
@@ -243,7 +289,9 @@ const CreateTemplateDialog = () => {
             </Button>
           }
         />
-        <Button type="submit">Create</Button>
+        <Button type="submit" disabled={!hasCreatable}>
+          Create
+        </Button>
       </DialogFooter>
     </form>
   );

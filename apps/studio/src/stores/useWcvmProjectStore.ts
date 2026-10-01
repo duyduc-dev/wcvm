@@ -12,6 +12,7 @@ import { createRectifyTemplateProject } from "@/services/wcvm/templateProjects/r
 import { createStaticTemplateProject } from "@/services/wcvm/templateProjects/staticTemplateProject";
 import { createBootstrapTemplateProject } from "@/services/wcvm/templateProjects/bootstrapTemplateProject";
 import { createAngularTemplateProject } from "@/services/wcvm/templateProjects/angularTemplateProject";
+import { createBackendTemplateProject } from "@/services/wcvm/templateProjects/backendTemplateProject";
 import { createEmberTemplateProject } from "@/services/wcvm/templateProjects/emberTemplateProject";
 import { createTanstackRouterTemplateProject } from "@/services/wcvm/templateProjects/tanstackRouterTemplateProject";
 import { createTailwindTemplateProject } from "@/services/wcvm/templateProjects/tailwindTemplateProject";
@@ -66,7 +67,9 @@ export const useWcvmProjectStore = create<IWcvmProjectStore>()(
                         ? await createEmberTemplateProject(input, type === "ember-ts", onProgress)
                         : type === "angular"
                           ? await createAngularTemplateProject(input, onProgress)
-                          : await createViteTemplateProject(input, type, onProgress);
+                          : type === "express" || type === "express-ts" || type === "nestjs"
+                            ? await createBackendTemplateProject(input, type, onProgress)
+                            : await createViteTemplateProject(input, type, onProgress);
 
         if (!newProj.isFailure) {
           const now = Date.now();
