@@ -11,14 +11,11 @@ export interface TanstackRouterTemplateCreationResult {
 
 // TanStack Router (v1) has no official create-vite template, so - same approach as
 // rectifyTemplateProject.ts/bootstrapTemplateProject.ts - this starts from Vite's own "react-ts"
-// scaffold and replaces its entry files with a router setup (ported from vivari's own
-// "tanstack-router" template, itself shipped marked experimental there too - "Not yet gated by a
-// spike run").
+// scaffold and replaces its entry files with a router setup.
 //
 // CORRECTED (2026-09-29, found for real - not just suspected - by actually loading the preview
 // iframe's own URL directly): the ORIGINAL version of this comment claimed wcvm's preview needs
-// no base/basepath handling, unlike vivari's (which proxies every project under a shared
-// /preview/<port>/ prefix and sets Vite's own `base` to match). That's true for every OTHER
+// no base/basepath handling. That's true for every OTHER
 // template here, but wrong for a CLIENT-SIDE ROUTER specifically: wcvm's own preview relay DOES
 // serve each project under a real URL prefix, `/__wcvm_preview__/<port>/` (see PLAN.md's
 // "absolute-path routing") - the iframe's own `src` IS that prefixed URL, so

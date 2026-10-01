@@ -1,9 +1,8 @@
-/** Real brand marks for the framework picker, ported from vivari's own
- *  hand-rolled `templateIcons.tsx` (~/workspace/vivari/packages/studio/src/components/ide) -
+/** Real brand marks for the framework picker -
  *  inline SVGs so Studio doesn't need an icon-set dependency for them. Preact/Lit/Solid/Qwik are
  *  the exact SVGs each framework's own official `npm create vite@latest --template <x>` scaffold
  *  ships at `src/assets/<x>.svg` - extracted directly from a real scaffold rather than
- *  approximated. TanStack's is vivari's own vendored raster asset, copied as-is. */
+ *  approximated. TanStack's is a raster asset (tanstack-logo.png). */
 import tanstackLogoSrc from "@/assets/tanstack-logo.png";
 
 export interface ITemplateIconProps {
@@ -102,8 +101,8 @@ export function TsLogoIcon({ size = 24 }: ITemplateIconProps) {
   );
 }
 
-/** A generic "code" mark for the zero-dependency static HTML/CSS/JS template - same
- *  orange-red + "</>" glyph vivari's own picker uses for its "static"/"html" icon key. */
+/** A generic "code" mark for the zero-dependency static HTML/CSS/JS template - an
+ *  orange-red "</>" glyph. */
 export function StaticLogoIcon({ size = 24 }: ITemplateIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
@@ -124,8 +123,7 @@ export function StaticLogoIcon({ size = 24 }: ITemplateIconProps) {
   );
 }
 
-/** Bootstrap's real brand mark, ported from vivari's own hand-rolled BootstrapIcon
- *  (its own comment: "official logo (logos:bootstrap)"). */
+/** Bootstrap's real brand mark (the official logo). */
 export function BootstrapLogoIcon({ size = 24 }: ITemplateIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 256 204" aria-hidden>
@@ -270,7 +268,7 @@ export function SvelteLogoIcon({ size = 24 }: ITemplateIconProps) {
   );
 }
 
-/** vivari's own vendored TanStack raster mark (tanstack-logo.png), reused as-is. */
+/** The TanStack raster mark (tanstack-logo.png). */
 export function TanstackLogoIcon({ size = 24 }: ITemplateIconProps) {
   return (
     <img
@@ -302,7 +300,7 @@ export function EmberLogoIcon({ size = 24 }: ITemplateIconProps) {
   );
 }
 
-/** Tailwind CSS's real brand mark, ported from vivari's own hand-rolled TailwindIcon. */
+/** Tailwind CSS's real brand mark. */
 export function TailwindLogoIcon({ size = 24 }: ITemplateIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 256 154" aria-hidden>

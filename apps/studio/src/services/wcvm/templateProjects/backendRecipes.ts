@@ -1,5 +1,4 @@
-// Express (JavaScript / TypeScript) and NestJS starters. Ported from vivari's own backend templates
-// (~/workspace/duck/vivari/packages/studio/src/vv/templates.ts) and checked in real Chromium against
+// Express (JavaScript / TypeScript) and NestJS starters, checked in real Chromium against
 // the real npm registry (install, build, start, and the server answering through the preview relay).
 //
 // Two choices come from what this sandbox can't run:
