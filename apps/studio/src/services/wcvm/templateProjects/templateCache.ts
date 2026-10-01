@@ -18,8 +18,10 @@ const CACHE_ROOT = "/home/user/.template-cache";
 // only noticed because a real user hit the exact bug the fix was for, in a project that turned out
 // to be a stale cache clone. A change to the pin VALUES below doesn't need a bump either way (see
 // cacheKeyFor's own comment) - only a change to what's HARDCODED in a specific template's own
-// recipe file(s) does.
-const CACHE_SCHEMA_VERSION = 4;
+// recipe file(s) does. (5: the Ember recipe's package.json name became fixed - a clone made before
+// that failed to resolve its own `ember-app/*` imports; 6: Ember got a Vite-style starter page and a
+// TypeScript variant.)
+const CACHE_SCHEMA_VERSION = 6;
 
 /** A tiny non-cryptographic string hash (FNV-1a) - this keys a local cache, not a security
  *  boundary, so deterministic + low collision risk for a handful of short config strings is all
@@ -53,12 +55,12 @@ function cachePathFor(kind: string): string {
  *  a fresh react-ts project's own files mentions the project name at all). A cache clone rewrites
  *  both to the NEW project's own name; everything else in a scaffolded project is name-independent
  *  and needs no fix-up. */
-async function renameClonedProject(projectPath: string): Promise<void> {
+async function renameClonedProject(projectPath: string, keepPackageName: boolean): Promise<void> {
   const wc = getWcvmInstance();
   const projectName = projectPath.split("/").at(-1)!;
 
   const pkgPath = `${projectPath}/package.json`;
-  if (await wc.fs.exists(pkgPath)) {
+  if (!keepPackageName && (await wc.fs.exists(pkgPath))) {
     const pkg = JSON.parse(new TextDecoder().decode(await wc.fs.readFile(pkgPath)));
     pkg.name = projectName;
     await wc.fs.writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
@@ -79,14 +81,20 @@ async function renameClonedProject(projectPath: string): Promise<void> {
  * untouched) when there's no cache yet, OR when a clone was attempted but failed (a corrupted
  * cache entry, say): the caller should fall back to its own real scaffold+install either way.
  */
-export async function tryCloneFromCache(kind: string, projectPath: string): Promise<boolean> {
+export async function tryCloneFromCache(
+  kind: string,
+  projectPath: string,
+  // A template whose package.json "name" is load-bearing (Ember: `ember-app/*` imports resolve
+  // through the package's own "exports" self-reference) must not have it rewritten.
+  { keepPackageName = false }: { keepPackageName?: boolean } = {},
+): Promise<boolean> {
   const wc = getWcvmInstance();
   const cachePath = cachePathFor(kind);
   if (!(await wc.fs.exists(cachePath))) return false;
 
   try {
     await wc.fs.cp(cachePath, projectPath);
-    await renameClonedProject(projectPath);
+    await renameClonedProject(projectPath, keepPackageName);
     await wc.fs.sync();
     return true;
   } catch (error) {

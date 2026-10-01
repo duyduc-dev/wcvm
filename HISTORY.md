@@ -1595,3 +1595,110 @@ Sections, in build order:
   `vitest run` (1025/1025) confirm no regressions.
 - Tests: 1025 Vitest + 143 Playwright (Chromium; 19 of them opt-in, needing the real npm registry:
   `WCVM_E2E_VITE=1`). See "Verifying".
+
+## Ember (Studio template) and `require(esm)` (2026-10-01)
+
+Asked to add Angular and Ember. Ember worked; Angular did not (see below). Ember 7.3's Vite blueprint
+(`@ember/app-blueprint` + `@embroider/vite`) looked easy - real Node built it with `vite@7.3.6` - but
+running it in wcvm found a chain of real gaps, each fixed at its root (not per package):
+
+1. **`require('constants')`** missing (graceful-fs loads it): vendored Node's own `lib/constants.js`.
+2. **`/tmp` didn't exist** (`os.tmpdir()` says `/tmp`; `@embroider/shared-internals` `realpathSync`s it).
+   Core's VFS root stays empty (tests assert that) - Studio creates it at boot (`lib/wcvm/index.ts`).
+3. **Global `MessageChannel` ports had no `oninit`** (`rsvp` does `port1.onmessage = fn`): the
+   messaging binding wrapped only its own copy. Once `worker_threads` (io.js) loads, its prototype
+   swap made the raw global's `onmessage` setter throw. Now the wrapper is also installed as the
+   global, only when the runtime owns a real worker global (`installGlobal`; under Vitest the global
+   is the test runner's own and the wrapper recursed forever). The bridge also now drops messages
+   for ports whose `oninit` never ran, instead of crashing the worker.
+4. **No `require(esm)`** - `ember-cli` requires ESM-only packages (`find-up`, `execa`, `inquirer`,
+   ...). Per-package shims would never end, so it's real: `esm/syncRequire.ts` rewrites an ES module
+   into a synchronous function body (live getters on `exports`, defined first so cycles see them;
+   imports become `__wcvm_import_sync__` calls resolved with the ESM conditions; shorthand
+   properties (`{ x }`) needed `freeReferences` to report them - a latent bug in the cyclic rewriter
+   too). Format: extension / package `"type"` / Node's syntax detection (compile first, run second,
+   so a SyntaxError from a *dependency* never re-runs the module as ESM).
+5. **`Error.prepareStackTrace` call sites**: `get-caller-file` (ember-cli finds its commands with it)
+   got `undefined` from `getFileName()` for eval'd code - only `getScriptNameOrSourceURL()` has it.
+6. **`import(new URL(...))`** - the bridge assumed a string; ember-cli loads `ember-cli-build.mjs`
+   with `import(pathToFileURL(...))`.
+7. **ESM resolver**: no `"exports"` field -> any subpath is just a file (was rejected), legacy
+   `"main"` probing; and `exports` pattern conflicts follow `PATTERN_KEY_COMPARE`
+   (`@embroider/macros` maps both `./src/*` and `./src/*.js`; the first used to win, giving
+   `node.js.js`). The same pattern bug was in `cjs.ts`.
+8. **`npx`**: `@embroider/vite`'s `buildOnce` runs `npx vite build` through a shell. Minimal local-bin
+   `npx` added (no registry). Its failure was invisible: the outer `reject()` passes no error, so
+   Vite died with "Cannot destructure property 'stack' of 'e$1' as it is undefined" - found by
+   wrapping every plugin hook to see which one rejected with a falsy value.
+9. **`JOBS=1`**: with all of the above the log stopped at broccoli-babel-transpiler's "transformString
+   is parallelizable" - its worker-process pool never answers here. `JOBS=1` (its own documented
+   switch) transpiles inline; Studio's shells set it. Root cause of the pool hang is not investigated.
+10. **Preview**: Ember's history router sees `/__wcvm_preview__/<port>/` as an unknown route
+    (`UnrecognizedURLError`, the same class of issue as TanStack's basepath); the template uses
+    `locationType: "hash"`.
+
+Verified in real Chromium against the real registry (`WCVM_E2E_VITE=1`): install (~1150 packages,
+~12s), dev server start (~25s cold), "Welcome to Ember" rendered in the preview iframe. Tests:
+`runtime/requireEsm.test.ts` (12), resolver/`npx`/`constants` unit tests, and 5 always-on + 1 opt-in
+Playwright tests (`boot.spec.ts`, "require(esm) and the gaps Ember's toolchain hit" / "Ember template").
+
+**Angular**: done later the same day - see "Angular (Studio template)" below.
+
+### Ember: starter page and TypeScript (2026-10-01)
+
+The template got a Vite-style starter page (hero with the Ember and Vite logos, "Get started", a
+`Counter` component, links) instead of the blueprint's bare heading, and a TypeScript variant
+(`ember-ts`: `.ts`/`.gts`, `@babel/plugin-transform-typescript`, `tsconfig.json`, Glint types - the
+real `ember new --typescript` output). Both are one recipe (`emberRecipe.ts`'s `buildEmberFiles(ts)`);
+the Playwright test runs both and clicks the counter (a `.gjs`/`.gts` component, so it also proves the
+TypeScript + template-tag pipeline).
+
+## Angular (Studio template) (2026-10-01)
+
+`ng serve` for Angular 22 runs in wcvm and renders in the preview. The recipe is in
+`angularRecipe.ts` (Angular's real `ng new` output, generated with real Node 24). Getting there was a
+chain of real wcvm gaps, found one at a time by making each failure visible first:
+
+1. **The "silent exit 0" was three different things.** (a) `/tmp` missing made Angular's own error
+   reporting fail quietly; (b) `rollup` had no wasm override; (c) a real event-loop bug (below). A
+   ref'd keep-alive timer in a trap script hid (c) for days - the probe "worked" with it and silently
+   exited without. Lesson: when a fix needs a keep-alive to work, the keep-alive is the bug report.
+2. **Event loop idleness (real bug, `runtime/eventLoop.ts`)**: `turn()` decided "nothing ref'd
+   remains" synchronously and finished the process, but a promise continuation (microtask) that ran
+   afterwards could still queue `process.nextTick` work or start handles (Angular's `checkPort`: listen
+   -> close -> resolve -> the next await starts more work). Real Node drains ticks and microtasks
+   before deciding. Now idleness is confirmed on a later macrotask, re-confirmed while a round made
+   progress, and the queued tick check wakes the loop. Regression test: `runtime.test.ts` "staying
+   alive across promise continuations" (fails without the fix).
+3. **Worker pools hang**: Piscina (Angular's JS transformer/TS compiler pool) defaults to `atomics:
+   'sync'`, which waits on `receiveMessageOnPort` - impossible in a browser (`bindings/messaging.ts`).
+   `@angular/build`'s own `WorkerPool` switches to `atomics: 'disabled'` when
+   `process.versions.webcontainer` is set, so wcvm now sets it (that also turns off Angular's
+   persistent cache and native sass). Same family as the broccoli-babel-transpiler pool hang that
+   `JOBS=1` works around for Ember.
+4. **`sh` fd redirects**: `getconf ... 2>&1 || true` (detect-libc, via lmdb) hit "background jobs
+   ('&') are not supported". `sh` now has `N>file`, `>&N`/`2>&1`, `&>file` and `/dev/null`, applied in
+   order like a real shell.
+5. **`require(esm)` bugs only real packages exposed** (the old per-package overrides had hidden
+   them): a module declaring its own `__dirname`/`exports`/globals collided with the wrapper's
+   parameters (now a private parameter set plus a block scope for the body); `export default
+   <imported name>` produced overlapping edits (cli-spinners); and `freeReferences` never walked
+   parameter DEFAULTS (`function f(x = importedFn())`), so `getFileSystem` in `@angular/compiler-cli`
+   was never rewritten - an existing gap in the scope analysis the cyclic rewriter shares.
+6. **`EventTarget` marker**: `events.setMaxListeners(n, abortSignal)` (listr2) rejected the browser's
+   `AbortSignal`; setting Node's `nodejs.event_target` marker on the platform `EventTarget`
+   constructor is all `isEventTarget()` checks.
+7. **Overrides that are no longer needed**: every downgrade the old probe pinned (yargs 17,
+   magic-string 0.30, @inquirer/prompts 7, ora 5, parse5-html-rewriting-stream 6, listr2 10) and its
+   source patch that rewrote `require()` into `import()` - the latter actively broke `__importStar`
+   (`.default` became the whole namespace). Real `require(esm)` makes both unnecessary.
+8. **What remains (in the recipe)**: vite -> the shared 7.3.6 pin and esbuild/rollup/@parcel/watcher
+   -> WebAssembly builds via `overrides`; `oxc-parser` replaced by a stub after install (its WASM
+   parser deadlocks on multi-line input like Tailwind's Scanner, and is only *called* for the OXC
+   linker, which `NG_BUILD_BABEL_LINKER=true` turns off); `NG_BUILD_OPTIMIZE_CHUNKS=false` (the only
+   production path needing native `rolldown`); hash routing (`withHashLocation`) for the preview
+   prefix. The `NG_BUILD_*` variables are set by Studio's shell terminals (`IdeController.ts`).
+
+Verified in real Chromium against the real registry: install (~30s), `ng serve` (~12s to "Local:"),
+"Hello, ng-app" rendered in the preview iframe, and in the real Studio UI through Chrome. Also new:
+`process.versions.webcontainer`, `sh` fd redirects, the `EventTarget` marker.

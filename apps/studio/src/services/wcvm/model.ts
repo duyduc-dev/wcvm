@@ -1,5 +1,5 @@
 /** "blank" is a hand-written empty project; "rectify"/"static"/"bootstrap"/"tanstack-router"/
- * "tailwind" are manually-wired projects (see the matching src/services/wcvm/templateProjects/*TemplateProject.ts
+ * "tailwind"/"ember"/"ember-ts"/"angular" are manually-wired projects (see the matching src/services/wcvm/templateProjects/*TemplateProject.ts
  * — none of them has an official create-vite template); anything else is a real create-vite
  * `--template` name (see src/services/wcvm/templateProjects/viteTemplateProject.ts) — the
  * project's own persisted "kind". */
@@ -20,7 +20,10 @@ export type IWcvmProjectType =
   | "static"
   | "bootstrap"
   | "tanstack-router"
-  | "tailwind";
+  | "tailwind"
+  | "ember"
+  | "ember-ts"
+  | "angular";
 
 export interface IWcvmProject {
   id: string;
