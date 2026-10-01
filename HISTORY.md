@@ -1848,3 +1848,16 @@ Studio notes: Next needs `node_modules/next/wasm/@next/swc-wasm-nodejs` (what `n
   Router and Astro came out pixel-identical; Next.js did not until it used the Tailwind template. Tailwind itself
   is not installed in the recipe: `app/globals.css` holds the CSS Tailwind compiles for the starter's own classes
   (taken from the real dev server's output), so classes the user adds later are not generated.
+
+## A script that serves and requests itself (2026-10-02)
+
+Found while building the docs' live demo: `http.createServer(...).listen(3000, () => http.get("http://localhost:3000"))` in ONE process
+printed `server got HTTP/1.1 200` (the server parsed its own response as a second request) and never finished. Every earlier test put the
+client and the server in different processes. `kernel/netServer.ts` gave a connection one id shared by both endpoints, and a process keys
+its sockets by connection id (`runtime/bindings/net.ts`), so with both ends in one worker the client and the accepted socket were the same
+map key. Fix: each endpoint gets its own id (`connectResult` carries the client's, `incoming` the server's) and the kernel translates, so
+data is delivered under the receiver's own id. Pinned by `netServer.test.ts` ("connects to its OWN listener") and a Chromium test ("serves
+and requests ITSELF"), which fails on the old kernel.
+
+Same round: `registerKernelWorker` took a `name` option, which made the `new Worker(new URL(...), { name })` options non-static, and Vite 5
+(VitePress's) refuses to bundle that ("unable to parse the worker options as the value is not static"). The options are now a literal.

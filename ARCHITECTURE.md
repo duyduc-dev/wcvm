@@ -225,7 +225,9 @@ through `loop.post()`.
 ## 7. The virtual network and preview
 
 `net`, `dgram` and `http` are Node's real modules over bindings that route through the kernel (`kernel/netServer.ts`):
-`listen()` registers a virtual port, `connect()` creates an in-kernel connection, data flows by `postMessage`. `http` adds a hand-written
+`listen()` registers a virtual port, `connect()` creates an in-kernel connection, data flows by `postMessage`. A connection has **two ids, one per endpoint**,
+because both ends can live in the same process (a script that serves and requests itself): a process keys its sockets by id, so a single
+shared id made the two sockets collide. `http` adds a hand-written
 HTTP/1.1 wire parser (`runtime/bindings/httpParser.ts`) in place of llhttp. There is no real network: sandbox processes only reach each
 other.
 

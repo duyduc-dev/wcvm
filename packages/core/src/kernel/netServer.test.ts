@@ -193,3 +193,92 @@ describe("netServer UDP", () => {
     expect(t.udpNotified).toEqual([]);
   });
 });
+
+describe("netServer TCP connections", () => {
+  const listenOn = (port: number, pid = 1) => {
+    publish(t.views, listenRequest(port));
+    t.server.service(pid);
+    t.notified.length = 0;
+  };
+  type Event = { pid: number; event: { type: string; connId: number; ticket?: number; chunk?: Uint8Array } };
+  const events = () => t.notified as Event[];
+
+  it("gives each endpoint its own id, and delivers data to the other endpoint under THAT endpoint's id", () => {
+    listenOn(4000);
+    t.server.registerClient(2, createSyscallBuffer());
+
+    t.server.connect(2, 7, 4000);
+    const [result, incoming] = events();
+    expect(result).toMatchObject({ pid: 2, event: { type: "net:connectResult", ticket: 7 } });
+    expect(incoming).toMatchObject({ pid: 1, event: { type: "net:incoming" } });
+    const clientId = result.event.connId;
+    const serverId = incoming.event.connId;
+    expect(clientId).not.toBe(serverId);
+
+    t.notified.length = 0;
+    t.server.data(2, clientId, new Uint8Array([1, 2]));
+    t.server.data(1, serverId, new Uint8Array([3]));
+    expect(events()).toMatchObject([
+      { pid: 1, event: { type: "net:data", connId: serverId } },
+      { pid: 2, event: { type: "net:data", connId: clientId } },
+    ]);
+  });
+
+  it("a process that connects to its OWN listener keeps its two endpoints apart (a script that serves and requests itself)", () => {
+    // Before, both ends shared one id: the process could not tell its client socket from its server socket, so
+    // the server read its own response back as a request.
+    listenOn(4001);
+
+    t.server.connect(1, 1, 4001);
+    const [result, incoming] = events();
+    expect(result.pid).toBe(1);
+    expect(incoming.pid).toBe(1);
+    const clientId = result.event.connId;
+    const serverId = incoming.event.connId;
+    expect(clientId).not.toBe(serverId);
+
+    t.notified.length = 0;
+    t.server.data(1, clientId, new Uint8Array([9])); // the client writes -> the SERVER endpoint gets it
+    expect(events()).toMatchObject([{ pid: 1, event: { type: "net:data", connId: serverId } }]);
+
+    t.notified.length = 0;
+    t.server.data(1, serverId, new Uint8Array([8])); // the server answers -> the CLIENT endpoint gets it
+    expect(events()).toMatchObject([{ pid: 1, event: { type: "net:data", connId: clientId } }]);
+
+    t.notified.length = 0;
+    t.server.shutdown(1, clientId);
+    expect(events()).toMatchObject([{ pid: 1, event: { type: "net:eof", connId: serverId } }]);
+  });
+
+  it("close() tears down both ids and tells the peer under its own id", () => {
+    listenOn(4002);
+    t.server.registerClient(2, createSyscallBuffer());
+    t.server.connect(2, 1, 4002);
+    const [result, incoming] = events();
+    t.notified.length = 0;
+
+    t.server.close(2, result.event.connId);
+    expect(events()).toMatchObject([{ pid: 1, event: { type: "net:close", connId: incoming.event.connId } }]);
+
+    t.notified.length = 0;
+    t.server.data(1, incoming.event.connId, new Uint8Array([1])); // already closed: nothing is delivered
+    expect(events()).toEqual([]);
+  });
+
+  it("releasePid() closes a peer that outlives the process, and says nothing when both ends died together", () => {
+    listenOn(4003);
+    t.server.registerClient(2, createSyscallBuffer());
+
+    t.server.connect(2, 1, 4003); // pid 2 is a client of pid 1
+    const [, incoming] = events();
+    t.notified.length = 0;
+    t.server.releasePid(2);
+    expect(events()).toMatchObject([{ pid: 1, event: { type: "net:close", connId: incoming.event.connId } }]);
+
+    t.notified.length = 0;
+    t.server.connect(1, 2, 4003); // pid 1 connects to itself
+    t.notified.length = 0;
+    t.server.releasePid(1);
+    expect(events()).toEqual([]);
+  });
+});

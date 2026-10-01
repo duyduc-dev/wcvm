@@ -20,9 +20,13 @@
 //     kernel/processes.ts, the same shape child_process's stdin/stdout/ipc already use (parent <->
 //     kernel <-> child, just server-pid <-> kernel <-> client-pid here instead).
 //
-// A TCP connection is identified by one kernel-minted id, known to both sides once established;
-// nothing here ever exposes one pid's identity to the other beyond that. UDP has no such id - a
-// datagram is addressed by port alone, exactly like a real one is.
+// A TCP connection has TWO kernel-minted ids, one per endpoint: the connecting side is told its own
+// in "connectResult", the accepting side its own in "incoming", and every later event for an endpoint
+// carries that endpoint's id. Two ids, not one shared one, because both ends can live in the SAME
+// process (a script that `listen()`s and then `http.get()`s itself - the usual shape of a test or a
+// demo): a process keys its sockets by id, so one shared id made the client and the server collide,
+// and the server read back its own response as a request. Nothing here ever exposes one pid's identity
+// to the other. UDP has no such id - a datagram is addressed by port alone, exactly like a real one is.
 
 import {
   OP_NET_LISTEN,
@@ -94,15 +98,19 @@ interface IListener {
   backlog: number;
 }
 
+/** One TCP connection. `a` is the side that connected, `b` the side that accepted. */
 interface IConnection {
   pidA: number;
   pidB: number;
+  idA: number;
+  idB: number;
 }
 
 const createNetServer = ({ notify, notifyUdp, onListenChange }: INetServerParams): INetServer => {
   const clients = new Map<number, ISyscallViews>();
   const listeners = new Map<number, IListener>();
-  const connections = new Map<number, IConnection>();
+  // Keyed by EITHER endpoint's id; `side` says which endpoint that id names.
+  const connections = new Map<number, { conn: IConnection; side: "a" | "b" }>();
   // A separate namespace from `listeners` above - real UDP and TCP ports don't collide with each
   // other, only with themselves (a process can bind UDP:3000 while another listens on TCP:3000).
   const udpBindings = new Map<number, number>();
@@ -128,7 +136,9 @@ const createNetServer = ({ notify, notifyUdp, onListenChange }: INetServerParams
     return undefined;
   };
 
-  const otherSide = (conn: IConnection, pid: number): number => (conn.pidA === pid ? conn.pidB : conn.pidA);
+  /** The endpoint across from `side`: who to tell, and the id that endpoint knows the connection by. */
+  const peerOf = ({ conn, side }: { conn: IConnection; side: "a" | "b" }) =>
+    side === "a" ? { pid: conn.pidB, connId: conn.idB } : { pid: conn.pidA, connId: conn.idA };
 
   const registerClient = (clientId: number, sab: SharedArrayBuffer) => {
     clients.set(clientId, makeViews(sab));
@@ -195,31 +205,36 @@ const createNetServer = ({ notify, notifyUdp, onListenChange }: INetServerParams
       notify(fromPid, { type: "net:connectResult", ticket, ok: false, code: "ECONNREFUSED" });
       return;
     }
-    const connId = nextConnId++;
-    connections.set(connId, { pidA: fromPid, pidB: listener.pid });
-    notify(fromPid, { type: "net:connectResult", ticket, ok: true, connId });
-    notify(listener.pid, { type: "net:incoming", connId, port });
+    const conn: IConnection = { pidA: fromPid, pidB: listener.pid, idA: nextConnId++, idB: nextConnId++ };
+    connections.set(conn.idA, { conn, side: "a" });
+    connections.set(conn.idB, { conn, side: "b" });
+    notify(fromPid, { type: "net:connectResult", ticket, ok: true, connId: conn.idA });
+    notify(listener.pid, { type: "net:incoming", connId: conn.idB, port });
   };
 
-  const data = (fromPid: number, connId: number, chunk: Uint8Array) => {
-    const conn = connections.get(connId);
-    if (!conn) return;
-    notify(otherSide(conn, fromPid), { type: "net:data", connId, chunk });
+  const data = (_fromPid: number, connId: number, chunk: Uint8Array) => {
+    const endpoint = connections.get(connId);
+    if (!endpoint) return;
+    const peer = peerOf(endpoint);
+    notify(peer.pid, { type: "net:data", connId: peer.connId, chunk });
   };
 
-  const shutdown = (fromPid: number, connId: number) => {
-    const conn = connections.get(connId);
-    if (!conn) return;
-    // Half-close: the connection stays registered (fromPid may still receive, and the peer may
+  const shutdown = (_fromPid: number, connId: number) => {
+    const endpoint = connections.get(connId);
+    if (!endpoint) return;
+    // Half-close: the connection stays registered (this side may still receive, and the peer may
     // still write back), unlike close() below - see NetKernelEvent's own "eof" vs "close".
-    notify(otherSide(conn, fromPid), { type: "net:eof", connId });
+    const peer = peerOf(endpoint);
+    notify(peer.pid, { type: "net:eof", connId: peer.connId });
   };
 
-  const close = (fromPid: number, connId: number) => {
-    const conn = connections.get(connId);
-    if (!conn) return;
-    connections.delete(connId);
-    notify(otherSide(conn, fromPid), { type: "net:close", connId });
+  const close = (_fromPid: number, connId: number) => {
+    const endpoint = connections.get(connId);
+    if (!endpoint) return;
+    connections.delete(endpoint.conn.idA);
+    connections.delete(endpoint.conn.idB);
+    const peer = peerOf(endpoint);
+    notify(peer.pid, { type: "net:close", connId: peer.connId });
   };
 
   const releasePid = (pid: number) => {
@@ -228,10 +243,19 @@ const createNetServer = ({ notify, notifyUdp, onListenChange }: INetServerParams
       listeners.delete(port);
       onListenChange?.({ pid, port, listening: false });
     }
-    for (const [connId, conn] of connections) {
+    for (const [id, endpoint] of connections) {
+      const { conn, side } = endpoint;
       if (conn.pidA !== pid && conn.pidB !== pid) continue;
-      connections.delete(connId);
-      notify(otherSide(conn, pid), { type: "net:close", connId });
+      // Visit each connection once (via its `a` id), and tell only a peer that outlives `pid`: when both ends
+      // were in the exiting process there is nobody left to notify.
+      if (side !== "a") {
+        connections.delete(id);
+        continue;
+      }
+      connections.delete(conn.idA);
+      connections.delete(conn.idB);
+      if (conn.pidA === pid && conn.pidB !== pid) notify(conn.pidB, { type: "net:close", connId: conn.idB });
+      else if (conn.pidB === pid && conn.pidA !== pid) notify(conn.pidA, { type: "net:close", connId: conn.idA });
     }
   };
 
