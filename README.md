@@ -1,3 +1,12 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="wcvm" width="280">
+  </picture>
+</p>
+
+<p align="center"><strong>Node.js in your browser tab. No backend.</strong></p>
+
 # wcvm
 
 A WebContainer-style Node.js sandbox that runs **entirely in the browser tab**, in Web Workers, with no
