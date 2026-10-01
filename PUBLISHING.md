@@ -1,80 +1,51 @@
-> **Outdated:** still refers to the old `duckwc` name and to scripts/workflows that do not
-> exist in this tree (`scripts/publish-github-package.mjs`, `apps/docs`). Revisit before publishing.
+# Publishing `wcvm` to npm
 
-# Publishing `duckwc` to npm
-
-Use this guide to release the public package in `packages/core`.
+The public package is `packages/core` (name `wcvm`). Only the built `dist/`, `README.md`, `LICENSE`
+and the third-party notices are published.
 
 ## Before publishing
 
-Work from a clean `main` branch. Choose an unused SemVer version in
-`packages/core/package.json`; use a minor version for breaking API changes and
-a patch version for backwards-compatible fixes. Do not reuse a published npm
-version.
+Work from a clean, pushed `main`. Pick an unused SemVer version in `packages/core/package.json`
+(while the version is `0.x`, a minor bump may break the API). Never reuse a published version.
 
-Run the release checks from the repository root:
+Run the checks (Node 24; the Vitest suite needs `URLPattern`/`CloseEvent`):
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm --filter duckwc test
+cd packages/core
+npx tsc --noEmit -p .
+npx vitest run
 pnpm build
+cd ../../examples/playground && pnpm exec playwright test      # real Chromium; add WCVM_E2E_VITE=1 for the real-registry tests
+```
+
+Then check what would be published:
+
+```bash
 cd packages/core && npm pack --dry-run
 ```
 
-The dry run must contain only `README.md`, `package.json`, and the built
-`dist/` files.
+It must list `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, `THIRD_PARTY_LICENSES.node.txt`,
+`package.json` and the files under `dist/` - nothing else (no `src/`, no tests).
 
 ## Publish
 
-Log in with an npm account that can publish `duckwc`. If the account requires
-two-factor authentication, enter the current code from its authenticator app
-locally; never share tokens or one-time codes in chat.
+Log in with an npm account that may publish `wcvm`. If it has two-factor authentication, type the
+current code locally; never paste tokens or one-time codes into chat or commit them.
 
 ```bash
 cd packages/core
-npm publish --access public --otp=YOUR_2FA_CODE
-npm publish --//registry.npmjs.org/:_authToken=YOUR_TOKEN
-npm view duckwc name version dist-tags --json
+npm publish --access public --tag next --otp=<code>      # first releases: "next", not "latest"
+npm dist-tag add wcvm@<version> latest                   # once you are happy with it
+npm view wcvm name version dist-tags --json
 ```
 
-Commit the version and source changes, then push `main`. For future releases,
-repeat the version bump and checks before publishing.
+Then commit the version bump and push `main`, and tag the release (`git tag v<version>`).
 
-## Publish the GitHub Packages mirror
+## When the vendored Node changes
 
-The npmjs package remains `duckwc`. GitHub Packages requires a scoped name, so
-this repository publishes the same built files separately as
-`@duyduc-dev/duckwc`. Do not rename `packages/core` to the scoped name: that
-would break existing npmjs consumers.
-
-After the npmjs release is published and pushed, open **Actions → Publish
-GitHub Package → Run workflow** on the matching commit. The workflow runs the
-core test/build checks and publishes with its repository-scoped `GITHUB_TOKEN`.
-It is manual-only and never publishes on an ordinary push. GitHub will link
-the package to this repository through the package manifest's `repository`
-field.
-
-For a local dry run of the generated scoped artifact:
-
-```bash
-pnpm --filter duckwc build
-pnpm --filter duckwc publish:github -- --dry-run
-```
-
-Consumers configure the GitHub npm registry for this scope before installing:
-
-```ini
-@duyduc-dev:registry=https://npm.pkg.github.com
-```
-
-GitHub Packages requires authentication to install packages as well. Add a
-classic personal access token with `read:packages` to the consumer's **user**
-`~/.npmrc`; never commit it to the project:
-
-```ini
-//npm.pkg.github.com/:_authToken=YOUR_GITHUB_CLASSIC_PAT
-```
-
-```bash
-npm install @duyduc-dev/duckwc
-```
+`packages/core/src/runtime/node/lib/**` is Node's own source and is generated, never edited:
+`node scripts/vendor-node-lib.mjs`. If the vendored Node version changes, replace
+`packages/core/THIRD_PARTY_LICENSES.node.txt` with that version's `LICENSE`
+(`https://github.com/nodejs/node/blob/<version>/LICENSE`) and update the version in
+`THIRD_PARTY_NOTICES.md`.

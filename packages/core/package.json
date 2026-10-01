@@ -1,9 +1,25 @@
 {
   "name": "wcvm",
   "version": "0.1.2",
+  "description": "A WebContainer-style Node.js sandbox that runs entirely in the browser, in Web Workers, with no backend.",
+  "keywords": [
+    "webcontainer",
+    "sandbox",
+    "nodejs",
+    "browser",
+    "web-worker",
+    "wasm",
+    "in-browser",
+    "vite"
+  ],
+  "license": "ISC",
+  "homepage": "https://github.com/duyduc-dev/wcvm#readme",
+  "bugs": {
+    "url": "https://github.com/duyduc-dev/wcvm/issues"
+  },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/duyduc-dev/webcontainer.git",
+    "url": "git+https://github.com/duyduc-dev/wcvm.git",
     "directory": "packages/core"
   },
   "type": "module",
@@ -18,14 +34,16 @@
     "./preview-sw": "./dist/workers/preview/PreviewServiceWorker.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES.node.txt"
   ],
   "scripts": {
     "build": "rm -rf dist && tsup",
     "dev": "tsup --watch",
     "clean": "rm -rf dist",
-    "test": "vitest run",
-    "publish:github": "node scripts/publish-github-package.mjs"
+    "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
