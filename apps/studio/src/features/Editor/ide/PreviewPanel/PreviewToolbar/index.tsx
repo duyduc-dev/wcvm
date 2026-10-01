@@ -1,35 +1,17 @@
-import { ArrowLeftIcon, ArrowRightIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon, LockIcon } from "@phosphor-icons/react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { PreviewTab } from "../controller/types";
-import { useIde } from "../controller/useIde";
+import { ArrowLeftIcon, ArrowRightIcon, ArrowSquareOutIcon, ArrowsClockwiseIcon, BugIcon, LockIcon } from "@phosphor-icons/react";
+import type { PreviewTab } from "../../controller/types";
+import { useIde } from "../../controller/useIde";
+import { ToolButton } from "./ToolButton";
 
-function ToolButton({
-  label,
-  onClick,
-  disabled,
-  children,
+export function PreviewToolbar({
+  tab,
+  devtoolsOpen,
+  onToggleDevtools,
 }: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
+  tab: PreviewTab;
+  devtoolsOpen: boolean;
+  onToggleDevtools: () => void;
 }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        onClick={onClick}
-        disabled={disabled}
-        aria-label={label}
-        className="flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-export function PreviewToolbar({ tab }: { tab: PreviewTab }) {
   const { c } = useIde();
 
   return (
@@ -56,6 +38,9 @@ export function PreviewToolbar({ tab }: { tab: PreviewTab }) {
           className="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
         />
       </div>
+      <ToolButton label={devtoolsOpen ? "Hide DevTools" : "Show DevTools (console & inspector)"} onClick={onToggleDevtools}>
+        <BugIcon className={devtoolsOpen ? "size-4 text-primary" : "size-4"} />
+      </ToolButton>
       <ToolButton label="Open in new tab" disabled={tab.port == null} onClick={() => c.openPreviewExternal(tab.id)}>
         <ArrowSquareOutIcon className="size-4" />
       </ToolButton>
