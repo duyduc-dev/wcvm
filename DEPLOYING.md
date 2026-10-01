@@ -12,6 +12,33 @@ The `...` after a package name builds that package **and the workspace packages 
 
 Nothing here needs a server: each site is plain files. Only Studio has special requirements (below).
 
+## What is live today
+
+The three sites are deployed as **direct-upload** Cloudflare Pages projects, from the command line:
+
+| Site | Project | Address (until the custom domain is attached) |
+|---|---|---|
+| Landing page | `wcvm-landing` | https://wcvm-landing.pages.dev |
+| Docs | `wcvm-docs` | https://wcvm-docs.pages.dev |
+| Studio | `wcvm-studio` | https://wcvm-studio.pages.dev |
+
+Checked against those addresses in real Chromium: the landing page's 34 logos load; the docs page is cross-origin isolated and its live demo
+runs `Node v24`; Studio is isolated, its preview Service Worker registers at scope `/`, and a server started in its terminal shows in the
+preview pane. The custom domains (`wcvmjs.com`, `studio.`, `docs.`) are not attached yet: see "Attach the domains" below.
+
+### Redeploy after a change
+
+```bash
+npx wrangler@3 login                        # once
+bash scripts/deploy-sites.sh                # build and upload all three
+bash scripts/deploy-sites.sh docs studio    # or only some
+```
+
+A direct-upload project does **not** redeploy when you push to GitHub, and cannot be switched to Git integration later. If you would rather have
+automatic deploys, create the projects through the dashboard as described under "One-time setup" instead (and delete these three).
+`wrangler` is pinned to 3 because wrangler 4 will not create or deploy a Pages project here: it first tries to register a `workers.dev`
+subdomain on the account, which a Pages project does not need.
+
 ## One-time setup
 
 ### 1. Put the domain on Cloudflare
