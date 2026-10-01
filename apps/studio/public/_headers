@@ -1,0 +1,12 @@
+# Cloudflare Pages / Netlify response headers (copied to the site root by Vite).
+#
+# wcvm needs a cross-origin isolated page (SharedArrayBuffer), so every response carries COOP + COEP.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+
+# The preview Service Worker registers with scope "/", but its script lives under /assets/, so the
+# server has to widen the scope or registration throws a SecurityError and the preview never works.
+# (Its file name is hashed, hence the glob.)
+/assets/PreviewServiceWorker-*
+  Service-Worker-Allowed: /
