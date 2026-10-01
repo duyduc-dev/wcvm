@@ -16,6 +16,18 @@ Next.js, SvelteKit, ...) and show it in an `<iframe>` - all client-side.
 > **Status: 0.x.** It runs unmodified Vite + React/Vue, Express, NestJS, Next.js, SvelteKit, React Router 7,
 > Astro, Angular and Ember projects, but it is **not** full Node: see [Limitations](#limitations).
 
+## How it works
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/duyduc-dev/wcvm/main/assets/architecture.svg" alt="wcvm architecture: host page, kernel worker, process workers, file system worker, and the preview service worker" width="760">
+</p>
+
+Every process is a **Web Worker**. A call such as `readFileSync` writes its request into a `SharedArrayBuffer` and parks the
+worker with `Atomics.wait`; the **File System Worker** answers into the same buffer and wakes it, so guest code can block even
+though the browser never lets a thread block on async work. The `node` runtime is **Node's own `lib/`**, vendored unmodified,
+on a small native layer written for the browser. `http` servers are reachable from an `<iframe>` through a **Service Worker**
+relay. The full design, with sequence diagrams, is in [`ARCHITECTURE.md`](https://github.com/duyduc-dev/wcvm/blob/main/ARCHITECTURE.md).
+
 ## Contents
 
 1. [Install](#install) · 2. [Serve a page that can boot](#1-serve-a-page-that-can-boot) ·
@@ -280,7 +292,8 @@ pnpm build                       # builds packages/core (tsup) and the apps
 pnpm --filter playground e2e     # real Chromium
 ```
 
-Read [`CLAUDE.md`](https://github.com/duyduc-dev/wcvm/blob/main/CLAUDE.md) and
+How it is built - the workers, the synchronous syscall bridge, the Node runtime, the preview relay - is in
+[`ARCHITECTURE.md`](https://github.com/duyduc-dev/wcvm/blob/main/ARCHITECTURE.md). Read [`CLAUDE.md`](https://github.com/duyduc-dev/wcvm/blob/main/CLAUDE.md) and
 [`AGENTS.md`](https://github.com/duyduc-dev/wcvm/blob/main/AGENTS.md) before changing the runtime.
 
 ## License
