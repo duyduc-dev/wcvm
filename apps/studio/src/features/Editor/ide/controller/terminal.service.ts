@@ -83,12 +83,29 @@ function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: (
   let draft = "";
   let completing = false;
 
-  /** Replace the buffer and redraw: back to the line start, rewrite, erase leftovers. */
+  /** Replace the buffer and update the screen with ONE `term.write`. Several separate writes
+   * (move to line start, rewrite, erase, move back) can be rendered between each other, so the
+   * cursor visibly flashes at the start of the line on every keystroke. The common cases - typing
+   * or deleting at the end of the line - touch only the changed tail instead of redrawing it all. */
   const setBuffer = (next: string, nextCursor = next.length): void => {
-    if (cursor > 0) term.write(`\x1b[${cursor}D`);
-    term.write(next + "\x1b[K");
-    const back = next.length - nextCursor;
-    if (back > 0) term.write(`\x1b[${back}D`);
+    let out: string;
+    if (cursor === buffer.length && next.length > buffer.length && next.startsWith(buffer) && nextCursor === next.length) {
+      out = next.slice(buffer.length); // appended at the end
+    } else if (cursor === buffer.length && next.length === buffer.length - 1 && buffer.startsWith(next) && nextCursor === next.length) {
+      out = "\b\x1b[K"; // backspace at the end
+    } else {
+      // Only rewrite from the first differing character, not the whole line.
+      let common = 0;
+      while (common < buffer.length && common < next.length && buffer[common] === next[common]) common++;
+      const left = cursor - common;
+      const back = next.length - nextCursor;
+      out =
+        (left > 0 ? `\x1b[${left}D` : left < 0 ? `\x1b[${-left}C` : "") +
+        next.slice(common) +
+        "\x1b[K" +
+        (back > 0 ? `\x1b[${back}D` : "");
+    }
+    term.write(out);
     buffer = next;
     cursor = nextCursor;
   };
@@ -203,7 +220,9 @@ function wireLineInput(term: Terminal, options: ILineInputOptions): { dispose: (
         term.write("\x1b[2J\x1b[H");
         const saved = buffer;
         const savedCursor = cursor;
-        cursor = 0; // the screen is blank, so the line is redrawn from column 0
+        // The screen is blank, so the whole line is redrawn from column 0.
+        buffer = "";
+        cursor = 0;
         setBuffer(saved, savedCursor);
       } else if (ch === "\x03") {
         term.write("^C\r\n");
