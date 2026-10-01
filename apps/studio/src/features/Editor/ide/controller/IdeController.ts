@@ -125,6 +125,7 @@ export class IdeController {
     this.stopPreviewListener?.();
     if (this.projectSyncTimer) clearTimeout(this.projectSyncTimer);
     setProjectContext(null);
+    this.editorOpener?.dispose();
     setFormatContext(null);
     // Kill each terminal's own process, not just its UI - the wcvm instance itself is a singleton
     // that outlives this editor (see @/lib/wcvm), so leaving this page (Home, or back into a
@@ -191,12 +192,42 @@ export class IdeController {
     });
     this.wireEditorStatus(this.editor);
     setProjectContext({ fs: this.fs, rootPath: this.snap.rootPath });
+    // Go to Definition / References / Peek land in ANOTHER file: Monaco has no tabs, so it asks this
+    // opener to open it, and does nothing at all if nobody answers.
+    this.editorOpener = monaco.editor.registerEditorOpener({
+      openCodeEditor: (_source, resource, selection) => this.openFromEditor(resource, selection),
+    });
     // Files may have changed under the editor (terminal, npm install): resync when it regains focus.
     this.editor.onDidFocusEditorText(() => this.scheduleProjectSync(250));
     this.scheduleProjectSync(0);
     // Prettier (registered once, with the Monaco instance) reads the project it formats from here.
     setFormatContext({ fs: this.fs, rootPath: this.snap.rootPath, report: (message) => this.status(message) });
     if (this.snap.activeTab) this.showInEditor(this.snap.activeTab);
+  }
+
+  private editorOpener: Monaco.IDisposable | null = null;
+
+  /** Opens `resource` as a tab and puts the cursor at `selection` - the target of Go to Definition.
+   * Returns false (Monaco handles it itself) for the file already showing. */
+  private openFromEditor(resource: Monaco.Uri, selection?: Monaco.IRange | Monaco.IPosition): boolean {
+    const path = resource.path;
+    const current = this.editor?.getModel();
+    if (resource.scheme !== "file" || current?.uri.toString() === resource.toString() || path.endsWith(".__script.ts")) return false;
+    void this.openFile(path)
+      .then(() => {
+        const editor = this.editor;
+        if (!editor || !selection || editor.getModel()?.uri.path !== path) return;
+        if ("startLineNumber" in selection) {
+          editor.setSelection(selection);
+          editor.revealRangeInCenter(selection);
+        } else {
+          editor.setPosition(selection);
+          editor.revealPositionInCenter(selection);
+        }
+        editor.focus();
+      })
+      .catch(() => this.status(`Can't open ${basename(path)}`));
+    return true;
   }
 
   /** Brings Monaco's language service up to date with the project on disk: a background model for
