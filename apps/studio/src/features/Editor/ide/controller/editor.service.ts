@@ -4,6 +4,7 @@ import { extensionOf } from "./fs.service";
 import { registerFormatters } from "./format.service";
 import { registerExtraLanguages } from "./languages";
 import { registerProjectCompletions } from "./completions.service";
+import { registerTemplateCompletions } from "./templates";
 import { configureTypescript, invalidateSyncedPath, isProjectSource } from "./typescript.service";
 
 export const languageForPath = (path: string): string =>
@@ -47,6 +48,7 @@ async function loadMonaco(): Promise<typeof Monaco> {
   registerFormatters(monaco);
   configureTypescript(monaco);
   registerProjectCompletions(monaco);
+  registerTemplateCompletions(monaco);
   return monaco;
 }
 
