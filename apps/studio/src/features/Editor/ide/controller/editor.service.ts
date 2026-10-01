@@ -3,6 +3,8 @@ import { EDITOR_FONT_FAMILY, LANGUAGE_BY_EXTENSION } from "./constants";
 import { extensionOf } from "./fs.service";
 import { registerFormatters } from "./format.service";
 import { registerExtraLanguages } from "./languages";
+import { registerProjectCompletions } from "./completions.service";
+import { configureTypescript, invalidateSyncedPath, isProjectSource } from "./typescript.service";
 
 export const languageForPath = (path: string): string =>
   LANGUAGE_BY_EXTENSION[extensionOf(path)] ?? "plaintext";
@@ -19,36 +21,32 @@ let monacoPromise: Promise<typeof Monaco> | null = null;
  * needs a literal string, not a shared helper taking a variable path — Vite's static analysis
  * (which is what turns this into a bundled, same-origin chunk at build time) can't follow one. */
 async function loadMonaco(): Promise<typeof Monaco> {
-  const editorWorkerUrl = new URL("monaco-editor/esm/vs/editor/editor.worker.js", import.meta.url);
-  const tsWorkerUrl = new URL("monaco-editor/esm/vs/language/typescript/ts.worker.js", import.meta.url);
-  const jsonWorkerUrl = new URL("monaco-editor/esm/vs/language/json/json.worker.js", import.meta.url);
-  const cssWorkerUrl = new URL("monaco-editor/esm/vs/language/css/css.worker.js", import.meta.url);
-  const htmlWorkerUrl = new URL("monaco-editor/esm/vs/language/html/html.worker.js", import.meta.url);
-
   self.MonacoEnvironment = {
     getWorker(_workerId: string, label: string): Worker {
       switch (label) {
         case "typescript":
         case "javascript":
-          return new Worker(tsWorkerUrl, { type: "module" });
+          return new Worker(new URL("../../../../../node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js", import.meta.url), { type: "module" });
         case "json":
-          return new Worker(jsonWorkerUrl, { type: "module" });
+          return new Worker(new URL("../../../../../node_modules/monaco-editor/esm/vs/language/json/json.worker.js", import.meta.url), { type: "module" });
         case "css":
         case "scss":
         case "less":
-          return new Worker(cssWorkerUrl, { type: "module" });
+          return new Worker(new URL("../../../../../node_modules/monaco-editor/esm/vs/language/css/css.worker.js", import.meta.url), { type: "module" });
         case "html":
         case "handlebars":
         case "razor":
-          return new Worker(htmlWorkerUrl, { type: "module" });
+          return new Worker(new URL("../../../../../node_modules/monaco-editor/esm/vs/language/html/html.worker.js", import.meta.url), { type: "module" });
         default:
-          return new Worker(editorWorkerUrl, { type: "module" });
+          return new Worker(new URL("../../../../../node_modules/monaco-editor/esm/vs/editor/editor.worker.js", import.meta.url), { type: "module" });
       }
     },
   };
   const monaco = await import("monaco-editor");
   await registerExtraLanguages(monaco);
   registerFormatters(monaco);
+  configureTypescript(monaco);
+  registerProjectCompletions(monaco);
   return monaco;
 }
 
@@ -88,14 +86,26 @@ export function getOrCreateModel(
 ): Monaco.editor.ITextModel {
   const existing = models.get(path);
   if (existing) return existing;
-  const model = monaco.editor.createModel(contents, languageForPath(path), monaco.Uri.file(path));
+  // A project source file already has a background model (typescript.service.ts) so the language
+  // service can resolve imports of it - adopt that one instead of creating a second at the same URI.
+  const uri = monaco.Uri.file(path);
+  const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(contents, languageForPath(path), uri);
+  if (model.getValue() !== contents) model.setValue(contents);
   models.set(path, model);
   return model;
 }
 
 export function disposeModel(models: Map<string, Monaco.editor.ITextModel>, path: string): void {
-  models.get(path)?.dispose();
+  const model = models.get(path);
   models.delete(path);
+  if (!model) return;
+  if (isProjectSource(path)) {
+    // Closing a tab must not make the file vanish from the language service: keep the model as a
+    // background one and have the next project sync re-read it from disk (discarding any unsaved edits).
+    invalidateSyncedPath(path);
+    return;
+  }
+  model.dispose();
 }
 
 export function renameModel(

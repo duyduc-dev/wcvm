@@ -8,6 +8,7 @@ import {
   getOrCreateModel,
   renameModel,
 } from "./editor.service";
+import { setProjectContext, syncDependencyTypings, syncProjectModels } from "./typescript.service";
 import { EditorStatus } from "./editorStatus";
 import { canFormat, setFormatContext } from "./format.service";
 import { basename, mimeTypeFor, readTextFile, tabKindFor, writeTextFile } from "./fs.service";
@@ -122,6 +123,8 @@ export class IdeController {
 
   dispose(): void {
     this.stopPreviewListener?.();
+    if (this.projectSyncTimer) clearTimeout(this.projectSyncTimer);
+    setProjectContext(null);
     setFormatContext(null);
     // Kill each terminal's own process, not just its UI - the wcvm instance itself is a singleton
     // that outlives this editor (see @/lib/wcvm), so leaving this page (Home, or back into a
@@ -168,8 +171,17 @@ export class IdeController {
   }
 
   // ── editor / tabs ───────────────────────────────────────────────────────
-  async mountEditor(el: HTMLElement): Promise<void> {
-    if (this.editor) return;
+  /** React runs the mounting effect twice in dev (StrictMode) and `ensureMonaco()` is async, so a
+   * plain `if (this.editor) return` guard lets BOTH calls through before either has assigned
+   * `this.editor` - two editors then end up stacked in the same container, both bound to the same
+   * model. The in-flight promise is what makes a second call a no-op. */
+  private mounting: Promise<void> | null = null;
+
+  mountEditor(el: HTMLElement): Promise<void> {
+    return (this.mounting ??= this.createEditorIn(el));
+  }
+
+  private async createEditorIn(el: HTMLElement): Promise<void> {
     const monaco = await ensureMonaco();
     this.monaco = monaco;
     this.editor = createEditor(monaco, el, this.snap.isDark);
@@ -178,9 +190,28 @@ export class IdeController {
       if (path && this.snap.tabKinds[path] === "text") this.refreshDirty(path);
     });
     this.wireEditorStatus(this.editor);
+    setProjectContext({ fs: this.fs, rootPath: this.snap.rootPath });
+    // Files may have changed under the editor (terminal, npm install): resync when it regains focus.
+    this.editor.onDidFocusEditorText(() => this.scheduleProjectSync(250));
+    this.scheduleProjectSync(0);
     // Prettier (registered once, with the Monaco instance) reads the project it formats from here.
     setFormatContext({ fs: this.fs, rootPath: this.snap.rootPath, report: (message) => this.status(message) });
     if (this.snap.activeTab) this.showInEditor(this.snap.activeTab);
+  }
+
+  /** Brings Monaco's language service up to date with the project on disk: a background model for
+   * every source file (imports resolve, exports are suggested) and typings for dependencies.
+   * Debounced - focus, save and tab-close all ask for it. */
+  private projectSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private scheduleProjectSync(delay = 400): void {
+    if (this.projectSyncTimer) clearTimeout(this.projectSyncTimer);
+    this.projectSyncTimer = setTimeout(() => {
+      this.projectSyncTimer = null;
+      const monaco = this.monaco;
+      if (!monaco) return;
+      void syncProjectModels(monaco, new Set(this.models.keys())).catch(() => {});
+      void syncDependencyTypings(monaco).catch(() => {});
+    }, delay);
   }
 
   /** Formats the active file with Prettier - Monaco's own "Format Document" action, so the
@@ -302,6 +333,7 @@ export class IdeController {
     const wasActive = this.snap.activeTab === path;
     const activeTab = wasActive ? (openTabs.at(-1) ?? null) : this.snap.activeTab;
     this.disposeTabResources(path);
+    this.scheduleProjectSync();
     this.set({
       openTabs,
       activeTab,
@@ -320,6 +352,7 @@ export class IdeController {
     const contents = model.getValue();
     await writeTextFile(this.fs, path, contents);
     this.savedContents.set(path, contents);
+    this.scheduleProjectSync();
     this.set({ dirty: this.snap.dirty.filter((p) => p !== path) });
     this.status(`Saved ${basename(path)}`);
     useWcvmProjectStore.getState().touchProject(this.projectId);
