@@ -298,9 +298,12 @@ describe("errors", () => {
     expect(r).toMatchObject({ code: 0, stdout: "caught one uncaughtException\nstill running\n" });
   });
 
+  // These two keep the script alive with a timer while the test (not the script) reports the rejection from ITS own
+  // setTimeout(0). The script's timer must outlast that, or under load the process exits first and the report arrives
+  // after exit (the test failed about one full run in three with a 1 ms / 5 ms timer).
   it("reports an unhandled rejection through 'unhandledRejection'", async () => {
     const r = await run(
-      `process.on("unhandledRejection", (reason) => console.log("unhandled:", reason.message)); setTimeout(() => {}, 1)`,
+      `process.on("unhandledRejection", (reason) => console.log("unhandled:", reason.message)); setTimeout(() => {}, 100)`,
       {},
       {
         setup: (runtime: any) => {
@@ -314,7 +317,7 @@ describe("errors", () => {
   });
 
   it("an unhandled rejection with no handler is an uncaught error, exit 1", async () => {
-    const r = await run(`setTimeout(() => {}, 5)`, {}, {
+    const r = await run(`setTimeout(() => {}, 100)`, {}, {
       setup: (runtime: any) => {
         const p = Promise.reject(new Error("fatal"));
         p.catch(() => {});
