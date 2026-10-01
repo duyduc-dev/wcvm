@@ -5,6 +5,10 @@ threads exist, how they talk to each other, and why it is built this way. For *u
 [README](README.md); for what is done and what differs from Node read [`PLAN.md`](PLAN.md); for the story behind
 each decision and bug read [`HISTORY.md`](HISTORY.md).
 
+> The README's "Architecture" section is generated from this file. After editing it, run
+> `node scripts/render-architecture.mjs`: it re-renders the diagrams to `assets/architecture/*.svg` (npm does not render
+> Mermaid) and rewrites that section in `README.md` and `packages/core/README.md`.
+
 ## 1. The problem and the idea
 
 A browser tab cannot spawn processes, has no synchronous filesystem, and never lets the main thread block. Node
