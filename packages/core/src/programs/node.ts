@@ -8,7 +8,7 @@ const usage = (stderr: (text: string) => void, message: string) => {
 };
 
 /**
- * `node [script.js [args...]]`, `node -e "code"`, or `node` with no script (an interactive
+ * `node [script.js [args...]]`, `node -e "code"`, `node -p "expression"`, or `node` with no script (an interactive
  * REPL over stdin): runs the vendored Node runtime inside this process's worker. Loaded on
  * demand so processes that only run `echo` never build a runtime.
  */
@@ -27,9 +27,12 @@ const node: Program = async (ctx) => {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === "-e" || arg === "--eval") {
+    if (arg === "-e" || arg === "--eval" || arg === "-p" || arg === "--print" || arg === "-pe") {
       if (i + 1 >= args.length) return usage(stderr, `${arg} requires an argument`);
       evalSource = args[++i];
+      // -p / --print: evaluate and print the result with console.log, like Node. A direct eval
+      // inside the eval'd source keeps `require` and the other module-scope names in reach.
+      if (arg !== "-e" && arg !== "--eval") evalSource = `console.log(eval(${JSON.stringify(evalSource)}))`;
       scriptArgs = args.slice(i + 1);
       break;
     }

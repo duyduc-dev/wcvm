@@ -1,6 +1,7 @@
 import { asyncLocalStorageShim, promiseHooksShim } from "./asyncContext";
 import { createWebStreamAdaptersShim } from "./webStreamAdapters";
 import type { BuiltinFactory } from "./node/types";
+import { withFileUrlFix } from "./fileUrlFix";
 
 interface IShimContext {
   has(id: string): boolean;
@@ -84,7 +85,7 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
   const internalUrl: BuiltinFactory = (_exports, _require, module) => {
     const codes = () => ctx.requireBuiltin("internal/errors").codes;
     const nodePath = () => ctx.requireBuiltin("path");
-    const URLCtor = globalThis.URL;
+    const URLCtor = withFileUrlFix(globalThis.URL);
     const URLSearchParamsCtor = globalThis.URLSearchParams;
 
     const isURL = (value: any): boolean =>
@@ -105,10 +106,11 @@ const createShims = (ctx: IShimContext): Record<string, BuiltinFactory> => {
     const pathToFileURL = (filepath: string): URL => {
       let resolved: string = nodePath().resolve(filepath);
       if (filepath.endsWith("/") && !resolved.endsWith("/")) resolved += "/";
-      const url = new URLCtor("file://");
-      url.pathname = resolved.replace(/%/g, "%25").replace(/\\/g, "%5C").replace(/\n/g, "%0A")
+      // Parsed from a string, not built by setting `pathname` on `file://`: Chrome on Windows turns
+      // that into `file:////home/...` (an empty segment before the path), which fileURLToPath rejects.
+      const encoded = resolved.replace(/%/g, "%25").replace(/\\/g, "%5C").replace(/\n/g, "%0A")
         .replace(/\r/g, "%0D").replace(/\t/g, "%09").replace(/\?/g, "%3F").replace(/#/g, "%23");
-      return url;
+      return new URLCtor(`file://${encoded}`);
     };
 
     const toPathIfFileURL = (value: any) => (isURL(value) ? fileURLToPath(value) : value);

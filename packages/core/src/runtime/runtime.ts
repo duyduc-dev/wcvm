@@ -2,6 +2,7 @@
 // loop, a `process`, and a CommonJS loader. The order below mirrors Node's own
 // lib/internal/bootstrap/node.js (task queue, then timers, then globals).
 
+import { withFileUrlFix } from "./fileUrlFix";
 import type { IFsClient } from "../fs/fsClient";
 import type { ISyscallClient } from "../protocols/syscall";
 import { createInternalBinding, type IBindingContext } from "./bindings";
@@ -303,6 +304,13 @@ const createRuntime = (options: IRuntimeOptions) => {
     globalObject = options.globalObject;
     for (const [name, value] of Object.entries(globals)) {
       Object.defineProperty(globalObject, name, { value, writable: true, configurable: true, enumerable: false });
+    }
+    // The platform's `URL` as scripts see it, with `file:/path` fixed for browsers that read the
+    // first path segment as a host (fileUrlFix.ts) - a package building `new URL("file:" + __filename)`
+    // otherwise breaks `fileURLToPath`. Unchanged on a browser that parses it correctly.
+    const FixedURL = withFileUrlFix(globalObject.URL);
+    if (FixedURL !== globalObject.URL) {
+      Object.defineProperty(globalObject, "URL", { value: FixedURL, writable: true, configurable: true, enumerable: false });
     }
     // The guest is Node, and Node has no `WorkerGlobalScope`. This global IS a real Worker's, so the
     // class is there - and libraries sniff it to decide they are inside a Web Worker. Found for real

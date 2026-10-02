@@ -104,6 +104,13 @@ describe("the node command", () => {
     expect(r).toEqual({ code: 0, out: "a+b 7 /home/u /w\n", err: "" });
   }, 20_000); // boots a whole Node runtime: ~2s alone, occasionally past 5s under full-suite load
 
+  it("node -p prints the result of the expression, with require in reach", async () => {
+    const r = await runNode(["-p", "require('./x') + '|' + [1, 2].length"], { "/w/x.js": "module.exports = 'x!'" }, "/w");
+    expect(r.out).toBe("x!|2\n");
+    expect((await runNode(["--print", "({ a: 1 })"])).out).toBe("{ a: 1 }\n");
+    expect((await runNode(["-p"])).code).toBe(9);
+  });
+
   it("node -e runs source text and require resolves from the cwd", async () => {
     const r = await runNode(["-e", "console.log(require('./x'), __filename)"], { "/w/x.js": "module.exports = 'x!'" }, "/w");
     expect(r).toEqual({ code: 0, out: "x! [eval]\n", err: "" });
