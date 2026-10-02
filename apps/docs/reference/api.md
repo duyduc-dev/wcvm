@@ -11,7 +11,7 @@ import { boot, WcvmError } from "wcvm";
 | Option | Default | |
 |---|---|---|
 | `bootTimeoutMs` | `10000` | `ready` rejects with `ERR_BOOT_TIMEOUT` if the kernel does not answer in time. |
-| `persist` | off | `true`, or `{ root?, lazyDepth? }`. Mirrors the filesystem to OPFS; see [Files and persistence](/guide/files#persistence-opfs). Must be decided at boot. |
+| `persist` | off | `true`, or `{ root?, lazyDepth?, exclude? }`. Mirrors the filesystem to OPFS; see [Persistence](/guide/files#persistence). `exclude` is a list of folder or file names that are never persisted, at any depth (`["node_modules"]`). Must be decided at boot. |
 
 `ready` is a promise. `spawn` and every `fs` call wait for it, so awaiting it is optional.
 

@@ -19,5 +19,5 @@ Real Node.js, running in this page. Pick an example, edit it, and press **Run** 
 A run is stopped after 15 seconds. For long-running servers, `npm install`, a file tree and a live preview, [open Studio](https://studio.wcvmjs.com): it is the same runtime with an editor, terminals and project templates.
 
 ::: tip Embed it in your own page
-The demo is a few hundred lines of Vue plus `wcvm` itself: see [`apps/docs/.vitepress/theme/LiveDemo.vue`](https://github.com/duyduc-dev/wcvm/blob/main/apps/docs/.vitepress/theme/LiveDemo.vue). Your page needs the [cross-origin isolation headers](/guide/getting-started#_1-serve-a-page-that-can-boot).
+The demo is a few hundred lines of Vue plus `wcvm` itself: see [`apps/docs/.vitepress/theme/LiveDemo.vue`](https://github.com/duyduc-dev/wcvm/blob/main/apps/docs/.vitepress/theme/LiveDemo.vue). Your page needs the [cross-origin isolation headers](/guide/headers).
 :::

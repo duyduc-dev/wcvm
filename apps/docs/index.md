@@ -11,7 +11,7 @@ hero:
   actions:
     - theme: brand
       text: Get started
-      link: /guide/getting-started
+      link: /guide/introduction
     - theme: alt
       text: Open Studio
       link: https://studio.wcvmjs.com

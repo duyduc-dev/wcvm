@@ -49,7 +49,7 @@ export default defineConfig({
     siteTitle: "wcvm",
 
     nav: [
-      { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
+      { text: "Guide", link: "/guide/introduction", activeMatch: "/guide/" },
       { text: "Playground", link: "/playground" },
       { text: "Reference", link: "/reference/api", activeMatch: "/reference/" },
       { text: "Architecture", link: "/architecture" },
@@ -61,14 +61,31 @@ export default defineConfig({
       {
         text: "Guide",
         items: [
-          { text: "Getting started", link: "/guide/getting-started" },
+          { text: "Introduction", link: "/guide/introduction" },
+          { text: "Quickstart", link: "/guide/getting-started" },
           { text: "Playground", link: "/playground" },
-          { text: "Files and persistence", link: "/guide/files" },
-          { text: "Processes, shell and npm", link: "/guide/processes" },
+        ],
+      },
+      {
+        text: "Building with wcvm",
+        items: [
+          { text: "Working with the file system", link: "/guide/files" },
+          { text: "Running processes", link: "/guide/processes" },
           { text: "Preview a dev server", link: "/guide/preview" },
           { text: "Frameworks", link: "/guide/frameworks" },
+        ],
+      },
+      {
+        text: "Deploying",
+        items: [
+          { text: "Configuring headers", link: "/guide/headers" },
+          { text: "Browser support", link: "/guide/browser-support" },
           { text: "Troubleshooting", link: "/guide/troubleshooting" },
         ],
+      },
+      {
+        text: "Moving to wcvm",
+        items: [{ text: "Migrating from WebContainers", link: "/guide/from-webcontainers" }],
       },
       {
         text: "Reference",
