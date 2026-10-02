@@ -49,7 +49,7 @@ export function TitleBar() {
         onClick={() => navigate({ to: "/" })}
         title="Home"
       >
-        <span className="inline-block size-2.5 rounded-full bg-primary" />
+        <img src="/favicon.svg" alt="" width={20} height={20} className="size-5" />
         WCVM Studio
       </button>
 

@@ -16,6 +16,7 @@ export function TerminalPanel() {
   const { c, snap } = useIde();
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const activeTermId = snap.activeTermId;
+  const activeTask = snap.terminals.find((t) => t.id === activeTermId)?.task;
 
   useEffect(() => {
     const el = bodyRef.current;
@@ -32,8 +33,11 @@ export function TerminalPanel() {
   return (
     <div className="flex h-full flex-col bg-white dark:bg-[#181818]">
       <div className="flex h-8 shrink-0 items-center border-b pr-2">
-        <span className="flex-1 px-3 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        <span className="px-3 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           Terminal
+        </span>
+        <span className="flex-1 truncate text-[11px] text-muted-foreground" role="status">
+          {activeTask ? `${activeTask}…` : ""}
         </span>
         <button
           title="New Terminal"
@@ -51,6 +55,11 @@ export function TerminalPanel() {
         </button>
       </div>
 
+      {activeTask && (
+        <div className="relative h-0.5 shrink-0 overflow-hidden bg-primary/15" role="progressbar" aria-label={activeTask}>
+          <div className="ide-indeterminate absolute inset-y-0 left-0 w-1/4 bg-primary" />
+        </div>
+      )}
       <div ref={bodyRef} className="relative flex-1 overflow-hidden">
         <ResizablePanelGroup orientation="horizontal">
           <ResizablePanel

@@ -1,7 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { buildEmberFiles, buildEmberPackageJson } from "./emberRecipe";
-import { collectText } from "./processUtils";
-import { populateCache, tryCloneFromCache } from "./templateCache";
+import { tryCloneFromCache } from "./templateCache";
 
 export interface EmberTemplateCreationResult {
   isFailure: boolean;
@@ -39,17 +38,10 @@ const createEmberTemplateProject = async (
   const pkg = buildEmberPackageJson(typescript);
   await wc.fs.writeFile(`${projectPath}/package.json`, JSON.stringify(pkg, null, 2));
 
-  onProgress?.("Installing dependencies from the npm registry (about 15s)…");
-  const install = await wc.spawn("npm", ["install"], { cwd: projectPath });
-  const installLog = await collectText(install);
-  const installExit = await install.exit;
-  if (installExit.exitCode !== 0) {
-    return { isFailure: true, message: `npm install failed:\n${installLog.trim()}` };
-  }
-
-  // See createViteTemplateProject's own comments on these two calls.
+  // `npm install` is the slow part: the editor runs it in a visible terminal as soon as the project
+  // opens (see IdeController.installDependenciesIfNeeded). Sync what was
+  // written so far so a reload right after still has it.
   await wc.fs.sync();
-  void populateCache(kind, projectPath);
 
   return { isFailure: false, message: "ok" };
 };

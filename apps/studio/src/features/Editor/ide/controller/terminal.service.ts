@@ -8,6 +8,10 @@ export interface TerminalHandle {
   term: Terminal;
   fit: FitAddon;
   process: IProcess;
+  /** Types `line` into the shell as if the user had (echoed, with history) and resolves once the
+   *  shell is back at its prompt: true if the output contained `successMarker`, false otherwise
+   *  (also when the shell was replaced or died first). */
+  run: (line: string, successMarker: string) => Promise<boolean>;
   dispose: () => void;
 }
 
@@ -268,6 +272,9 @@ export function createShellTerminal(
   onExit: () => void,
   fs: { listDir: ILineInputOptions["listDir"]; cwd: string },
   respawn: (cwd: string) => Promise<IProcess>,
+  onActivity?: () => void,
+  /** A command line the user submitted, or null once the shell is back at its prompt. */
+  onCommand?: (line: string | null) => void,
 ): TerminalHandle {
   const term = new Terminal({
     convertEol: true,
@@ -279,22 +286,63 @@ export function createShellTerminal(
   const fit = new FitAddon();
   term.loadAddon(fit);
 
+  // xterm turns Ctrl+V into the control character ^V and cancels the key event, so the browser
+  // never fires its own `paste` (which xterm would have turned into input). Hand paste back to the
+  // browser, and make Ctrl/Cmd+C copy when text is selected (otherwise it stays the interrupt).
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown" || event.altKey || !(event.ctrlKey || event.metaKey)) return true;
+    const key = event.key.toLowerCase();
+    if (key === "v") return false;
+    if (key === "c" && !event.shiftKey && term.hasSelection()) {
+      void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+      term.clearSelection();
+      return false;
+    }
+    return true;
+  });
+
   let current = process;
   let writer = current.stdin.getWriter();
   // A line was sent and the shell has not printed its prompt again yet.
   let busy = false;
   let restarting = false;
+  // The command `run()` is waiting on: `seen` is the output so far (its tail is enough to find a
+  // marker split across two chunks).
+  // Resolves at the shell's first prompt: its startup prompt arrives asynchronously, and a command
+  // typed before it would have that prompt mistaken for "the command finished".
+  let markPromptSeen: () => void = () => {};
+  const promptSeen = new Promise<void>((resolve) => {
+    markPromptSeen = resolve;
+  });
+  let pendingRun: { marker: string; seen: string; resolve: (ok: boolean) => void } | null = null;
+  const settleRun = (ok: boolean) => {
+    const run = pendingRun;
+    pendingRun = null;
+    run?.resolve(ok);
+  };
 
   const attach = (target: IProcess) => {
     const onChunk = (text: string) => {
       term.write(text);
-      if (target === current && PROMPT.test(text)) busy = false;
+      onActivity?.();
+      if (target !== current) return;
+      if (pendingRun) pendingRun.seen = (pendingRun.seen + text).slice(-4096);
+      if (PROMPT.test(text)) {
+        markPromptSeen();
+        busy = false;
+        onCommand?.(null);
+        if (pendingRun) settleRun(pendingRun.seen.includes(pendingRun.marker));
+      }
     };
     void pump(target.stdout, onChunk);
     void pump(target.stderr, onChunk);
     // A shell we replaced on purpose exiting is not the terminal dying.
     void target.exit.then(() => {
-      if (target === current) onExit();
+      if (target === current) {
+        markPromptSeen();
+        settleRun(false);
+        onExit();
+      }
     });
   };
   attach(current);
@@ -302,6 +350,7 @@ export function createShellTerminal(
   const restart = async (): Promise<void> => {
     restarting = true;
     const old = current;
+    settleRun(false);
     term.write("^C\r\n");
     void writer.close().catch(() => {});
     old.kill();
@@ -311,6 +360,7 @@ export function createShellTerminal(
       current = next;
       writer = next.stdin.getWriter();
       busy = false;
+      onCommand?.(null);
       attach(next);
     } catch (error) {
       term.write(`\r\nwcvm: could not restart the shell: ${error instanceof Error ? error.message : String(error)}\r\n`);
@@ -325,7 +375,10 @@ export function createShellTerminal(
     listDir: fs.listDir,
     onLine: (line) => {
       if (restarting) return;
-      if (line.trim() !== "") busy = true;
+      if (line.trim() !== "") {
+        busy = true;
+        onCommand?.(line);
+      }
       void writer.write(encoder.encode(line + "\n")).catch(() => {});
     },
     onInterrupt: () => {
@@ -337,6 +390,7 @@ export function createShellTerminal(
   });
 
   const dispose = () => {
+    settleRun(false);
     inputSub.dispose();
     void writer.close().catch(() => {});
     term.dispose();
@@ -347,6 +401,17 @@ export function createShellTerminal(
     fit,
     get process() {
       return current;
+    },
+    run: async (line, successMarker) => {
+      await promptSeen;
+      settleRun(false);
+      return new Promise<boolean>((resolve) => {
+        pendingRun = { marker: successMarker, seen: "", resolve };
+        busy = true;
+        onCommand?.(line);
+        term.write(`${line}\r\n`);
+        void writer.write(encoder.encode(line + "\n")).catch(() => settleRun(false));
+      });
     },
     dispose,
   };

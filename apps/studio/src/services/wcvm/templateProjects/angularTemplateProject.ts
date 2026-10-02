@@ -1,7 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { ANGULAR_FILES, ANGULAR_PACKAGE_JSON, ANGULAR_POST_INSTALL_FILES } from "./angularRecipe";
-import { collectText } from "./processUtils";
-import { populateCache, tryCloneFromCache } from "./templateCache";
+import { tryCloneFromCache } from "./templateCache";
 
 export interface AngularTemplateCreationResult {
   isFailure: boolean;
@@ -38,15 +37,18 @@ const createAngularTemplateProject = async (
     JSON.stringify({ ...ANGULAR_PACKAGE_JSON, name: projectPath.split("/").at(-1) }, null, 2),
   );
 
-  onProgress?.("Installing dependencies from the npm registry (about 30s)…");
-  const install = await wc.spawn("npm", ["install"], { cwd: projectPath });
-  const installLog = await collectText(install);
-  const installExit = await install.exit;
-  if (installExit.exitCode !== 0) {
-    return { isFailure: true, message: `npm install failed:\n${installLog.trim()}` };
-  }
+  // `npm install` (and the patches that must follow it) runs in the editor's terminal - see
+  // finishTemplateInstall in postInstall.ts.
+  await wc.fs.sync();
 
-  onProgress?.("Patching oxc-parser for this sandbox…");
+  return { isFailure: false, message: "ok" };
+};
+
+export { createAngularTemplateProject };
+
+/** What follows `npm install` for Angular: replaces oxc-parser with a stub (see angularRecipe.ts). */
+const patchAngularAfterInstall = async (projectPath: string): Promise<void> => {
+  const wc = getWcvmInstance();
   const oxcDir = `${projectPath}/node_modules/oxc-parser`;
   if (await wc.fs.exists(oxcDir)) await wc.fs.rm(oxcDir, { recursive: true });
   for (const [relative, contents] of ANGULAR_POST_INSTALL_FILES) {
@@ -54,13 +56,6 @@ const createAngularTemplateProject = async (
     await wc.fs.mkdir(target.slice(0, target.lastIndexOf("/")), { recursive: true });
     await wc.fs.writeFile(target, contents);
   }
-
-  // See createViteTemplateProject's own comments on these two calls. The cached copy includes the
-  // oxc-parser stub (populateCache clones the whole directory), so a clone never re-patches.
-  await wc.fs.sync();
-  void populateCache("angular", projectPath);
-
-  return { isFailure: false, message: "ok" };
 };
 
-export { createAngularTemplateProject };
+export { patchAngularAfterInstall };

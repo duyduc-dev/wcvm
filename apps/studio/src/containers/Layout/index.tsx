@@ -27,7 +27,10 @@ const Layout = ({ children }: PropsWithChildren) => {
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem className="hidden md:block">
-                  <BreadcrumbLink href="#">WCVM Studio</BreadcrumbLink>
+                  <BreadcrumbLink href="/" className="flex items-center gap-2 font-semibold text-foreground">
+                    <img src="/favicon.svg" alt="" width={24} height={24} className="size-6" />
+                    WCVM Studio
+                  </BreadcrumbLink>
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>

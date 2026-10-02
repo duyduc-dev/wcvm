@@ -8,13 +8,14 @@ import {
   getOrCreateModel,
   renameModel,
 } from "./editor.service";
-import { setProjectContext, syncDependencyTypings, syncProjectModels, syncTsconfigOptions } from "./typescript.service";
+import { setProjectContext, syncAfterInstall, syncDependencyTypings, syncProjectModels, syncTsconfigOptions } from "./typescript.service";
 import { EditorStatus } from "./editorStatus";
 import { canFormat, setFormatContext } from "./format.service";
 import { basename, mimeTypeFor, readTextFile, tabKindFor, writeTextFile } from "./fs.service";
 import { STATUS_MESSAGE_TIMEOUT_MS } from "./constants";
 import { applyTheme, getInitialIsDark } from "@/lib/theme";
 import { useWcvmProjectStore } from "@/stores/useWcvmProjectStore";
+import { finishTemplateInstall } from "@/services/wcvm/templateProjects/postInstall";
 import {
   createEmptyPreviewTab,
   createPreviewTab,
@@ -28,6 +29,12 @@ import {
   type TerminalHandle,
 } from "./terminal.service";
 import type { IdeSnapshot, PaletteMode, PreviewTab } from "./types";
+
+const FS_REFRESH_INTERVAL_MS = 700;
+
+/** A command typed into a terminal that installs packages - these get the progress bar (a dev
+ *  server also runs "until it's stopped", so a bar for every command would never go away). */
+const INSTALL_COMMAND = /^\s*npm\s+(?:install|i|add|in|isntall)\b/;
 
 export class IdeController {
   readonly editorStatus = new EditorStatus();
@@ -75,6 +82,7 @@ export class IdeController {
       paletteOpen: false,
       paletteMode: "command",
       statusMessage: null,
+      fsRevision: 0,
     };
   }
 
@@ -98,6 +106,7 @@ export class IdeController {
     // Marks the project "opened" even if nothing ends up being edited this session - saveFile()
     // below bumps it again on an actual edit, so this is just a floor, not the only signal.
     useWcvmProjectStore.getState().touchProject(this.projectId);
+    void this.installDependenciesIfNeeded();
     // The `.dark` class itself is already applied app-wide at boot (see __root.tsx) — nothing
     // theme-specific to do here.
     void this.wc.preview.enable();
@@ -122,6 +131,7 @@ export class IdeController {
   }
 
   dispose(): void {
+    this.lifecycle += 1;
     this.stopPreviewListener?.();
     if (this.projectSyncTimer) clearTimeout(this.projectSyncTimer);
     setProjectContext(null);
@@ -142,6 +152,8 @@ export class IdeController {
     for (const url of this.imageUrls.values()) URL.revokeObjectURL(url);
     this.editor?.dispose();
     if (this.statusTimer) clearTimeout(this.statusTimer);
+    if (this.fsRefreshTimer) clearTimeout(this.fsRefreshTimer);
+    this.fsRefreshTimer = null;
   }
 
   // ── layout ──────────────────────────────────────────────────────────────
@@ -189,6 +201,7 @@ export class IdeController {
     this.editor.onDidChangeModelContent(() => {
       const path = this.snap.activeTab;
       if (path && this.snap.tabKinds[path] === "text") this.refreshDirty(path);
+      for (const cb of this.contentListeners) cb();
     });
     this.wireEditorStatus(this.editor);
     setProjectContext({ fs: this.fs, rootPath: this.snap.rootPath });
@@ -400,6 +413,19 @@ export class IdeController {
     if (model && saved !== undefined) model.setValue(saved);
   }
 
+  private contentListeners = new Set<() => void>();
+
+  /** Live text of an open file (the unsaved editor buffer when there is one). */
+  textOf(path: string): string {
+    return this.models.get(path)?.getValue() ?? this.savedContents.get(path) ?? "";
+  }
+
+  /** Calls `cb` on every edit in the editor; returns an unsubscribe. */
+  onContentChange(cb: () => void): () => void {
+    this.contentListeners.add(cb);
+    return () => this.contentListeners.delete(cb);
+  }
+
   imageUrlFor(path: string): string | undefined {
     return this.imageUrls.get(path);
   }
@@ -459,7 +485,87 @@ export class IdeController {
     });
   }
 
-  async newShellTerminal(): Promise<void> {
+  /** Bumped by `dispose()`: React runs start -> dispose -> start in dev (StrictMode), and an async
+   *  step begun before a dispose must notice it and stand down. */
+  private lifecycle = 0;
+
+  /** Output from a terminal usually means files changed (`npm install`, `touch`, a build): tell the
+   *  Explorer to reload, at most once per FS_REFRESH_INTERVAL_MS while output keeps coming, with a
+   *  trailing refresh so the last chunk is always picked up. */
+  private fsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private fsMayHaveChanged(): void {
+    if (this.fsRefreshTimer) return;
+    this.fsRefreshTimer = setTimeout(() => {
+      this.fsRefreshTimer = null;
+      this.set({ fsRevision: this.snap.fsRevision + 1 });
+    }, FS_REFRESH_INTERVAL_MS);
+  }
+
+  /** `node_modules` is never persisted (see lib/wcvm), so a project with dependencies and no
+   *  `node_modules` - freshly created, or reopened after a reload - needs an install. */
+  private async needsInstall(): Promise<boolean> {
+    const fs = this.wc.fs;
+    const root = this.snap.rootPath;
+    try {
+      if (!(await fs.exists(`${root}/package.json`)) || (await fs.exists(`${root}/node_modules`))) return false;
+      const pkg = JSON.parse(new TextDecoder().decode(await fs.readFile(`${root}/package.json`)));
+      return Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Opens a terminal and installs the dependencies where the user can watch, then finishes what
+   *  the template needs after its install (patches, links - see postInstall.ts). */
+  private async installDependenciesIfNeeded(): Promise<void> {
+    const lifecycle = this.lifecycle;
+    if (!(await this.needsInstall()) || lifecycle !== this.lifecycle) return;
+    const marker = "wcvm: dependencies installed";
+    const { id, handle } = await this.newShellTerminal();
+    if (lifecycle !== this.lifecycle) return;
+    const ok = await handle.run(`npm install && echo "${marker}"`, marker);
+    if (lifecycle !== this.lifecycle) return;
+    this.setTerminalTask(id, undefined);
+    if (!ok) {
+      // A partial node_modules would make the next open skip the install.
+      await this.wc.fs.rm(`${this.snap.rootPath}/node_modules`, { recursive: true }).catch(() => {});
+      this.status("npm install failed - fix the error above and run it again");
+      return;
+    }
+    const project = useWcvmProjectStore.getState().getProject(this.projectId);
+    const failure = project ? await finishTemplateInstall(project.type, project.path) : null;
+    if (lifecycle !== this.lifecycle) return;
+    this.set({ fsRevision: this.snap.fsRevision + 1 });
+    this.syncLanguageServiceAfterInstall();
+    this.status(failure ? `Install finished, but: ${failure}` : "Dependencies installed");
+  }
+
+  /** A command was submitted in terminal `id` (or, with null, finished): an `npm install` gets the
+   *  progress bar, and once it is done the editor's language service picks up what it installed. */
+  private onTerminalCommand(id: string, line: string | null): void {
+    const wasInstalling = this.snap.terminals.find((t) => t.id === id)?.task !== undefined;
+    this.setTerminalTask(id, line !== null && INSTALL_COMMAND.test(line) ? "Installing dependencies" : undefined);
+    if (line === null && wasInstalling) {
+      this.fsMayHaveChanged();
+      this.syncLanguageServiceAfterInstall();
+    }
+  }
+
+  /** Typings for the new `node_modules` and a fresh type check / lint of every open file. */
+  private syncLanguageServiceAfterInstall(): void {
+    const monaco = this.monaco;
+    if (!monaco) return;
+    void syncProjectModels(monaco, new Set(this.models.keys()))
+      .then(() => syncAfterInstall(monaco))
+      .catch(() => {});
+  }
+
+  private setTerminalTask(id: string, task: string | undefined): void {
+    if (this.snap.terminals.find((t) => t.id === id)?.task === task) return;
+    this.set({ terminals: this.snap.terminals.map((t) => (t.id === id ? { ...t, task } : t)) });
+  }
+
+  async newShellTerminal(): Promise<{ id: string; handle: TerminalHandle }> {
     const id = uuidv6();
     this.terminalCount += 1;
     const process = await this.spawnShell(this.snap.rootPath);
@@ -475,7 +581,8 @@ export class IdeController {
           })),
         );
       },
-    }, (cwd) => this.spawnShell(cwd));
+    }, (cwd) => this.spawnShell(cwd), () => this.fsMayHaveChanged(), (line) =>
+      this.onTerminalCommand(id, line));
     this.terminals.set(id, handle);
     const entry = { id, label: shellTerminalLabel(this.terminalCount), alive: true };
     this.set({
@@ -483,6 +590,7 @@ export class IdeController {
       activeTermId: id,
       panelCollapsed: false,
     });
+    return { id, handle };
   }
 
   private markTerminalDead(id: string): void {

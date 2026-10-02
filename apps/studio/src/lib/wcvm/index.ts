@@ -17,7 +17,12 @@ const bootWcvm = (): Promise<void> => {
       // single page load - confirmed directly to hit ERR_BOOT_TIMEOUT outright with enough
       // projects accumulated (~10 real React/Vite installs, 774MB/27k files). Lazy restore defers
       // a project's content until something actually opens it instead.
-      persist: { lazyDepth: 4 },
+      //
+      // exclude node_modules: it's thousands of small files that `npm install` recreates, and
+      // mirroring them to OPFS is what made creating a project slow. It lives in memory for the
+      // session; the editor reinstalls it when a project is opened without it
+      // (IdeController.installDependenciesIfNeeded).
+      persist: { lazyDepth: 4, exclude: ["node_modules"] },
     });
 
     // A real Linux host always has /tmp and os.tmpdir() reports it, but the sandbox's filesystem

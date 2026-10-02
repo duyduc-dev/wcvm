@@ -1,6 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { collectText } from "./processUtils";
-import { populateCache, tryCloneFromCache } from "./templateCache";
+import { tryCloneFromCache } from "./templateCache";
 import { pinVitePackage } from "./vitePins";
 
 export interface TailwindTemplateCreationResult {
@@ -264,7 +264,7 @@ function patchTailwindVitePlugin(source: string): string {
  *  false) if @tailwindcss/oxide-wasm32-wasi didn't end up installed - shouldn't happen given
  *  install.ts's own PLATFORM.cpu="wasm32", but falling through to a clear install failure beats a
  *  cryptic runtime one. */
-async function patchOxideForBrowser(projectPath: string): Promise<boolean> {
+export async function patchOxideForBrowser(projectPath: string): Promise<boolean> {
   const wc = getWcvmInstance();
   const wasiPkgDir = `${projectPath}/node_modules/@tailwindcss/oxide-wasm32-wasi`;
   if (!(await wc.fs.exists(wasiPkgDir))) return false;
@@ -287,7 +287,7 @@ async function patchOxideForBrowser(projectPath: string): Promise<boolean> {
 /** Patches @tailwindcss/vite's own plugin bundle (see patchTailwindVitePlugin's own doc comment) -
  *  a no-op returning false if the package isn't where expected (shouldn't happen right after our
  *  own npm install, but falling through to a clear failure beats a cryptic one). */
-async function patchTailwindVitePluginOnDisk(projectPath: string): Promise<boolean> {
+export async function patchTailwindVitePluginOnDisk(projectPath: string): Promise<boolean> {
   const wc = getWcvmInstance();
   const viteDir = `${projectPath}/node_modules/@tailwindcss/vite`;
   const entryPath = `${viteDir}/dist/index.mjs`;
@@ -364,33 +364,9 @@ const createTailwindTemplateProject = async (
     await wc.fs.rm(`${projectPath}/src/assets/typescript.svg`);
   }
 
-  onProgress?.("Installing dependencies from the npm registry (about 10s)…");
-  const install = await wc.spawn("npm", ["install"], { cwd: projectPath });
-  const installLog = await collectText(install);
-  const installExit = await install.exit;
-  if (installExit.exitCode !== 0) {
-    return { isFailure: true, message: `npm install failed:\n${installLog.trim()}` };
-  }
-
-  onProgress?.("Patching @tailwindcss/oxide and @tailwindcss/vite for this sandbox…");
-  if (!(await patchOxideForBrowser(projectPath))) {
-    return { isFailure: true, message: "npm install succeeded, but @tailwindcss/oxide-wasm32-wasi wasn't installed - cannot patch it for this sandbox." };
-  }
-  if (!(await patchTailwindVitePluginOnDisk(projectPath))) {
-    return { isFailure: true, message: "npm install succeeded, but @tailwindcss/vite wasn't installed where expected - cannot patch it for this sandbox." };
-  }
-
-  // OPFS persistence (boot({persist})) is write-behind - without this, a reload right after
-  // "created" reports success could still lose files npm install (or the patches above) just
-  // wrote but hadn't finished mirroring yet (see wc.fs.sync()'s own doc comment). A no-op when
-  // persistence isn't enabled.
+  // `npm install` (and the patches that must follow it) runs in the editor's terminal - see
+  // finishTemplateInstall in postInstall.ts.
   await wc.fs.sync();
-
-  // Fire-and-forget, AFTER the real project is already synced and reported - see
-  // populateCache's own comment for why folding this into the sync() above would be wrong. The
-  // cached copy includes both patches above (populateCache clones the whole project directory),
-  // so a future clone never needs to re-patch.
-  void populateCache("tailwind", projectPath);
 
   return { isFailure: false, message: "ok" };
 };

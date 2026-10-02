@@ -158,3 +158,22 @@
   width: 100% !important;
   height: 100% !important;
 }
+/* Terminal panel: a bar with no known length, for work whose progress we can't measure. */
+@keyframes ide-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(400%);
+  }
+}
+
+.ide-indeterminate {
+  animation: ide-indeterminate 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ide-indeterminate {
+    animation-duration: 3s;
+  }
+}

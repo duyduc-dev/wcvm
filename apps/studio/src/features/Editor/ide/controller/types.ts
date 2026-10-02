@@ -10,6 +10,9 @@ export interface TerminalEntry {
   id: string;
   label: string;
   alive: boolean;
+  /** What the terminal is busy with on the app's behalf ("Installing dependencies"): shown as a
+   *  spinner on its tab and an indeterminate bar over it. */
+  task?: string;
 }
 
 export interface PreviewTab {
@@ -41,4 +44,7 @@ export interface IdeSnapshot {
   paletteOpen: boolean;
   paletteMode: PaletteMode;
   statusMessage: string | null;
+  /** Bumped when the terminal may have changed files (output, a finished install): the Explorer
+   *  reloads the folders it has open. */
+  fsRevision: number;
 }

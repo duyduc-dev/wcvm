@@ -1,4 +1,4 @@
-import { TerminalWindowIcon, TrashIcon } from "@phosphor-icons/react";
+import { SpinnerIcon, TerminalWindowIcon, TrashIcon } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import type { TerminalEntry } from "../controller/types";
 import { useIde } from "../controller/useIde";
@@ -20,7 +20,11 @@ export function TerminalList({ terminals }: { terminals: TerminalEntry[] }) {
                 !t.alive && "italic opacity-60",
               )}
             >
-              <TerminalWindowIcon className="size-3.5 shrink-0 opacity-70" />
+              {t.task ? (
+                <SpinnerIcon className="size-3.5 shrink-0 animate-spin" aria-label={t.task} />
+              ) : (
+                <TerminalWindowIcon className="size-3.5 shrink-0 opacity-70" />
+              )}
               <span className="truncate">{t.label}</span>
               <button
                 title="Kill terminal"

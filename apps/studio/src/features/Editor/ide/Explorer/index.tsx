@@ -1,5 +1,5 @@
 import { ArrowsClockwiseIcon, FilePlusIcon, FolderPlusIcon } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,9 +55,20 @@ export function Explorer() {
     void loadDir(rootPath);
   }, [rootPath, loadDir]);
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     for (const path of expanded) void loadDir(path);
-  };
+  }, [expanded, loadDir]);
+
+  // The terminal (npm install, touch, git, a build...) changes files behind the Explorer's back:
+  // IdeController bumps `fsRevision` while it produces output. Reload what is open - not on first
+  // render (the effect above already loads the root) and not when only `expanded` changes.
+  const fsRevision = snap.fsRevision;
+  const lastRevision = useRef(fsRevision);
+  useEffect(() => {
+    if (lastRevision.current === fsRevision) return;
+    lastRevision.current = fsRevision;
+    refresh();
+  }, [fsRevision, refresh]);
 
   const toggle = (entry: DirEntry) => {
     setExpanded((prev) => {

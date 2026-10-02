@@ -1,7 +1,6 @@
 import { getWcvmInstance } from "@/lib/wcvm";
 import { buildFullstackPackageJson, FULLSTACK_RECIPES, type FullstackKind } from "./fullstackRecipes";
-import { collectText } from "./processUtils";
-import { populateCache, tryCloneFromCache } from "./templateCache";
+import { tryCloneFromCache } from "./templateCache";
 
 export interface FullstackTemplateCreationResult {
   isFailure: boolean;
@@ -50,26 +49,21 @@ const createFullstackTemplateProject = async (
   const name = projectPath.split("/").at(-1)!;
   await wc.fs.writeFile(`${projectPath}/package.json`, `${JSON.stringify(buildFullstackPackageJson(recipe, name), null, 2)}\n`);
 
-  onProgress?.(`Installing dependencies from the npm registry (${recipe.installHint})…`);
-  const install = await wc.spawn("npm", ["install"], { cwd: projectPath });
-  const installLog = await collectText(install);
-  const installExit = await install.exit;
-  if (installExit.exitCode !== 0) {
-    return { isFailure: true, message: `npm install failed:\n${installLog.trim()}` };
-  }
-
-  // What a `postinstall` script would do - wcvm's npm never runs lifecycle scripts.
-  for (const { path, target } of recipe.links ?? []) {
-    const link = `${projectPath}/${path}`;
-    await wc.fs.mkdir(link.slice(0, link.lastIndexOf("/")), { recursive: true });
-    if (!(await wc.fs.exists(link))) await wc.fs.symlink(target, link);
-  }
-
-  // See createViteTemplateProject's own comments on these two calls.
+  // `npm install` (and the symlinks that must follow it) runs in the editor's terminal - see
+  // finishTemplateInstall in postInstall.ts.
   await wc.fs.sync();
-  void populateCache(kind, projectPath);
 
   return { isFailure: false, message: "ok" };
 };
 
-export { createFullstackTemplateProject };
+/** What a `postinstall` script would do - wcvm's npm never runs lifecycle scripts. */
+const linkFullstackAfterInstall = async (projectPath: string, kind: FullstackKind): Promise<void> => {
+  const wc = getWcvmInstance();
+  for (const { path, target } of FULLSTACK_RECIPES[kind].links ?? []) {
+    const link = `${projectPath}/${path}`;
+    await wc.fs.mkdir(link.slice(0, link.lastIndexOf("/")), { recursive: true });
+    if (!(await wc.fs.exists(link))) await wc.fs.symlink(target, link);
+  }
+};
+
+export { createFullstackTemplateProject, linkFullstackAfterInstall };

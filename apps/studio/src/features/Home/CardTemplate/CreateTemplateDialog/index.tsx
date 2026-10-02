@@ -119,12 +119,8 @@ const CreateTemplateDialog = () => {
             </div>
           </DialogTitle>
           <DialogDescription>
-            {selected.category === "Backend"
-              ? `Setting up a ${selected.label} ${selected.description} server and installing its dependencies`
-              : selected.category === "Fullstack"
-                ? `Setting up a ${selected.label} app and installing its dependencies`
-                : `Scaffolding a real Vite + ${selected.label} + ${selected.description} project`}{" "}
-            — this can take up to a minute the first time.
+            Writing the {selected.label} project files. Dependencies are installed in the editor&apos;s
+            terminal as soon as it opens.
           </DialogDescription>
         </DialogHeader>
         <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
