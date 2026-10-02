@@ -15,6 +15,7 @@ import { basename } from "../controller/fs.service";
 import { useIde } from "../controller/useIde";
 import { Breadcrumb } from "./Breadcrumb";
 import { ImageView } from "./ImageView";
+import { MarkdownView } from "./MarkdownView";
 import { TabStrip } from "./TabStrip";
 
 export function EditorGroup() {
@@ -25,6 +26,7 @@ export function EditorGroup() {
   // feeds the queue; a clean tab closes immediately, a dirty one pops the dialog below.
   const [queue, setQueue] = useState<string[]>([]);
   const [promptPath, setPromptPath] = useState<string | null>(null);
+  const [mdPreview, setMdPreview] = useState<string[]>([]);
 
   useEffect(() => {
     const el = hostRef.current;
@@ -54,12 +56,22 @@ export function EditorGroup() {
       <TabStrip onRequestClose={(path) => processQueue([path])} />
 
       {snap.activeTab && (
-        <Breadcrumb path={snap.activeTab} rootPath={snap.rootPath} projectTitle={snap.projectTitle} />
+        <Breadcrumb path={snap.activeTab} rootPath={snap.rootPath} projectTitle={snap.projectTitle}
+          markdownOpen={mdPreview.includes(snap.activeTab)}
+          onToggleMarkdown={() =>
+            setMdPreview((open) =>
+              open.includes(snap.activeTab!) ? open.filter((p) => p !== snap.activeTab) : [...open, snap.activeTab!],
+            )
+          }
+        />
       )}
 
       <div className="relative flex-1">
         <div ref={hostRef} className={cn("ide-editor-host absolute inset-0", activeKind !== "text" && "invisible")} />
         {activeKind === "image" && snap.activeTab && <ImageView key={snap.activeTab} path={snap.activeTab} />}
+        {snap.activeTab && activeKind === "text" && mdPreview.includes(snap.activeTab) && (
+          <MarkdownView key={snap.activeTab} path={snap.activeTab} />
+        )}
         {!snap.activeTab && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             Open a file from the Explorer

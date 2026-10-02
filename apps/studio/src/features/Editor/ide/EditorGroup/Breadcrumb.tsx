@@ -1,4 +1,4 @@
-import { CaretRightIcon, MagicWandIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, EyeIcon, MagicWandIcon } from "@phosphor-icons/react";
 import { basename, relativeTo } from "../controller/fs.service";
 import { useIde } from "../controller/useIde";
 import { FileIcon } from "../fileIcon";
@@ -7,9 +7,11 @@ interface BreadcrumbProps {
   path: string;
   rootPath: string;
   projectTitle: string;
+  markdownOpen?: boolean;
+  onToggleMarkdown?: () => void;
 }
 
-export function Breadcrumb({ path, rootPath, projectTitle }: BreadcrumbProps) {
+export function Breadcrumb({ path, rootPath, projectTitle, markdownOpen, onToggleMarkdown }: BreadcrumbProps) {
   const { c, snap } = useIde();
   const rel = relativeTo(rootPath, path);
   const segments = [projectTitle, ...rel.split("/").filter(Boolean)];
@@ -34,6 +36,19 @@ export function Breadcrumb({ path, rootPath, projectTitle }: BreadcrumbProps) {
         );
       })}
     </div>
+      {snap.tabKinds[path] === "text" && onToggleMarkdown && /\.(md|markdown|mdx)$/i.test(path) && (
+        <button
+          type="button"
+          title={markdownOpen ? "Show the Markdown source" : "Open Markdown Preview"}
+          aria-label="Toggle Markdown Preview"
+          aria-pressed={markdownOpen}
+          onClick={onToggleMarkdown}
+          className="mr-1 flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground aria-pressed:bg-accent aria-pressed:text-foreground"
+        >
+          <EyeIcon className="size-3.5" />
+          Preview
+        </button>
+      )}
       {snap.tabKinds[path] === "text" && (
         <button
           type="button"
