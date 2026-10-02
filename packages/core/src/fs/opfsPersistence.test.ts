@@ -647,3 +647,78 @@ describe("createOpfsMirror", () => {
     for (let i = 0; i < 40; i++) expect(root.readFileAt(`/f${i}.txt`)).toBeDefined();
   });
 });
+
+describe("excluded names (boot({ persist: { exclude } }))", () => {
+  const exclude = new Set(["node_modules"]);
+
+  it("never mirrors a file, a directory or a symlink under an excluded name, at any depth", async () => {
+    const root = createFakeOpfsDir();
+    const vfs = new Vfs();
+    const mirror = createOpfsMirror(vfs, root, exclude);
+    vfs.onChange = (path, _kind, contentChanged, subtree) => {
+      if (contentChanged) mirror.notify(path, subtree);
+    };
+
+    vfs.mkdir("/app");
+    vfs.writeFile("/app/index.js", new TextEncoder().encode("kept"));
+    vfs.mkdir("/app/node_modules");
+    vfs.mkdir("/app/node_modules/pkg");
+    vfs.writeFile("/app/node_modules/pkg/index.js", new TextEncoder().encode("dropped"));
+    vfs.symlink("pkg", "/app/node_modules/link");
+    vfs.mkdir("/app/packages");
+    vfs.mkdir("/app/packages/a");
+    vfs.mkdir("/app/packages/a/node_modules");
+    vfs.writeFile("/app/packages/a/node_modules/x.js", new TextEncoder().encode("dropped"));
+    await mirror.flush();
+
+    expect(decode(root.readFileAt("/app/index.js"))).toBe("kept");
+    expect(root.hasDirAt("/app/packages/a")).toBe(true);
+    expect(root.hasDirAt("/app/node_modules")).toBe(false);
+    expect(root.hasDirAt("/app/packages/a/node_modules")).toBe(false);
+    expect(root.readFileAt("/__wcvm_symlinks__.json")).toBeUndefined();
+  });
+
+  it("skips an excluded child when a renamed directory's whole subtree is mirrored", async () => {
+    const root = createFakeOpfsDir();
+    const vfs = new Vfs();
+    const mirror = createOpfsMirror(vfs, root, exclude);
+    vfs.mkdir("/old");
+    vfs.writeFile("/old/a.txt", new TextEncoder().encode("a"));
+    vfs.mkdir("/old/node_modules");
+    vfs.writeFile("/old/node_modules/x.js", new TextEncoder().encode("x"));
+    vfs.onChange = (path, _kind, contentChanged, subtree) => {
+      if (contentChanged) mirror.notify(path, subtree);
+    };
+    vfs.rename("/old", "/new");
+    await mirror.flush();
+
+    expect(decode(root.readFileAt("/new/a.txt"))).toBe("a");
+    expect(root.hasDirAt("/new/node_modules")).toBe(false);
+  });
+
+  it("does not restore (and deletes) what was persisted under an excluded name before", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/app/index.js", "kept");
+    root.seedFile("/app/node_modules/pkg/index.js", "stale");
+
+    const vfs = new Vfs();
+    await restoreFromOpfs(vfs, root, "/", exclude);
+
+    expect(decode(vfs.readFile("/app/index.js"))).toBe("kept");
+    expect(vfs.exists("/app/node_modules")).toBe(false);
+    expect(root.hasDirAt("/app/node_modules")).toBe(false);
+  });
+
+  it("lazy restore also leaves an excluded directory out, once its project materializes", async () => {
+    const root = createFakeOpfsDir();
+    root.seedFile("/home/user/projects/p/index.js", "kept");
+    root.seedFile("/home/user/projects/p/node_modules/pkg/index.js", "stale");
+
+    const vfs = new Vfs();
+    const lazy = await restoreFromOpfsLazy(vfs, root, 4, exclude);
+    await lazy.ensureRestored(["/home/user/projects/p/index.js"]);
+
+    expect(decode(vfs.readFile("/home/user/projects/p/index.js"))).toBe("kept");
+    expect(vfs.exists("/home/user/projects/p/node_modules")).toBe(false);
+  });
+});

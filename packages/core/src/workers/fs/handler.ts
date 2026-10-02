@@ -27,7 +27,9 @@ export interface IFsWorkerBoot {
    *  found there until something actually touches a path under it (fs/opfsPersistence.ts's
    *  `restoreFromOpfsLazy`) - omitted (the default), every persisted file is restored eagerly on
    *  boot, exactly as before. */
-  persist: false | { root: string; lazyDepth?: number };
+  persist: false | { root: string; lazyDepth?: number; exclude?: string[] };
+  // `exclude`: path segment names (e.g. "node_modules") that are never persisted, at any depth -
+  // see fs/opfsPersistence.ts's ExcludedNames.
 }
 
 /** File System Worker -> kernel: unprompted (not a syscall response), so it's its own

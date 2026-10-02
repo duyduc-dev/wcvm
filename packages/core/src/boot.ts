@@ -27,8 +27,12 @@ interface IBootOptions {
    * depth (a project manager keeping every project under `/<base>/<name>`, say, with `lazyDepth`
    * set to `<name>`'s own segment count) - boot then no longer pays for every OLD unit's own data
    * on every single boot, only the ones actually opened this session.
+   *
+   * `exclude` lists path segment names that are never persisted, at any depth (`["node_modules"]`):
+   * they stay in memory for the session and are absent after a reload. Anything already persisted
+   * under such a name is not restored and is deleted from OPFS.
    */
-  persist?: boolean | { root?: string; lazyDepth?: number };
+  persist?: boolean | { root?: string; lazyDepth?: number; exclude?: string[] };
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 10_000;

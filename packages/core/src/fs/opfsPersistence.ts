@@ -244,6 +244,34 @@ const mapLimit = async <T>(items: T[], limit: number, fn: (item: T) => Promise<v
 // other, so reading them concurrently is a straightforward, safe win.
 const RESTORE_CONCURRENCY = 32;
 
+/** Path segment names that are never persisted (`boot({ persist: { exclude } })`) - matched
+ *  against EVERY segment, so `node_modules` covers one at any depth. They live in memory only: a
+ *  reload restores the project without them. */
+export type ExcludedNames = ReadonlySet<string>;
+const NOTHING_EXCLUDED: ExcludedNames = new Set();
+
+/** True when any segment of `path` is an excluded name. */
+export const isExcludedPath = (path: string, exclude: ExcludedNames): boolean =>
+  exclude.size > 0 && path.split("/").some((segment) => exclude.has(segment));
+
+/** Drops manifest entries under an excluded name and persists the result: anything recorded
+ *  before the name was excluded would otherwise be replayed as a dangling symlink. */
+const dropExcludedSymlinks = async (
+  root: IOpfsDirHandle,
+  manifest: Record<string, string>,
+  exclude: ExcludedNames,
+): Promise<void> => {
+  if (exclude.size === 0) return;
+  let changed = false;
+  for (const key of Object.keys(manifest)) {
+    if (isExcludedPath(key, exclude)) {
+      delete manifest[key];
+      changed = true;
+    }
+  }
+  if (changed) await saveSymlinkManifest(root, manifest);
+};
+
 /** Walks `root`'s structure into `vfs` (mkdir'ing every directory, so a file's parent always
  *  exists by the time anything needs it) and collects every file into `files` rather than reading
  *  its content yet - restoreFromOpfs reads all of those concurrently afterward, see its own doc
@@ -255,14 +283,20 @@ const collectOpfsTree = async (
   root: IOpfsDirHandle,
   path: string,
   files: { path: string; handle: IOpfsFileHandle }[],
+  exclude: ExcludedNames,
 ): Promise<void> => {
   for await (const [name, handle] of root.entries()) {
     if (path === "/" && name === SYMLINK_MANIFEST_NAME) continue; // not part of the vfs's own tree
+    if (exclude.has(name)) {
+      // Persisted before the name was excluded: not restored, and removed so it stops costing quota.
+      await root.removeEntry(name, { recursive: true }).catch(() => {});
+      continue;
+    }
     const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
     try {
       if (handle.kind === "directory") {
         vfs.mkdir(childPath);
-        await collectOpfsTree(vfs, handle, childPath, files);
+        await collectOpfsTree(vfs, handle, childPath, files, exclude);
       } else {
         files.push({ path: childPath, handle });
       }
@@ -281,9 +315,14 @@ const collectOpfsTree = async (
  *  straight out of the FS Worker's own `boot()` (see workers/fs/worker.ts), which never reaches
  *  its `postMessage({type: "ready"})` line - hanging the entire kernel's boot until the host's own
  *  unrelated `ERR_BOOT_TIMEOUT` fires 10 seconds later, for a problem localized to one bad file. */
-export const restoreFromOpfs = async (vfs: Vfs, root: IOpfsDirHandle, path = "/"): Promise<void> => {
+export const restoreFromOpfs = async (
+  vfs: Vfs,
+  root: IOpfsDirHandle,
+  path = "/",
+  exclude: ExcludedNames = NOTHING_EXCLUDED,
+): Promise<void> => {
   const files: { path: string; handle: IOpfsFileHandle }[] = [];
-  await collectOpfsTree(vfs, root, path, files);
+  await collectOpfsTree(vfs, root, path, files, exclude);
 
   await mapLimit(files, RESTORE_CONCURRENCY, async ({ path: filePath, handle }) => {
     try {
@@ -296,6 +335,7 @@ export const restoreFromOpfs = async (vfs: Vfs, root: IOpfsDirHandle, path = "/"
 
   if (path !== "/") return; // symlinks are only ever replayed once, at the top-level call
   const manifest = await loadSymlinkManifest(root);
+  await dropExcludedSymlinks(root, manifest, exclude);
   await replaySymlinksAndPruneOrphans(vfs, root, manifest, Object.entries(manifest));
 };
 
@@ -340,12 +380,21 @@ export interface ILazyOpfsRestore {
   discardPending(paths: string[]): void;
 }
 
-export const restoreFromOpfsLazy = async (vfs: Vfs, root: IOpfsDirHandle, lazyDepth: number): Promise<ILazyOpfsRestore> => {
+export const restoreFromOpfsLazy = async (
+  vfs: Vfs,
+  root: IOpfsDirHandle,
+  lazyDepth: number,
+  exclude: ExcludedNames = NOTHING_EXCLUDED,
+): Promise<ILazyOpfsRestore> => {
   const pending = new Map<string, { handle: IOpfsDirHandle; promise?: Promise<void> }>();
 
   const walkShallow = async (dir: IOpfsDirHandle, path: string, depth: number): Promise<void> => {
     for await (const [name, handle] of dir.entries()) {
       if (path === "/" && name === SYMLINK_MANIFEST_NAME) continue;
+      if (exclude.has(name)) {
+        await dir.removeEntry(name, { recursive: true }).catch(() => {});
+        continue;
+      }
       const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
       try {
         if (handle.kind === "directory") {
@@ -369,6 +418,7 @@ export const restoreFromOpfsLazy = async (vfs: Vfs, root: IOpfsDirHandle, lazyDe
   // real file content, see restoreFromOpfs's own comment). A symlink whose path isn't under any
   // still-pending root can be replayed immediately; the rest wait for their owning root.
   const manifest = await loadSymlinkManifest(root);
+  await dropExcludedSymlinks(root, manifest, exclude);
   await replaySymlinksAndPruneOrphans(
     vfs,
     root,
@@ -409,7 +459,7 @@ export const restoreFromOpfsLazy = async (vfs: Vfs, root: IOpfsDirHandle, lazyDe
    *  whichever symlinks belong under it from the manifest already loaded above. */
   const materialize = async (rootPath: string, handle: IOpfsDirHandle): Promise<void> => {
     await withSuppressedOnChange(async () => {
-      await restoreFromOpfs(vfs, handle, rootPath);
+      await restoreFromOpfs(vfs, handle, rootPath, exclude);
       const own = Object.entries(manifest).filter(([linkPath]) => isUnderOrEqual(linkPath, rootPath));
       await replaySymlinksAndPruneOrphans(vfs, root, manifest, own);
     });
@@ -528,6 +578,7 @@ const resyncSubtree = async (
   path: string,
   queueManifestOp: (op: () => Promise<void>) => Promise<void>,
   walkChildren: boolean,
+  exclude: ExcludedNames,
 ): Promise<void> => {
   const stat = vfs.lstat(path);
   if (stat.kind === "symlink") {
@@ -541,12 +592,13 @@ const resyncSubtree = async (
   await ensureDirCached(path);
   if (!walkChildren) return;
   for (const [name, kind] of vfs.readdirKinds(path)) {
+    if (exclude.has(name)) continue;
     const childPath = path === "/" ? `/${name}` : `${path}/${name}`;
     if (kind === "symlink") {
       await queueManifestOp(() => recordSymlink(root, childPath, vfs.readlink(childPath)));
       continue;
     }
-    await resyncSubtree(vfs, root, ensureDirCached, childPath, queueManifestOp, walkChildren);
+    await resyncSubtree(vfs, root, ensureDirCached, childPath, queueManifestOp, walkChildren, exclude);
   }
 };
 
@@ -598,7 +650,7 @@ export interface IOpfsMirror {
  * independent chains all became ready at the same instant - ordering is unaffected (it gates
  * inside a chain link, not across them), only how many of them run concurrently.
  */
-export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror => {
+export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle, exclude: ExcludedNames = NOTHING_EXCLUDED): IOpfsMirror => {
   const pathChains = new Map<string, Promise<void>>();
   const dirCache = createDirHandleCache(root);
   let manifestChain: Promise<void> = Promise.resolve();
@@ -634,7 +686,7 @@ export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror =>
       return;
     }
     try {
-      await resyncSubtree(vfs, root, dirCache.ensureDir, path, queueManifestOp, subtreeIsOnlyAnnouncement);
+      await resyncSubtree(vfs, root, dirCache.ensureDir, path, queueManifestOp, subtreeIsOnlyAnnouncement, exclude);
     } catch (error) {
       // A path can legitimately be gone again by the time this runs (e.g. a write immediately
       // followed by an rm) - the NEXT onChange for the same path already queued its own removal.
@@ -645,6 +697,7 @@ export const createOpfsMirror = (vfs: Vfs, root: IOpfsDirHandle): IOpfsMirror =>
 
   return {
     notify(path: string, subtreeIsOnlyAnnouncement: boolean): void {
+      if (isExcludedPath(path, exclude)) return; // memory-only, never mirrored
       const previous = pathChains.get(path) ?? Promise.resolve();
       const next = previous.finally(async () => {
         const release = await acquireWriteSlot();

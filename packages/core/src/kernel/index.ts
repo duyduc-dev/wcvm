@@ -60,7 +60,7 @@ interface IKernelHostParams {
    *  `lazyDepth` (fs/opfsPersistence.ts's `restoreFromOpfsLazy` - omitted, every persisted file
    *  is restored eagerly on boot, exactly as before). Must be decided at boot: restoring happens
    *  before the fs worker ever serves a syscall. */
-  persist?: boolean | { root?: string; lazyDepth?: number };
+  persist?: boolean | { root?: string; lazyDepth?: number; exclude?: string[] };
 }
 
 const KERNEL_FS_CLIENT_ID = 0;
@@ -113,6 +113,7 @@ const createKernelHost = async ({
         ? {
             root: (typeof persist === "object" ? persist.root : undefined) ?? DEFAULT_PERSIST_ROOT,
             lazyDepth: typeof persist === "object" ? persist.lazyDepth : undefined,
+            exclude: typeof persist === "object" ? persist.exclude : undefined,
           }
         : false,
     });

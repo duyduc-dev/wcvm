@@ -32,9 +32,10 @@ const boot = async ({ persist }: IFsWorkerBoot) => {
       // (restoreFromOpfsLazy's own later on-demand materialization runs well after this, once the
       // mirror IS wired up - it suppresses onChange itself for exactly that reason, see its own
       // comment.)
-      if (persist.lazyDepth) lazyRestore = await restoreFromOpfsLazy(vfs, root, persist.lazyDepth);
-      else await restoreFromOpfs(vfs, root);
-      mirror = createOpfsMirror(vfs, root);
+      const exclude = new Set(persist.exclude ?? []);
+      if (persist.lazyDepth) lazyRestore = await restoreFromOpfsLazy(vfs, root, persist.lazyDepth, exclude);
+      else await restoreFromOpfs(vfs, root, "/", exclude);
+      mirror = createOpfsMirror(vfs, root, exclude);
     } catch (error) {
       console.error("wcvm: OPFS persistence failed to initialize; booting without it for this session:", error);
     }
