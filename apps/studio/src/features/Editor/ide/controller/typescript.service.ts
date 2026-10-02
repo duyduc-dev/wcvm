@@ -17,7 +17,7 @@ export interface IProjectContext {
 let context: IProjectContext | null = null;
 export const setProjectContext = (next: IProjectContext | null): void => {
   context = next;
-  appliedRootDirs = "";
+  appliedProjectOptions = "";
 };
 export const getProjectContext = (): IProjectContext | null => context;
 
@@ -36,6 +36,7 @@ export const onComponentFilesChange = (cb: () => void): (() => void) => {
 
 export const SOURCE_EXTENSIONS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]);
 const SKIPPED_DIRS = new Set([".git", "node_modules", "dist", "build", ".next", ".turbo", "coverage"]);
+const GENERATED_TYPE_DIRS = [".next/types", ".next/dev/types"];
 const MAX_SOURCE_FILES = 1500;
 const MAX_SOURCE_BYTES = 300_000;
 
@@ -113,33 +114,57 @@ const resolveAgainst = (base: string, dir: string): string => {
   return "/" + out.join("/");
 };
 
-let appliedRootDirs = "";
+let appliedProjectOptions = "";
 
-/** The project's own `tsconfig.json` `rootDirs`, which Monaco's fixed options knew nothing about.
- * Frameworks that generate types into a parallel tree depend on it: React Router 7 imports
+/** Boolean `compilerOptions` copied from the project's `tsconfig.json`. Monaco's own options are
+ * fixed, and these change what the editor reports: without `experimentalDecorators` NestJS's
+ * `@Get()` is checked as a standard (TC39) decorator - "Unable to resolve signature of method
+ * decorator when called as an expression" - because that is TypeScript's default. */
+const TSCONFIG_FLAGS = [
+  "experimentalDecorators",
+  "emitDecoratorMetadata",
+  "strict",
+  "noImplicitAny",
+  "strictNullChecks",
+  "noUnusedLocals",
+  "noUnusedParameters",
+  "useDefineForClassFields",
+  "noImplicitReturns",
+  "noFallthroughCasesInSwitch",
+  "noUncheckedIndexedAccess",
+  "exactOptionalPropertyTypes",
+] as const;
+
+/** The project's own `tsconfig.json` options that Monaco's fixed ones knew nothing about: `rootDirs`
+ * and the flags in TSCONFIG_FLAGS.
+ * Frameworks that generate types into a parallel tree depend on `rootDirs`: React Router 7 imports
  * `./+types/root` from `app/root.tsx`, and `rootDirs: [".", "./.react-router/types"]` is what makes
  * that resolve to `.react-router/types/app/+types/root.ts`. Without it the editor reports
  * "Cannot find module './+types/root'" even though `react-router dev` generated the file. */
 export async function syncTsconfigOptions(monaco: typeof Monaco): Promise<void> {
   if (!context) return;
   const { fs, rootPath } = context;
-  let rootDirs: string[] | undefined;
+  const fromProject: Record<string, unknown> = {};
   try {
     const config = parseJsonc(await readTextFile(fs, joinPath(rootPath, "tsconfig.json"))) as {
-      compilerOptions?: { rootDirs?: unknown };
+      compilerOptions?: Record<string, unknown>;
     };
-    const dirs = config.compilerOptions?.rootDirs;
+    const compilerOptions = config.compilerOptions ?? {};
+    const dirs = compilerOptions.rootDirs;
     if (Array.isArray(dirs)) {
       // The worker names files by their URI, so rootDirs have to be URIs too.
-      rootDirs = dirs.filter((d): d is string => typeof d === "string").map((d) => `file://${resolveAgainst(rootPath, d)}`);
+      fromProject.rootDirs = dirs.filter((d): d is string => typeof d === "string").map((d) => `file://${resolveAgainst(rootPath, d)}`);
+    }
+    for (const flag of TSCONFIG_FLAGS) {
+      if (typeof compilerOptions[flag] === "boolean") fromProject[flag] = compilerOptions[flag];
     }
   } catch {
     /* no tsconfig, or one this can't parse: keep the defaults */
   }
-  const signature = JSON.stringify(rootDirs ?? null);
-  if (signature === appliedRootDirs) return;
-  appliedRootDirs = signature;
-  const options = { ...baseCompilerOptions, ...(rootDirs ? { rootDirs } : {}) };
+  const signature = JSON.stringify(fromProject);
+  if (signature === appliedProjectOptions) return;
+  appliedProjectOptions = signature;
+  const options = { ...baseCompilerOptions, ...fromProject } as Monaco.typescript.CompilerOptions;
   for (const defaults of [monaco.typescript.typescriptDefaults, monaco.typescript.javascriptDefaults]) {
     defaults.setCompilerOptions(options);
   }
@@ -208,6 +233,10 @@ async function listSources(fs: IFs, root: string): Promise<{ sources: ISourceFil
     );
   };
   await walk(root);
+  // Type declarations a framework generates into an otherwise skipped folder, which its tsconfig
+  // `include`s: Next's `LayoutProps` / `PageProps` / `RouteContext` globals live in
+  // `.next/types` (`next typegen`) and `.next/dev/types` (`next dev`).
+  for (const dir of GENERATED_TYPE_DIRS) await walk(joinPath(root, dir));
   return { sources: out, components };
 }
 
@@ -279,7 +308,9 @@ export function syncProjectModels(monaco: typeof Monaco, openPaths: ReadonlySet<
 // ── dependency typings ────────────────────────────────────────────────────
 
 const MAX_PACKAGES = 150;
-const MAX_FILES_PER_PACKAGE = 400;
+// next ships ~1600 declaration files (dist/ alone is ~1500); the byte cap below is what really bounds a load.
+const MAX_FILES_PER_PACKAGE = 3000;
+const READ_CONCURRENCY = 32;
 const MAX_TOTAL_BYTES = 8_000_000;
 const NEVER_LOAD = new Set(["typescript"]);
 
@@ -303,6 +334,20 @@ export const onTypingsChange = (cb: () => void): (() => void) => {
 };
 
 let typingsSignature = "";
+let typingsRun = 0;
+
+/** Brings the language service up to date after `npm install` (or anything else that rewrote
+ * `node_modules`): forgets the typings signature - a sync that ran MID-install recorded it against
+ * a half-installed tree, and node_modules' mtime alone can't be trusted to differ afterwards - then
+ * reloads the dependency typings and re-validates every open model (type errors and lint). */
+export async function syncAfterInstall(monaco: typeof Monaco): Promise<void> {
+  typingsSignature = "";
+  await syncDependencyTypings(monaco);
+  // syncDependencyTypings only re-validates when it found typings; an untyped (JS) project still
+  // has "Cannot find module" markers from before the install.
+  refreshDiagnostics(monaco);
+  monaco.typescript.javascriptDefaults.setDiagnosticsOptions({ ...DIAGNOSTICS_OPTIONS });
+}
 let typingLibs: Monaco.IDisposable[] = [];
 
 const isDeclarationFile = (name: string): boolean => /\.d\.[cm]?ts$/.test(name);
@@ -328,6 +373,7 @@ export async function syncDependencyTypings(monaco: typeof Monaco): Promise<void
   const signature = `${modulesMtime}\n${rootPkgText}`;
   if (signature === typingsSignature) return;
   typingsSignature = signature;
+  const run = ++typingsRun;
 
   let rootPkg: IPackageJson;
   try {
@@ -336,33 +382,43 @@ export async function syncDependencyTypings(monaco: typeof Monaco): Promise<void
     return;
   }
 
-  const libs: Monaco.IDisposable[] = [];
+  // Read everything first, register at the very end (see the commit below): Monaco's addExtraLib
+  // hands back a NO-OP disposable when a lib with the same path AND content already exists, so
+  // adding the new libs before disposing the old ones lets the old disposables delete the
+  // identical new ones - every typing that didn't change vanished on a reload of the typings.
+  const pending: { content: string; path: string }[] = [];
   const visited = new Set<string>();
   let bytes = 0;
   const modules = joinPath(rootPath, "node_modules");
   const addLib = (content: string, path: string): void => {
     bytes += content.length;
-    libs.push(monaco.typescript.typescriptDefaults.addExtraLib(content, `file://${path}`));
-    libs.push(monaco.typescript.javascriptDefaults.addExtraLib(content, `file://${path}`));
+    pending.push({ content, path });
   };
 
-  const collectDeclarations = async (dir: string, found: string[]): Promise<void> => {
-    if (found.length >= MAX_FILES_PER_PACKAGE) return;
-    let names: string[];
-    try {
-      names = await fs.readdir(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (name === "node_modules" || found.length >= MAX_FILES_PER_PACKAGE) continue;
-      const path = joinPath(dir, name);
-      if (isDeclarationFile(name)) found.push(path);
-      else if (!name.includes(".")) {
-        try {
-          if ((await fs.stat(path)).kind === "dir") await collectDeclarations(path, found);
-        } catch {
-          /* ignore */
+  /** Breadth-first, so the shallow files - a package's own entry points (`next/image.d.ts`,
+   * `index.d.ts`) - are always collected before the file cap can cut a deep folder like `dist/`
+   * short. (Depth-first in alphabetical order filled the cap inside `dist/` and never got to them.) */
+  const collectDeclarations = async (root: string, found: string[]): Promise<void> => {
+    const queue = [root];
+    for (let next = 0; next < queue.length && found.length < MAX_FILES_PER_PACKAGE; next++) {
+      const dir = queue[next];
+      let names: string[];
+      try {
+        names = await fs.readdir(dir);
+      } catch {
+        continue;
+      }
+      for (const name of names) {
+        if (name === "node_modules") continue;
+        const path = joinPath(dir, name);
+        if (isDeclarationFile(name)) {
+          if (found.length < MAX_FILES_PER_PACKAGE) found.push(path);
+        } else if (!name.includes(".")) {
+          try {
+            if ((await fs.stat(path)).kind === "dir") queue.push(path);
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
@@ -391,12 +447,16 @@ export async function syncDependencyTypings(monaco: typeof Monaco): Promise<void
     await collectDeclarations(dir, files);
     if (files.length === 0 && !pkg.types && !pkg.typings) return false;
     addLib(pkgText, joinPath(dir, "package.json"));
-    for (const file of files) {
-      try {
-        addLib(await readTextFile(fs, file), file);
-      } catch {
-        /* unreadable - skip */
-      }
+    for (let i = 0; i < files.length && bytes <= MAX_TOTAL_BYTES; i += READ_CONCURRENCY) {
+      await Promise.all(
+        files.slice(i, i + READ_CONCURRENCY).map(async (file) => {
+          try {
+            addLib(await readTextFile(fs, file), file);
+          } catch {
+            /* unreadable - skip */
+          }
+        }),
+      );
     }
     // A typings package imports its own helpers (@types/react -> csstype).
     for (const dep of Object.keys(pkg.dependencies ?? {})) await loadPackage(dep);
@@ -416,7 +476,16 @@ export async function syncDependencyTypings(monaco: typeof Monaco): Promise<void
     }
   }
 
+  // A newer sync started while this one was reading (an install was still writing): it has the
+  // fresher tree and will commit - committing this one's would overwrite it with a stale view.
+  if (run !== typingsRun) return;
+  // Dispose, then add, with no await between: the language service never sees a half state.
   for (const old of typingLibs) old.dispose();
+  const libs: Monaco.IDisposable[] = [];
+  for (const { content, path } of pending) {
+    libs.push(monaco.typescript.typescriptDefaults.addExtraLib(content, `file://${path}`));
+    libs.push(monaco.typescript.javascriptDefaults.addExtraLib(content, `file://${path}`));
+  }
   typingLibs = libs;
   typedPackages = typed;
   typingsVersion++;
