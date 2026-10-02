@@ -52,7 +52,7 @@ export function EditorGroup() {
   const activeKind = snap.activeTab ? snap.tabKinds[snap.activeTab] : undefined;
 
   return (
-    <div className="flex h-full flex-col bg-white dark:bg-[#1e1e1e]">
+    <div className="flex h-full flex-col bg-white dark:bg-[#1e1e1e]" data-tour="editor">
       <TabStrip onRequestClose={(path) => processQueue([path])} />
 
       {snap.activeTab && (

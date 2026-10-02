@@ -177,3 +177,80 @@
     animation-duration: 3s;
   }
 }
+
+/* The guided tour (driver.js) in the app's own colours, light and dark. */
+.driver-popover.wcvm-tour {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.25);
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 1rem;
+}
+
+.driver-popover.wcvm-tour .driver-popover-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.driver-popover.wcvm-tour .driver-popover-description {
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.driver-popover.wcvm-tour .driver-popover-description code {
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.driver-popover.wcvm-tour .driver-popover-progress-text {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.driver-popover.wcvm-tour .driver-popover-footer button {
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  text-shadow: none;
+  font-family: inherit;
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+}
+
+.driver-popover.wcvm-tour .driver-popover-footer button:hover {
+  background: var(--accent);
+}
+
+.driver-popover.wcvm-tour .driver-popover-next-btn,
+.driver-popover.wcvm-tour .driver-popover-done-btn {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.driver-popover.wcvm-tour .driver-popover-next-btn:hover,
+.driver-popover.wcvm-tour .driver-popover-done-btn:hover {
+  background: var(--primary);
+  opacity: 0.9;
+}
+
+.driver-popover.wcvm-tour .driver-popover-close-btn {
+  color: var(--muted-foreground);
+}
+
+.driver-popover.wcvm-tour .driver-popover-arrow-side-left.driver-popover-arrow { border-left-color: var(--popover); }
+.driver-popover.wcvm-tour .driver-popover-arrow-side-right.driver-popover-arrow { border-right-color: var(--popover); }
+.driver-popover.wcvm-tour .driver-popover-arrow-side-top.driver-popover-arrow { border-top-color: var(--popover); }
+.driver-popover.wcvm-tour .driver-popover-arrow-side-bottom.driver-popover-arrow { border-bottom-color: var(--popover); }
+
+.driver-popover.wcvm-tour .wcvm-tour-hint {
+  color: var(--destructive);
+  font-weight: 500;
+  margin-top: 0.5rem;
+}

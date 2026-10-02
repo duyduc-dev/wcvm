@@ -13,7 +13,7 @@ export function PreviewPanel() {
   const active = tabs.find((t) => t.id === snap.activePreviewId) ?? null;
 
   return (
-    <div className="flex h-full flex-col bg-sidebar">
+    <div className="flex h-full flex-col bg-sidebar" data-tour="preview">
       <PreviewTabStrip />
 
       {active && <PreviewToolbar tab={active} devtoolsOpen={devtoolsOpen} onToggleDevtools={() => setDevtoolsOpen((o) => !o)} />}

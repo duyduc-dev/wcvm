@@ -153,7 +153,7 @@ const CreateTemplateDialog = () => {
         </DialogDescription>
       </DialogHeader>
       <FieldGroup className="mt-4">
-        <Field>
+        <Field data-tour="template-frameworks">
           <FieldLabel>Framework</FieldLabel>
           <Controller
             control={control}
@@ -191,6 +191,7 @@ const CreateTemplateDialog = () => {
                             key={option.id}
                             type="button"
                             aria-pressed={isSelected}
+                            data-framework={option.id}
                             onClick={() => field.onChange(option.id)}
                             className={cn(
                               "flex flex-col items-center gap-1 border p-3 text-center transition-all hover:bg-accent",
@@ -235,7 +236,7 @@ const CreateTemplateDialog = () => {
             )}
           />
         </Field>
-        <Field>
+        <Field data-tour="template-name">
           <FieldLabel htmlFor="template-project-name">Project Name</FieldLabel>
           <Controller
             control={control}
@@ -257,7 +258,7 @@ const CreateTemplateDialog = () => {
           />
           <FieldError errors={[errors.projectName]} />
         </Field>
-        <Field>
+        <Field data-tour="template-directory">
           <FieldLabel htmlFor="template-directory">Directory</FieldLabel>
           <Input
             id="template-directory"
@@ -298,7 +299,7 @@ const CreateTemplateDialog = () => {
             </Button>
           }
         />
-        <Button type="submit" disabled={!hasCreatable}>
+        <Button type="submit" disabled={!hasCreatable} data-tour="template-create">
           Create
         </Button>
       </DialogFooter>

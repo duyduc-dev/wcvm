@@ -178,7 +178,7 @@ export function Explorer() {
   const rootEntry: DirEntry = { name: snap.projectTitle, path: rootPath, dir: true };
 
   return (
-    <div className="flex h-full flex-col bg-sidebar">
+    <div className="flex h-full flex-col bg-sidebar" data-tour="explorer">
       <div className="flex h-8 shrink-0 items-center justify-between border-b px-2">
         <span className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           Explorer

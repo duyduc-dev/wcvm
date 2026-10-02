@@ -7,6 +7,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
+import { SiteLinks } from "@/components/site-links";
+import { TourButton } from "@/components/tour-button";
 import { type PropsWithChildren } from "react";
 import { useTheme } from "@/hooks/use-theme";
 
@@ -35,15 +37,18 @@ const Layout = ({ children }: PropsWithChildren) => {
               </BreadcrumbList>
             </Breadcrumb>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleTheme}
-            aria-label="Toggle theme"
-            className="mr-4"
-          >
-            {isDark ? <MoonIcon /> : <SunIcon />}
-          </Button>
+          <div className="mr-4 flex items-center gap-1">
+            <SiteLinks showLabels />
+            <TourButton kind="home" />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleTheme}
+              aria-label="Toggle theme"
+            >
+              {isDark ? <MoonIcon /> : <SunIcon />}
+            </Button>
+          </div>
         </header>
         <div className="flex flex-1 flex-col gap-4 p-4 pt-0">{children}</div>
       </SidebarInset>

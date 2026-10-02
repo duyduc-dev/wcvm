@@ -43,7 +43,7 @@ const RecentProjects = () => {
   };
 
   return (
-    <div className="mt-8">
+    <div className="mt-8" data-tour="recent">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ClockCounterClockwiseIcon size={20} />

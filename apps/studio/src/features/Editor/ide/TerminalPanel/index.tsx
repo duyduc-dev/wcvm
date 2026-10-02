@@ -31,7 +31,7 @@ export function TerminalPanel() {
   }, [c, activeTermId]);
 
   return (
-    <div className="flex h-full flex-col bg-white dark:bg-[#181818]">
+    <div className="flex h-full flex-col bg-white dark:bg-[#181818]" data-tour="terminal">
       <div className="flex h-8 shrink-0 items-center border-b pr-2">
         <span className="px-3 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           Terminal

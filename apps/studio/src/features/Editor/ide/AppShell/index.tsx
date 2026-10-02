@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { startTourOnFirstVisit } from "@/lib/tour";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ActivityBar } from "../ActivityBar";
 import { CommandPalette } from "../CommandPalette";
@@ -24,6 +25,10 @@ import {
 
 export function AppShell() {
   const { c, snap } = useIde();
+
+  // The tour for a first-time visitor, once the panels have laid out. A phone is too narrow for it:
+  // the "Tour" button in the top bar is still there if someone wants it.
+  useEffect(() => (window.innerWidth < 768 ? undefined : startTourOnFirstVisit("editor", 2200)), []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

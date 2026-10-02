@@ -2,6 +2,8 @@ import { HouseIcon, SidebarSimpleIcon, TerminalWindowIcon } from "@phosphor-icon
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SiteLinks } from "@/components/site-links";
+import { TourButton } from "@/components/tour-button";
 import { cn } from "@/lib/utils";
 import { useIde } from "../controller/useIde";
 
@@ -61,7 +63,10 @@ export function TitleBar() {
         <Button variant="ghost" size="sm" onClick={() => navigate({ to: "/" })}>
           <HouseIcon /> Home
         </Button>
+        <SiteLinks />
+        <TourButton kind="editor" />
         <div aria-hidden className="mx-1 h-5 w-px bg-border" />
+        <div data-tour="layout-toggles" className="flex items-center gap-1">
         <LayoutToggle
           label="Toggle Explorer"
           keys="⌘B"
@@ -86,6 +91,7 @@ export function TitleBar() {
         >
           <SidebarSimpleIcon mirrored className="size-4" />
         </LayoutToggle>
+        </div>
       </div>
     </div>
   );
