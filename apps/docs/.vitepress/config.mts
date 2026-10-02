@@ -3,6 +3,7 @@ import type { Plugin } from "vite";
 
 const SITE = "https://docs.wcvmjs.com";
 const STUDIO = "https://studio.wcvmjs.com";
+const WEBSITE = "https://wcvmjs.com";
 
 // The live demo boots wcvm, whose synchronous filesystem bridge needs a cross-origin isolated page. In
 // production the headers come from public/_headers; this adds them to `vitepress dev`.
@@ -53,8 +54,10 @@ export default defineConfig({
       { text: "Playground", link: "/playground" },
       { text: "Reference", link: "/reference/api", activeMatch: "/reference/" },
       { text: "Architecture", link: "/architecture" },
-      { text: "Studio", link: STUDIO },
-      { text: "npm", link: "https://www.npmjs.com/package/wcvm" },
+      // Each wcvm site opens the others in a new tab; the docs are often read next to Studio.
+      { text: "Website", link: WEBSITE, target: "_blank", rel: "noopener noreferrer" },
+      { text: "Studio", link: STUDIO, target: "_blank", rel: "noopener noreferrer" },
+      { text: "npm", link: "https://www.npmjs.com/package/wcvm", target: "_blank", rel: "noopener noreferrer" },
     ],
 
     sidebar: [
