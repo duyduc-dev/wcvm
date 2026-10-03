@@ -22,9 +22,9 @@ Next.js, SvelteKit, ...) and show it in an `<iframe>` - all client-side.
 > Astro, Angular and Ember projects, but it is **not** full Node: see [Limitations](#limitations).
 
 <p align="center">
-  <video src="wcvm-demo.mp4" controls muted width="760"></video>
+  <a href="https://github.com/duyduc-dev/wcvm/raw/main/assets/wcvm-demo.mp4"><img src="assets/wcvm-demo.gif" alt="wcvm demo: running a Vite project in the browser tab" width="760"></a>
   <br>
-  <a href="wcvm-demo.mp4">Watch the demo (mp4)</a>
+  <a href="https://github.com/duyduc-dev/wcvm/raw/main/assets/wcvm-demo.mp4">Watch the full-quality video (mp4)</a>
 </p>
 
 ## How it works
