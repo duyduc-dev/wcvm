@@ -21,6 +21,12 @@ Next.js, SvelteKit, ...) and show it in an `<iframe>` - all client-side.
 > **Status: 0.x.** It runs unmodified Vite + React/Vue, Express, NestJS, Next.js, SvelteKit, React Router 7,
 > Astro, Angular and Ember projects, but it is **not** full Node: see [Limitations](#limitations).
 
+<p align="center">
+  <video src="wcvm-demo.mp4" controls muted width="760"></video>
+  <br>
+  <a href="wcvm-demo.mp4">Watch the demo (mp4)</a>
+</p>
+
 ## How it works
 
 <p align="center">
