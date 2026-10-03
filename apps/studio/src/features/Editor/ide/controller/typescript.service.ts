@@ -120,6 +120,15 @@ let appliedProjectOptions = "";
  * fixed, and these change what the editor reports: without `experimentalDecorators` NestJS's
  * `@Get()` is checked as a standard (TC39) decorator - "Unable to resolve signature of method
  * decorator when called as an expression" - because that is TypeScript's default. */
+/** tsconfig `jsx` names -> TypeScript's `JsxEmit` values (Monaco's own enum). */
+const JSX_EMIT: Record<string, number> = {
+  preserve: 1,
+  react: 2,
+  "react-native": 3,
+  "react-jsx": 4,
+  "react-jsxdev": 5,
+};
+
 const TSCONFIG_FLAGS = [
   "experimentalDecorators",
   "emitDecoratorMetadata",
@@ -158,6 +167,11 @@ export async function syncTsconfigOptions(monaco: typeof Monaco): Promise<void> 
     for (const flag of TSCONFIG_FLAGS) {
       if (typeof compilerOptions[flag] === "boolean") fromProject[flag] = compilerOptions[flag];
     }
+    // A project with its own JSX runtime (Rectify, Preact, Solid...) names it with `jsxImportSource`;
+    // without it the editor looks for `react/jsx-runtime` and flags every JSX tag.
+    if (typeof compilerOptions.jsxImportSource === "string") fromProject.jsxImportSource = compilerOptions.jsxImportSource;
+    const jsx = typeof compilerOptions.jsx === "string" ? JSX_EMIT[compilerOptions.jsx.toLowerCase()] : undefined;
+    if (jsx !== undefined) fromProject.jsx = jsx;
   } catch {
     /* no tsconfig, or one this can't parse: keep the defaults */
   }
