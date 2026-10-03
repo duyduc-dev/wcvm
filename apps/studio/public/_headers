@@ -10,3 +10,9 @@
 # (Its file name is hashed, hence the glob.)
 /assets/PreviewServiceWorker-*
   Service-Worker-Allowed: /
+
+# The embeddable editor (/embed): any site may frame it. require-corp on an embedder (needed for
+# SharedArrayBuffer) refuses to frame a document without CORP, so allow cross-origin.
+/embed
+  Cross-Origin-Resource-Policy: cross-origin
+  Content-Security-Policy: frame-ancestors *

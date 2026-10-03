@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as EditorRouteImport } from './routes/_editor'
 import { Route as MainRouteImport } from './routes/_main'
+import { Route as EmbedRouteImport } from './routes/embed'
 import { Route as MainIndexRouteImport } from './routes/_main/index'
 import { Route as EditorEditorIdRouteImport } from './routes/_editor/editor/$id'
 
@@ -20,6 +21,11 @@ const EditorRoute = EditorRouteImport.update({
 } as any)
 const MainRoute = MainRouteImport.update({
   id: '/_main',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmbedRoute = EmbedRouteImport.update({
+  id: '/embed',
+  path: '/embed',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MainIndexRoute = MainIndexRouteImport.update({
@@ -35,30 +41,40 @@ const EditorEditorIdRoute = EditorEditorIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof MainIndexRoute
+  '/embed': typeof EmbedRoute
   '/editor/$id': typeof EditorEditorIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof MainIndexRoute
+  '/embed': typeof EmbedRoute
   '/editor/$id': typeof EditorEditorIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_editor': typeof EditorRouteWithChildren
   '/_main': typeof MainRouteWithChildren
+  '/embed': typeof EmbedRoute
   '/_main/': typeof MainIndexRoute
   '/_editor/editor/$id': typeof EditorEditorIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/editor/$id'
+  fullPaths: '/' | '/embed' | '/editor/$id'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/editor/$id'
-  id: '__root__' | '/_editor' | '/_main' | '/_main/' | '/_editor/editor/$id'
+  to: '/' | '/embed' | '/editor/$id'
+  id:
+    | '__root__'
+    | '/_editor'
+    | '/_main'
+    | '/embed'
+    | '/_main/'
+    | '/_editor/editor/$id'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   EditorRoute: typeof EditorRouteWithChildren
   MainRoute: typeof MainRouteWithChildren
+  EmbedRoute: typeof EmbedRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -75,6 +91,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof MainRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/embed': {
+      id: '/embed'
+      path: '/embed'
+      fullPath: '/embed'
+      preLoaderRoute: typeof EmbedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_main/': {
@@ -118,6 +141,7 @@ const MainRouteWithChildren = MainRoute._addFileChildren(MainRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   EditorRoute: EditorRouteWithChildren,
   MainRoute: MainRouteWithChildren,
+  EmbedRoute: EmbedRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

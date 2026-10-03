@@ -9,6 +9,9 @@ function crossOriginIsolationHeaders(): Plugin {
   const middleware: Connect.NextHandleFunction = (_req, res, next) => {
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
     res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+    // The embeddable editor is framed by other sites; a COEP embedder refuses a frame without CORP.
+    // (Mirrors public/_headers for the deployed site.)
+    if (_req.url?.startsWith("/embed")) res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     next();
   };
 

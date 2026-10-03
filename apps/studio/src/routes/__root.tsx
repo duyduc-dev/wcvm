@@ -9,6 +9,8 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   const loadWCVM = () => {
+    // The embedded editor shows its own placeholder; a toast would sit on top of the host's page.
+    if (location.pathname.startsWith("/embed")) return;
     toast.promise(getWcvmInstance().ready, {
       loading: "Initializing WCVM ...",
       success: () => "Initialized WCVM successfully",

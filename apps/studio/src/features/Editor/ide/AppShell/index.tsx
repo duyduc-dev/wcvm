@@ -23,12 +23,24 @@ import {
   TERMINAL_PANEL_MIN_SIZE,
 } from "./constants";
 
-export function AppShell() {
+export interface IShellChrome {
+  titleBar?: boolean;
+  activityBar?: boolean;
+  statusBar?: boolean;
+  /** The first-visit guided tour (off when embedded). */
+  tour?: boolean;
+  /** The editor + terminal column (off for a preview-only embed). */
+  center?: boolean;
+}
+
+/** `chrome` hides parts of the frame (the embedded editor does); everything defaults to shown. */
+export function AppShell({ chrome = {} }: { chrome?: IShellChrome }) {
   const { c, snap } = useIde();
+  const { titleBar = true, activityBar = true, statusBar = true, tour = true, center = true } = chrome;
 
   // The tour for a first-time visitor, once the panels have laid out. A phone is too narrow for it:
   // the "Tour" button in the top bar is still there if someone wants it.
-  useEffect(() => (window.innerWidth < 768 ? undefined : startTourOnFirstVisit("editor", 2200)), []);
+  useEffect(() => (!tour || window.innerWidth < 768 ? undefined : startTourOnFirstVisit("editor", 2200)), [tour]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -88,9 +100,9 @@ export function AppShell() {
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden text-foreground">
-      <TitleBar />
+      {titleBar && <TitleBar />}
       <div className="flex min-h-0 flex-1">
-        <ActivityBar />
+        {activityBar && <ActivityBar />}
         <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
           {!snap.sidebarCollapsed && (
             <>
@@ -100,24 +112,28 @@ export function AppShell() {
               <ResizableHandle />
             </>
           )}
-          <ResizablePanel id="center" defaultSize={CENTER_DEFAULT_SIZE} minSize={CENTER_MIN_SIZE}>
-            <ResizablePanelGroup orientation="vertical">
-              <ResizablePanel id="editor" defaultSize={EDITOR_DEFAULT_SIZE} minSize={EDITOR_MIN_SIZE}>
-                <EditorGroup />
-              </ResizablePanel>
-              {!snap.panelCollapsed && (
-                <>
-                  <ResizableHandle />
-                  <ResizablePanel id="terminal" defaultSize={TERMINAL_PANEL_DEFAULT_SIZE} minSize={TERMINAL_PANEL_MIN_SIZE}>
-                    <TerminalPanel />
+          {center && (
+            <>
+              <ResizablePanel id="center" defaultSize={CENTER_DEFAULT_SIZE} minSize={CENTER_MIN_SIZE}>
+                <ResizablePanelGroup orientation="vertical">
+                  <ResizablePanel id="editor" defaultSize={EDITOR_DEFAULT_SIZE} minSize={EDITOR_MIN_SIZE}>
+                    <EditorGroup />
                   </ResizablePanel>
-                </>
-              )}
-            </ResizablePanelGroup>
-          </ResizablePanel>
+                  {!snap.panelCollapsed && (
+                    <>
+                      <ResizableHandle />
+                      <ResizablePanel id="terminal" defaultSize={TERMINAL_PANEL_DEFAULT_SIZE} minSize={TERMINAL_PANEL_MIN_SIZE}>
+                        <TerminalPanel />
+                      </ResizablePanel>
+                    </>
+                  )}
+                </ResizablePanelGroup>
+              </ResizablePanel>
+            </>
+          )}
           {!snap.previewCollapsed && (
             <>
-              <ResizableHandle />
+              {center && <ResizableHandle />}
               <ResizablePanel id="preview" defaultSize={PREVIEW_DEFAULT_SIZE}>
                 <PreviewPanel />
               </ResizablePanel>
@@ -125,7 +141,7 @@ export function AppShell() {
           )}
         </ResizablePanelGroup>
       </div>
-      <StatusBar />
+      {statusBar && <StatusBar />}
       <CommandPalette />
     </div>
   );

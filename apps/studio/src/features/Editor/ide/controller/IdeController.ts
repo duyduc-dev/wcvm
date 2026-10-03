@@ -517,9 +517,27 @@ export class IdeController {
 
   /** Opens a terminal and installs the dependencies where the user can watch, then finishes what
    *  the template needs after its install (patches, links - see postInstall.ts). */
+  /** Embed mode: a command to start (a dev server, usually) once dependencies are in place. */
+  private startCommand: string | null = null;
+
+  setStartCommand(command: string | null): void {
+    this.startCommand = command;
+  }
+
+  private async runStartCommand(handle?: TerminalHandle): Promise<void> {
+    const command = this.startCommand;
+    if (!command) return;
+    const target = handle ?? (await this.newShellTerminal()).handle;
+    // A dev server never returns to the prompt, so this is deliberately not awaited.
+    void target.run(command, "");
+  }
+
   private async installDependenciesIfNeeded(): Promise<void> {
     const lifecycle = this.lifecycle;
-    if (!(await this.needsInstall()) || lifecycle !== this.lifecycle) return;
+    if (!(await this.needsInstall()) || lifecycle !== this.lifecycle) {
+      if (lifecycle === this.lifecycle) await this.runStartCommand();
+      return;
+    }
     const marker = "wcvm: dependencies installed";
     const { id, handle } = await this.newShellTerminal();
     if (lifecycle !== this.lifecycle) return;
@@ -538,6 +556,7 @@ export class IdeController {
     this.set({ fsRevision: this.snap.fsRevision + 1 });
     this.syncLanguageServiceAfterInstall();
     this.status(failure ? `Install finished, but: ${failure}` : "Dependencies installed");
+    await this.runStartCommand(handle);
   }
 
   /** A command was submitted in terminal `id` (or, with null, finished): an `npm install` gets the

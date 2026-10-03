@@ -3,6 +3,10 @@ import { boot, type IWcvm } from "wcvm";
 let WcvmInstance: IWcvm;
 let bootPromise: Promise<void> | undefined;
 
+// The embedded editor (/embed) is a throwaway sandbox for the host page: nothing is persisted to
+// OPFS, so one site's files never show up in another's (or in Studio's own project list).
+const isEmbedded = () => location.pathname.startsWith("/embed");
+
 // Guarded against double-invocation: React StrictMode (main.tsx) runs mount effects twice in
 // dev, and boot() isn't idempotent — an unguarded second call would spin up a second kernel
 // (and its Workers) that nothing ever tears down.
@@ -22,7 +26,7 @@ const bootWcvm = (): Promise<void> => {
       // mirroring them to OPFS is what made creating a project slow. It lives in memory for the
       // session; the editor reinstalls it when a project is opened without it
       // (IdeController.installDependenciesIfNeeded).
-      persist: { lazyDepth: 4, exclude: ["node_modules"] },
+      persist: isEmbedded() ? undefined : { lazyDepth: 4, exclude: ["node_modules"] },
     });
 
     // A real Linux host always has /tmp and os.tmpdir() reports it, but the sandbox's filesystem
