@@ -49,3 +49,22 @@ Then commit the version bump and push `main`, and tag the release (`git tag v<ve
 `packages/core/THIRD_PARTY_LICENSES.node.txt` with that version's `LICENSE`
 (`https://github.com/nodejs/node/blob/<version>/LICENSE`) and update the version in
 `THIRD_PARTY_NOTICES.md`.
+
+## Publishing `@wcvm/sdk`
+
+`packages/sdk` is the host-page SDK for the embeddable editor (`embed()`); it talks to Studio's `/embed` page over `postMessage`.
+It lives under the `@wcvm` npm organization and ships only `dist/`, `src/protocol.ts`, `README.md` and `LICENSE`.
+
+Deploy Studio first (`bash scripts/deploy-sites.sh studio`): the SDK's default URL is `https://studio.wcvmjs.com/embed`, and
+`curl -sI <that url>` must show `Cross-Origin-Resource-Policy: cross-origin`. Then:
+
+```bash
+cd packages/sdk
+npx tsc --noEmit -p . && pnpm build
+npm pack --dry-run                              # LICENSE, README.md, package.json, dist/*, src/protocol.ts
+npm publish --tag next --otp=<code>             # access is public via publishConfig
+npm dist-tag add @wcvm/sdk@<version> latest     # once you are happy with it
+```
+
+If the wire protocol (`src/protocol.ts`) changes incompatibly, bump the SDK's version and keep Studio's `/embed` accepting the old one
+for a while: host pages pin the SDK, but always load the current Studio.

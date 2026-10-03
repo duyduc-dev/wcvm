@@ -1,0 +1,53 @@
+{
+  "name": "@wcvm/sdk",
+  "version": "0.1.0",
+  "description": "Embed the wcvm Studio editor in any website with an iframe and a small postMessage SDK.",
+  "license": "ISC",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./protocol": {
+      "types": "./src/protocol.ts",
+      "default": "./src/protocol.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src/protocol.ts",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsup src/index.ts --format esm --dts",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "wcvm",
+    "webcontainer",
+    "embed",
+    "editor",
+    "sandbox",
+    "iframe"
+  ],
+  "homepage": "https://wcvmjs.com",
+  "bugs": {
+    "url": "https://github.com/duyduc-dev/wcvm/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/duyduc-dev/wcvm.git",
+    "directory": "packages/sdk"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

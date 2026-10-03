@@ -1,0 +1,27 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>@wcvm/sdk demo</title>
+<h1>Host page</h1>
+<div id="editor"></div>
+<pre id="log"></pre>
+<script type="module">
+  import { embed } from "../dist/index.js";
+  const log = (m) => (document.getElementById("log").textContent += m + "\n");
+  const url = new URLSearchParams(location.search).get("url") ?? "http://localhost:4173/embed";
+  const vm = await embed("#editor", {
+    title: "demo",
+    files: {
+      "index.js": "console.log('hello from embed');\n",
+      "package.json": '{"name":"demo","scripts":{"start":"node index.js"}}',
+    },
+    openFile: "index.js",
+  }, { url, height: 500 });
+  vm.on("projectReady", () => log("event projectReady"));
+  log("embedded");
+  await vm.fs.writeFile("extra.txt", "hi");
+  log("read: " + (await vm.fs.readFile("extra.txt")));
+  log("ls: " + (await vm.fs.readdir("")).join(","));
+  const r = await vm.run("node index.js");
+  log("run: " + JSON.stringify(r));
+  window.__done = true;
+</script>
