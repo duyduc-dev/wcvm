@@ -152,7 +152,12 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 const listHostClients = async (): Promise<IClient[]> => {
   const matchAll = async () => {
     const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-    return clients.filter((client) => client.frameType === "top-level" && previewPortOf(client.url, sw.location.origin) === undefined);
+    const candidates = clients.filter((client) => previewPortOf(client.url, sw.location.origin) === undefined);
+    // A top-level page is the host. Only when there is none is a nested one taken: an embedded
+    // editor (Studio's /embed in another site's iframe) IS the wcvm page, and the site framing it
+    // is cross-origin, so it can never appear in this list - the embed itself is all there is.
+    const topLevel = candidates.filter((client) => client.frameType === "top-level");
+    return topLevel.length > 0 ? topLevel : candidates;
   };
   for (let attempt = 0; attempt < 10; attempt++) {
     const found = await matchAll();

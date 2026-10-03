@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>@wcvm/sdk preview demo</title>
+<div id="editor"></div>
+<pre id="log"></pre>
+<script type="module">
+  import { embed } from "../dist/index.js";
+  const log = (m) => (document.getElementById("log").textContent += m + "\n");
+  const url = new URLSearchParams(location.search).get("url") ?? "http://localhost:4173/embed";
+  const vm = await embed("#editor", {
+    title: "server",
+    files: {
+      "server.js": "require('http').createServer((q, r) => r.end('<h1>hello preview</h1>')).listen(3000);\n",
+      "package.json": '{"name":"server","scripts":{"dev":"node server.js"}}',
+    },
+    openFile: "server.js",
+    startCommand: "npm run dev",
+  }, { url, height: 500, panes: { terminal: true } });
+  vm.on("previewReady", (d) => { log("previewReady " + JSON.stringify(d)); window.__preview = d; });
+  log("embedded");
+</script>

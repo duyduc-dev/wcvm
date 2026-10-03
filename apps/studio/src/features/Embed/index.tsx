@@ -90,7 +90,7 @@ function ControllerBridge({
     const tab = snap.previewTabs.find((t) => t.id === snap.activePreviewId);
     if (tab?.port != null && lastPreview.current !== `${tab.port}`) {
       lastPreview.current = `${tab.port}`;
-      emit({ event: "previewReady", data: { port: tab.port, url: c.previewSrc(tab) } });
+      emit({ event: "previewReady", data: { port: tab.port, url: new URL(c.previewSrc(tab), location.origin).href } });
     }
   }, [snap.previewTabs, snap.activePreviewId, c, emit]);
 
