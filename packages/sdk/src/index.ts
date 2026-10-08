@@ -16,7 +16,9 @@ export const DEFAULT_EMBED_URL = "https://studio.wcvmjs.com/embed";
 export interface IEmbedOptions extends IEmbedConfig {
   /** Where the editor is hosted. Defaults to the public Studio. */
   url?: string;
-  /** Iframe height (CSS length or px number). The width always fills the container. */
+  /** Iframe width (CSS length or px number). Defaults to filling the container. */
+  width?: string | number;
+  /** Iframe height (CSS length or px number). Defaults to 600px. */
   height?: string | number;
   /** How long to wait for the editor to boot before rejecting, in ms. Defaults to 60s. */
   timeout?: number;
@@ -60,9 +62,9 @@ export async function embed(
   // cross-origin-isolated: wcvm needs SharedArrayBuffer. It only takes effect when this page is
   // itself cross-origin isolated (COOP same-origin + COEP require-corp) - see the package README.
   iframe.allow = "cross-origin-isolated; clipboard-read; clipboard-write";
-  iframe.style.cssText = `width:100%;border:0;height:${
-    typeof options.height === "number" ? `${options.height}px` : (options.height ?? "600px")
-  }`;
+  const cssLength = (value: string | number | undefined, fallback: string) =>
+    typeof value === "number" ? `${value}px` : (value ?? fallback);
+  iframe.style.cssText = `border:0;max-width:100%;width:${cssLength(options.width, "100%")};height:${cssLength(options.height, "600px")}`;
   host.replaceChildren(iframe);
 
   const pending = new Map<number, Pending>();

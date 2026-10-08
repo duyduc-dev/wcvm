@@ -16,7 +16,8 @@ const vm = await embed("#editor", {
   view: "both",                            // "both" | "editor" | "preview"
   panes: { terminal: true },               // titleBar, activityBar, statusBar, explorer, terminal
   theme: "dark",
-  height: 600,
+  width: "100%",   // CSS length or px number; default fills the container
+  height: 600,     // CSS length or px number; default 600px
 });
 
 await vm.fs.writeFile("index.js", "console.log('changed')");
