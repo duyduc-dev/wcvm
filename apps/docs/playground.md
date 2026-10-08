@@ -1,23 +1,24 @@
 ---
 title: Playground
 outline: false
+aside: false
+pageClass: wide-page
 ---
 
 # Playground
 
-Real Node.js, running in this page. Pick an example, edit it, and press **Run** (or Cmd/Ctrl+S). Each run is a new process in its own Web Worker; the files live in an in-memory filesystem that only exists in your tab.
+Real Node.js, running in this page: a full editor with a file tree, a terminal and a live preview. Pick an example, edit it, and save. Everything runs in your tab (each process is a Web Worker, files live in an in-memory filesystem) and nothing leaves your browser.
 
-<LiveDemo picker example="hello" />
+<EmbedPlayground picker example="server" />
 
 ## What to try
 
-- **Hello, Node:** ESM `import`, `node:crypto` hashing, and `process.version`.
-- **An HTTP server:** a real `http.createServer()` and `http.get()` talking over wcvm's virtual network.
-- **Files and streams:** `fs`, `readline` and a read stream over an in-memory file.
-- **Child processes:** `execSync` and `spawn`, each child being another worker.
+- **A Node script:** ESM `import`, `node:crypto` hashing, and `process.version`.
+- **An HTTP server with live preview:** a real `http.createServer()` served into the preview pane over wcvm's virtual network.
+- Open the terminal and run your own commands: `node -e`, `npm install`, `ls`, pipes and redirects all work.
 
-A run is stopped after 15 seconds. For long-running servers, `npm install`, a file tree and a live preview, [open Studio](https://studio.wcvmjs.com): it is the same runtime with an editor, terminals and project templates.
+For project templates (React, Vue, Next.js, SvelteKit, Angular and more), [open Studio](https://studio.wcvmjs.com): it is the same editor, embedded here with `@wcvm/sdk`.
 
 ::: tip Embed it in your own page
-The demo is a few hundred lines of Vue plus `wcvm` itself: see [`apps/docs/.vitepress/theme/LiveDemo.vue`](https://github.com/duyduc-dev/wcvm/blob/main/apps/docs/.vitepress/theme/LiveDemo.vue). Your page needs the [cross-origin isolation headers](/guide/headers).
+This playground is [`EmbedPlayground.vue`](https://github.com/duyduc-dev/wcvm/blob/main/apps/docs/.vitepress/theme/EmbedPlayground.vue), about 100 lines around `embed()` from [`@wcvm/sdk`](https://www.npmjs.com/package/@wcvm/sdk). Your page needs the [cross-origin isolation headers](/guide/headers).
 :::

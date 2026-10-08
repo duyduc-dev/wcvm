@@ -12,6 +12,7 @@
     "vitepress": "^1.6.4"
   },
   "dependencies": {
+    "@wcvm/sdk": "workspace:*",
     "wcvm": "workspace:*"
   }
 }

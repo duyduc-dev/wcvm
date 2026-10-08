@@ -55,7 +55,7 @@ Call `boot()` **once per page** and keep the instance for as long as the page li
 
 To see something run before going further, here is the smallest possible program, live on this page:
 
-<LiveDemo />
+<EmbedPlayground example="script" :height="480" />
 
 ```ts
 await wc.fs.writeFile("/hello.js", `console.log("hello from", process.version)`);

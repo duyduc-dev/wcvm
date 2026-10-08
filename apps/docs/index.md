@@ -38,8 +38,8 @@ features:
 
 ## Try it live
 
-This runs real Node.js, inside this page. Edit the code and press **Run**: the process is a Web Worker, and nothing leaves your browser.
+This runs real Node.js, inside this page. Click **Launch the editor**, edit the code and save: each process is a Web Worker, and nothing leaves your browser.
 
-<LiveDemo />
+<EmbedPlayground picker example="script" />
 
 </div>

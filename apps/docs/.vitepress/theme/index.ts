@@ -1,11 +1,11 @@
 import DefaultTheme from "vitepress/theme";
 import type { Theme } from "vitepress";
-import LiveDemo from "./LiveDemo.vue";
+import EmbedPlayground from "./EmbedPlayground.vue";
 import "./custom.css";
 
 export default {
   extends: DefaultTheme,
   enhanceApp({ app }) {
-    app.component("LiveDemo", LiveDemo);
+    app.component("EmbedPlayground", EmbedPlayground);
   },
 } satisfies Theme;

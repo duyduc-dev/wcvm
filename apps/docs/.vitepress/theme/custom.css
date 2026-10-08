@@ -23,3 +23,8 @@
 /* the live demo on the home page */
 .home-demo { max-width: 1152px; margin: 56px auto 24px; padding: 0 24px; }
 .home-demo h2 { border: 0; margin-top: 0; padding-top: 0; }
+
+/* The playground page: the default text column is too narrow for an IDE (editor + terminal + preview). */
+.wide-page .VPDoc .container,
+.wide-page .VPDoc .content,
+.wide-page .VPDoc .content-container { max-width: 1100px !important; }
