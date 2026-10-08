@@ -26,7 +26,22 @@ Checked against those addresses in real Chromium: the landing page's 34 logos lo
 runs `Node v24`; Studio is isolated, its preview Service Worker registers at scope `/`, and a server started in its terminal shows in the
 preview pane. The custom domains (`wcvmjs.com`, `studio.`, `docs.`) are not attached yet: see "Attach the domains" below.
 
-### Redeploy after a change
+### Automatic deploys (GitHub Actions)
+
+`.github/workflows/deploy-sites.yml` deploys on every push to `main`, building only the sites whose files changed (a change to
+`packages/core` or `packages/sdk` rebuilds Studio and the docs; a change to the lockfile or the deploy script rebuilds all three).
+Run it by hand from the **Actions** tab to deploy one site or all of them.
+
+One-time setup: in the repository, **Settings -> Secrets and variables -> Actions**, add
+
+| Secret | Value |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | a token with **Account -> Cloudflare Pages -> Edit** (Cloudflare: My Profile -> API Tokens -> Create Token) |
+| `CLOUDFLARE_ACCOUNT_ID` | the account id shown on the Workers & Pages overview page |
+
+It runs the same `scripts/deploy-sites.sh` as below, so a manual deploy and a CI deploy produce the same result.
+
+### Redeploy by hand
 
 ```bash
 npx wrangler@3 login                        # once

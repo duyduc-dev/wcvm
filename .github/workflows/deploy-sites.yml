@@ -1,0 +1,94 @@
+# Deploys the wcvm sites to their Cloudflare Pages projects (direct upload, see DEPLOYING.md).
+#
+# On every push to main, only the sites whose inputs changed are built and uploaded. Run it by hand from the
+# Actions tab to deploy one site or all of them.
+#
+# Needs two repository secrets: CLOUDFLARE_API_TOKEN (Account > Cloudflare Pages > Edit) and CLOUDFLARE_ACCOUNT_ID.
+name: Deploy sites
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      site:
+        description: Which site to deploy
+        type: choice
+        options: [all, landing, docs, studio]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Find changed sites
+    runs-on: ubuntu-latest
+    outputs:
+      sites: ${{ steps.pick.outputs.sites }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_SITE: ${{ inputs.site }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          all='["landing","docs","studio"]'
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$INPUT_SITE" = "all" ]; then sites="$all"; else sites="[\"$INPUT_SITE\"]"; fi
+            echo "sites=$sites" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          # A brand-new branch or a force push has no usable "before": deploy everything.
+          if ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "sites=$all" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          files="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          touched() { echo "$files" | grep -Eq "$1"; }
+
+          # Shared inputs rebuild everything.
+          if touched '^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|tsconfig\.base\.json|scripts/deploy-sites\.sh|\.github/workflows/deploy-sites\.yml)$'; then
+            echo "sites=$all" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+
+          sites=()
+          touched '^apps/landing/'                                                          && sites+=('"landing"')
+          touched '^(apps/docs/|packages/sdk/|packages/core/|ARCHITECTURE\.md|scripts/render-architecture\.mjs)' && sites+=('"docs"')
+          touched '^(apps/studio/|packages/sdk/|packages/core/)'                            && sites+=('"studio"')
+
+          if [ ${#sites[@]} -eq 0 ]; then echo 'sites=[]' >> "$GITHUB_OUTPUT"
+          else echo "sites=[$(IFS=,; echo "${sites[*]}")]" >> "$GITHUB_OUTPUT"; fi
+
+  deploy:
+    name: Deploy ${{ matrix.site }}
+    needs: changes
+    if: needs.changes.outputs.sites != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        site: ${{ fromJSON(needs.changes.outputs.sites) }}
+    # Two pushes in a row must not upload the same project at the same time.
+    concurrency:
+      group: deploy-${{ matrix.site }}
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # the version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build and upload
+        run: bash scripts/deploy-sites.sh "${{ matrix.site }}"
