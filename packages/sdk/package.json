@@ -1,6 +1,6 @@
 {
   "name": "@wcvm/sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Embed the wcvm Studio editor in any website with an iframe and a small postMessage SDK.",
   "license": "ISC",
   "type": "module",
