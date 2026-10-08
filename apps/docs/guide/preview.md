@@ -44,7 +44,7 @@ A Service Worker cannot talk to a dedicated worker, only to a window, so it rela
 ## What the preview needs
 
 - **The Service Worker script.** It ships as `wcvm/preview-sw`; `enable()` registers it with scope `/`. If your bundler serves it from a nested path, send `Service-Worker-Allowed: /` for that file, otherwise registration throws a `SecurityError`. The playground's `vite.config.ts` shows how.
-- **A path prefix.** Previewed pages live under `/__wcvm_preview__/<port>/`. A client-side router that matches on `location.pathname` needs that prefix as its base path. Absolute URLs inside the page (`/src/main.ts`, `fetch("/api")`) are redirected into the prefix for you.
+- **A path prefix.** Previewed pages live under `/__wcvm_preview__/<port>/`. A client-side router that matches on `location.pathname` needs that prefix as its base path. Absolute URLs inside the page (`/src/main.ts`, `fetch("/api")`) are redirected into the prefix for you. To use a different one, pass `boot({ preview: { pathPrefix: "/__preview__/" } })`; `wc.preview.url()`, the Service Worker and the WebSocket shim all follow it.
 - **Isolation on the host page, and on the iframe.** The host page is cross-origin isolated (`require-corp`), so an iframe's response must also declare COEP. The Service Worker adds it to every response it serves.
 
 ## Several tabs

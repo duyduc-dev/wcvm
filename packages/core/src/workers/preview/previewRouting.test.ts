@@ -128,3 +128,23 @@ describe("chooseHost", () => {
     expect(chooseHost([])).toBeUndefined();
   });
 });
+
+describe("a custom prefix", () => {
+  const PREFIX = "/__p__/";
+  it("routes, redirects and recognises previews under it, and ignores the default prefix", () => {
+    const ports: PreviewClientPorts = new Map();
+    expect(previewPortOf(`${ORIGIN}/__p__/5173/a.ts`, ORIGIN, PREFIX)).toBe(5173);
+    expect(previewPortOf(`${ORIGIN}/__wcvm_preview__/5173/a.ts`, ORIGIN, PREFIX)).toBeUndefined();
+    expect(routePreviewRequest(request({ url: `${ORIGIN}/__p__/3000/api?y=1` }), ORIGIN, ports, PREFIX)).toEqual({ kind: "guest", port: 3000, path: "/api?y=1" });
+    expect(routePreviewRequest(request({ url: `${ORIGIN}/__wcvm_preview__/3000/` }), ORIGIN, ports, PREFIX)).toEqual({ kind: "passthrough" });
+    ports.set("c1", 3000);
+    expect(routePreviewRequest(request({ url: `${ORIGIN}/src/a.ts`, clientId: "c1" }), ORIGIN, ports, PREFIX)).toEqual({
+      kind: "redirect",
+      location: `${ORIGIN}/__p__/3000/src/a.ts`,
+    });
+    expect(routePreviewRequest(request({ url: `${ORIGIN}/__p__/3000`, mode: "navigate" }), ORIGIN, ports, PREFIX)).toEqual({
+      kind: "redirect",
+      location: `${ORIGIN}/__p__/3000/`,
+    });
+  });
+});

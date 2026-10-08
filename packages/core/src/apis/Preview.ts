@@ -1,6 +1,8 @@
 import type { IKernelBridge } from "../bridges/kernel";
 import {
   PREVIEW_PATH_PREFIX,
+  PREVIEW_PREFIX_PARAM,
+  normalizePreviewPrefix,
   type IPreviewClaimMessage,
   type IPreviewFetchMessage,
   type IPreviewFetchReply,
@@ -85,7 +87,14 @@ const trackListeningPorts = (kernelBridge: IKernelBridge): { has: (port: number)
   return { has: (port) => ports.has(port) };
 };
 
-const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
+export interface IPreviewOptions {
+  /** Path prefix previewed pages are served under, default `/__wcvm_preview__/`. Absolute,
+   *  same-origin, e.g. `"/__preview__/"`; the virtual port follows it (`/__preview__/3000/`). */
+  pathPrefix?: string;
+}
+
+const createPreviewApi = (kernelBridge: IKernelBridge, options: IPreviewOptions = {}): IPreviewApi => {
+  const prefix = options.pathPrefix === undefined ? PREVIEW_PATH_PREFIX : normalizePreviewPrefix(options.pathPrefix);
   let enabled: Promise<void> | undefined;
   const webSockets = createPreviewWebSocketRelay(kernelBridge);
   const listeningPorts = trackListeningPorts(kernelBridge);
@@ -123,7 +132,9 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
   const enable = (): Promise<void> => {
     if (!enabled) {
       enabled = (async () => {
-        const registration = await navigator.serviceWorker.register(new URL("workers/preview/PreviewServiceWorker.js", import.meta.url), { scope: "/" });
+        const scriptUrl = new URL("workers/preview/PreviewServiceWorker.js", import.meta.url);
+        if (prefix !== PREVIEW_PATH_PREFIX) scriptUrl.searchParams.set(PREVIEW_PREFIX_PARAM, prefix);
+        const registration = await navigator.serviceWorker.register(scriptUrl, { scope: "/" });
         const ready = await navigator.serviceWorker.ready;
         // A registration that's already active+claiming from an earlier page load leaves
         // `controller` set immediately - only wait for the event when it isn't, or a page whose
@@ -151,7 +162,7 @@ const createPreviewApi = (kernelBridge: IKernelBridge): IPreviewApi => {
     return enabled;
   };
 
-  const url = (port: number, path = "/"): string => `${PREVIEW_PATH_PREFIX}${port}${path.startsWith("/") ? path : `/${path}`}`;
+  const url = (port: number, path = "/"): string => `${prefix}${port}${path.startsWith("/") ? path : `/${path}`}`;
 
   const onListen = (handler: (info: { port: number; listening: boolean }) => void): (() => void) => {
     const offListen = kernelBridge.on("net:listen", (m) => handler({ port: m.port as number, listening: true }));

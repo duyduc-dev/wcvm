@@ -1,5 +1,5 @@
 import { createFsApi } from "./apis/Fs";
-import { createPreviewApi } from "./apis/Preview";
+import { createPreviewApi, type IPreviewOptions } from "./apis/Preview";
 import { createProcessApi } from "./apis/Process";
 import { createKernelBridge } from "./bridges/kernel";
 import { WcvmError } from "./errors/WcvmError";
@@ -33,6 +33,8 @@ interface IBootOptions {
    * under such a name is not restored and is deleted from OPFS.
    */
   persist?: boolean | { root?: string; lazyDepth?: number; exclude?: string[] };
+  /** Preview relay settings, e.g. `{ pathPrefix: "/__preview__/" }` to serve previews under a custom URL prefix. */
+  preview?: IPreviewOptions;
 }
 
 const DEFAULT_BOOT_TIMEOUT_MS = 10_000;
@@ -112,7 +114,7 @@ const boot = (options: IBootOptions = {}) => {
   };
 
   const fs = createFsApi(kernelBridge, ready);
-  const preview = createPreviewApi(kernelBridge);
+  const preview = createPreviewApi(kernelBridge, options.preview);
 
   return { spawn, fs, diagnostics, ready, preview };
 };

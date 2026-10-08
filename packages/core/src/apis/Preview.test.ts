@@ -40,6 +40,21 @@ describe("createPreviewApi", () => {
     });
   });
 
+  describe("custom pathPrefix", () => {
+    it("builds urls under the chosen prefix, adding a trailing slash", () => {
+      const { bridge } = createFakeKernelBridge();
+      expect(createPreviewApi(bridge, { pathPrefix: "/__p__" }).url(3000, "/x")).toBe("/__p__/3000/x");
+      expect(createPreviewApi(bridge, { pathPrefix: "/a/b/" }).url(80)).toBe("/a/b/80/");
+    });
+
+    it("rejects a prefix that isn't a plain absolute path", () => {
+      const { bridge } = createFakeKernelBridge();
+      for (const bad of ["", "/", "relative/", "/a?b/", "/a//b/", "//evil.test/"]) {
+        expect(() => createPreviewApi(bridge, { pathPrefix: bad }), bad).toThrow(/Invalid preview path prefix/);
+      }
+    });
+  });
+
   describe("onListen", () => {
     it("reports listening:true for a net:listen event and listening:false for net:unlisten", () => {
       const { bridge, emit } = createFakeKernelBridge();

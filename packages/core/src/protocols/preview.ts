@@ -7,11 +7,26 @@
 /** Every previewable URL starts with this; the next path segment is the virtual port. */
 export const PREVIEW_PATH_PREFIX = "/__wcvm_preview__/";
 
-/** Splits `/__wcvm_preview__/<port>/<rest>` into the port and the guest-relative path
- *  (including any query string) - `undefined` if `pathname` isn't a preview URL at all. */
-export const parsePreviewPath = (pathname: string): { port: number; path: string } | undefined => {
-  if (!pathname.startsWith(PREVIEW_PATH_PREFIX)) return undefined;
-  const rest = pathname.slice(PREVIEW_PATH_PREFIX.length);
+/** Query parameter the Service Worker is registered with to learn a non-default prefix. */
+export const PREVIEW_PREFIX_PARAM = "prefix";
+
+/** Validates a host-chosen preview prefix and normalizes it to a path with a trailing slash. Throws on
+ *  anything that couldn't be a plain same-origin path prefix. */
+export const normalizePreviewPrefix = (raw: string): string => {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("/") || /[?#\\\s]/.test(trimmed) || trimmed.includes("//")) {
+    throw new Error(`Invalid preview path prefix ${JSON.stringify(raw)}: expected an absolute path like "/__preview__/"`);
+  }
+  const normalized = trimmed.endsWith("/") ? trimmed : `${trimmed}/`;
+  if (normalized === "/") throw new Error('Invalid preview path prefix "/": it would capture the whole origin');
+  return normalized;
+};
+
+/** Splits `<prefix><port>/<rest>` (default `/__wcvm_preview__/<port>/<rest>`) into the port and the
+ *  guest-relative path (including any query string) - `undefined` if `pathname` isn't a preview URL. */
+export const parsePreviewPath = (pathname: string, prefix: string = PREVIEW_PATH_PREFIX): { port: number; path: string } | undefined => {
+  if (!pathname.startsWith(prefix)) return undefined;
+  const rest = pathname.slice(prefix.length);
   const slash = rest.indexOf("/");
   const portText = slash === -1 ? rest : rest.slice(0, slash);
   const port = Number(portText);

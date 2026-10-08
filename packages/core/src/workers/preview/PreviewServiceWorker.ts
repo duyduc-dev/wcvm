@@ -22,6 +22,7 @@ import {
   type IPreviewProbeMessage,
   type IPreviewProbeReply,
 } from "../../protocols/preview";
+import { PREVIEW_PATH_PREFIX, PREVIEW_PREFIX_PARAM } from "../../protocols/preview";
 import { chooseHost, previewPortOf, previewRedirect, routePreviewRequest, type PreviewClientPorts, type PreviewRoute } from "./previewRouting";
 import { injectWebSocketShim } from "./webSocketShim";
 
@@ -65,6 +66,10 @@ interface IServiceWorkerGlobal {
 }
 
 const sw = self as unknown as IServiceWorkerGlobal;
+
+// A host that customised the prefix (boot({ preview: { pathPrefix } })) registers this worker with
+// it in the script URL's query - the worker has no other channel before its first fetch.
+const prefix = new URL((self as unknown as { location: { href: string } }).location.href).searchParams.get(PREVIEW_PREFIX_PARAM) ?? PREVIEW_PATH_PREFIX;
 
 sw.addEventListener("install", () => {
   sw.skipWaiting();
@@ -152,7 +157,7 @@ const relay = (client: IClient, message: Omit<IPreviewFetchMessage, "type" | "re
 const listHostClients = async (): Promise<IClient[]> => {
   const matchAll = async () => {
     const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-    const candidates = clients.filter((client) => previewPortOf(client.url, sw.location.origin) === undefined);
+    const candidates = clients.filter((client) => previewPortOf(client.url, sw.location.origin, prefix) === undefined);
     // A top-level page is the host. Only when there is none is a nested one taken: an embedded
     // editor (Studio's /embed in another site's iframe) IS the wcvm page, and the site framing it
     // is cross-origin, so it can never appear in this list - the embed itself is all there is.
@@ -234,7 +239,7 @@ const withWebSocketShim = (request: Request, result: IPreviewFetchResult): IPrev
   if (request.mode !== "navigate" || !/^\s*text\/html/i.test(contentType) || encoding.toLowerCase() !== "identity") return result;
   return {
     ...result,
-    body: injectWebSocketShim(result.body),
+    body: injectWebSocketShim(result.body, prefix),
     // The guest's own Content-Length described the body before injection.
     headers: result.headers.filter(([key]) => key.toLowerCase() !== "content-length"),
   };
@@ -263,7 +268,7 @@ const clientPorts: PreviewClientPorts = new Map();
 /** A client this worker has never seen (see previewRouting.ts): ask the browser what it is, once. */
 const lookupClientPort = async (clientId: string): Promise<number | undefined> => {
   const client = await sw.clients.get(clientId);
-  const port = client ? previewPortOf(client.url, sw.location.origin) : undefined;
+  const port = client ? previewPortOf(client.url, sw.location.origin, prefix) : undefined;
   clientPorts.set(clientId, port ?? null);
   return port;
 };
@@ -278,7 +283,7 @@ const respond = (event: IFetchEvent, route: Exclude<PreviewRoute, { kind: "passt
     case "lookup":
       return lookupClientPort(route.clientId).then((port) => {
         if (port === undefined) return fetch(event.request); // not a preview after all: as if untouched
-        return respond(event, previewRedirect(port, new URL(event.request.url)));
+        return respond(event, previewRedirect(port, new URL(event.request.url), prefix));
       });
   }
 };
@@ -289,6 +294,7 @@ sw.addEventListener("fetch", (event) => {
     { url: request.url, mode: request.mode, referrer: request.referrer, clientId, resultingClientId },
     sw.location.origin,
     clientPorts,
+    prefix,
   );
   if (route.kind === "passthrough") return; // not calling respondWith(): the browser handles it as normal
   event.respondWith(respond(event, route));

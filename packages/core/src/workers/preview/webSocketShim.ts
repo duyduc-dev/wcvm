@@ -228,7 +228,7 @@ export function installPreviewWebSocketShim(win: IShimWindow, prefix: string): v
   win.WebSocket = PreviewWebSocket as unknown as typeof WebSocket;
 }
 
-const SHIM_SCRIPT = `<script>(${installPreviewWebSocketShim.toString()})(window, ${JSON.stringify(PREVIEW_PATH_PREFIX)});</script>`;
+const shimScript = (prefix: string): string => `<script>(${installPreviewWebSocketShim.toString()})(window, ${JSON.stringify(prefix)});</script>`;
 
 // Byte offsets and character offsets agree under a single-byte decoding, so the insertion point
 // found in this string is also the right byte offset - whatever the document's real charset is.
@@ -239,7 +239,7 @@ const latin1 = new TextDecoder("latin1");
  * `<html>`/the doctype, or the very start) - but after a `<meta charset>` near the top if there is
  * one, since a browser only looks for that in the first 1024 bytes and the shim is bigger than that.
  */
-export const injectWebSocketShim = (html: Uint8Array): Uint8Array => {
+export const injectWebSocketShim = (html: Uint8Array, prefix: string = PREVIEW_PATH_PREFIX): Uint8Array => {
   const text = latin1.decode(html);
   const head = /<head(?=[\s>/])[^>]*>/i.exec(text);
   const charset = /<meta(?=[\s/])[^>]*charset[^>]*>/i.exec(text);
@@ -250,7 +250,7 @@ export const injectWebSocketShim = (html: Uint8Array): Uint8Array => {
     const opening = /<html(?=[\s>])[^>]*>/i.exec(text) ?? /<!doctype[^>]*>/i.exec(text);
     if (opening) at = opening.index + opening[0].length;
   }
-  const script = new TextEncoder().encode(SHIM_SCRIPT);
+  const script = new TextEncoder().encode(shimScript(prefix));
   const out = new Uint8Array(html.length + script.length);
   out.set(html.subarray(0, at), 0);
   out.set(script, at);

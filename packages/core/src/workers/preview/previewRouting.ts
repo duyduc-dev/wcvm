@@ -43,27 +43,32 @@ export type PreviewRoute =
 export type PreviewClientPorts = Map<string, number | null>;
 
 /** The preview port a same-origin URL belongs to, if any. */
-export const previewPortOf = (url: string, origin: string): number | undefined => {
+export const previewPortOf = (url: string, origin: string, prefix: string = PREVIEW_PATH_PREFIX): number | undefined => {
   const parsed = new URL(url);
-  return parsed.origin === origin ? parsePreviewPath(parsed.pathname)?.port : undefined;
+  return parsed.origin === origin ? parsePreviewPath(parsed.pathname, prefix)?.port : undefined;
 };
 
 /** `url`'s path and query, moved inside `port`'s preview prefix. */
-export const previewRedirect = (port: number, url: URL): { kind: "redirect"; location: string } => ({
+export const previewRedirect = (port: number, url: URL, prefix: string = PREVIEW_PATH_PREFIX): { kind: "redirect"; location: string } => ({
   kind: "redirect",
-  location: `${url.origin}${PREVIEW_PATH_PREFIX}${port}${url.pathname}${url.search}`,
+  location: `${url.origin}${prefix}${port}${url.pathname}${url.search}`,
 });
 
-export const routePreviewRequest = (request: IRoutableRequest, origin: string, clientPorts: PreviewClientPorts): PreviewRoute => {
+export const routePreviewRequest = (
+  request: IRoutableRequest,
+  origin: string,
+  clientPorts: PreviewClientPorts,
+  prefix: string = PREVIEW_PATH_PREFIX,
+): PreviewRoute => {
   const url = new URL(request.url);
   if (url.origin !== origin) return { kind: "passthrough" };
   const navigate = request.mode === "navigate";
 
-  const target = parsePreviewPath(url.pathname);
+  const target = parsePreviewPath(url.pathname, prefix);
   if (target) {
     // `/__wcvm_preview__/5173` with no trailing slash: a document there would resolve its own
     // `./x` to `/__wcvm_preview__/x`, outside its port - send it to the slashed form first.
-    if (navigate && url.pathname === `${PREVIEW_PATH_PREFIX}${target.port}`) return previewRedirect(target.port, new URL(`/${url.search}`, url));
+    if (navigate && url.pathname === `${prefix}${target.port}`) return previewRedirect(target.port, new URL(`/${url.search}`, url), prefix);
     if (navigate && request.resultingClientId) clientPorts.set(request.resultingClientId, target.port);
     return { kind: "guest", port: target.port, path: target.path + url.search };
   }
@@ -71,8 +76,8 @@ export const routePreviewRequest = (request: IRoutableRequest, origin: string, c
   if (navigate) {
     // A previewed page navigating to one of its own absolute paths (a link to "/about", or
     // `location.href = "/"`) - its referrer is the page it's leaving.
-    const port = request.referrer ? previewPortOf(request.referrer, origin) : undefined;
-    if (port !== undefined) return previewRedirect(port, url);
+    const port = request.referrer ? previewPortOf(request.referrer, origin, prefix) : undefined;
+    if (port !== undefined) return previewRedirect(port, url, prefix);
     if (request.resultingClientId) clientPorts.set(request.resultingClientId, null);
     return { kind: "passthrough" };
   }
@@ -80,7 +85,7 @@ export const routePreviewRequest = (request: IRoutableRequest, origin: string, c
   if (!request.clientId) return { kind: "passthrough" };
   const port = clientPorts.get(request.clientId);
   if (port === undefined) return { kind: "lookup", clientId: request.clientId };
-  return port === null ? { kind: "passthrough" } : previewRedirect(port, url);
+  return port === null ? { kind: "passthrough" } : previewRedirect(port, url, prefix);
 };
 
 /** One wcvm host page (a top-level window client) the preview Service Worker could relay through. */
