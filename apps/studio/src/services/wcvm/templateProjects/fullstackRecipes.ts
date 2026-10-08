@@ -7,7 +7,7 @@
 //  - Vite-based ones (SvelteKit, React Router, Astro) take the shared pins (`pinVitePackage`): Vite 7 -
 //    there is no WebAssembly Rolldown here, so Vite 8 (and so Astro 7, Nuxt 4) can't run - plus esbuild
 //    and rollup swapped for their WASM builds. Astro is ^6 for that reason.
-//  - Under the preview, the app lives at `/__wcvm_preview__/<port>/` while its dev server only ever
+//  - Under the preview, the app lives at `/__studio_preview__/<port>/` while its dev server only ever
 //    sees the path with that prefix stripped. A client-side router matches against the real
 //    `location.pathname`, so it needs the prefix at runtime (the port isn't known ahead of time):
 //    React Router below (`app/entry.client.tsx`), as TanStack Router does. SvelteKit derives its base
@@ -31,6 +31,7 @@ import {
 } from "./fullstackStarters";
 import { pinVitePackage } from "./vitePins";
 
+import { PREVIEW_SEGMENT } from "@/lib/wcvm/previewPrefix";
 export type FullstackKind = "nextjs" | "nextjs-ts" | "sveltekit" | "react-router" | "astro";
 
 export interface IFullstackRecipe {
@@ -327,12 +328,12 @@ const reactRouter: IFullstackRecipe = {
 import { hydrateRoot } from "react-dom/client";
 import { HydratedRouter } from "react-router/dom";
 
-// Studio serves the preview under /__wcvm_preview__/<port>/, but the dev server only ever sees the
+// Studio serves the preview under /__studio_preview__/<port>/, but the dev server only ever sees the
 // path with that prefix stripped - so the client router has to be told about it. The port isn't known
 // ahead of time (it's whatever the dev server picks), so this is read at runtime. Outside the preview
 // this is "/" and does nothing.
 const segments = window.location.pathname.split("/").filter(Boolean);
-if (segments[0] === "__wcvm_preview__" && segments[1]) {
+if (segments[0] === "${PREVIEW_SEGMENT}" && segments[1]) {
   (window as any).__reactRouterContext.basename = "/" + segments[0] + "/" + segments[1];
 }
 

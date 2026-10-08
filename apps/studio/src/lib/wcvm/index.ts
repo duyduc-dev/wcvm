@@ -1,4 +1,5 @@
 import { boot, type IWcvm } from "wcvm";
+import { PREVIEW_PATH_PREFIX } from "./previewPrefix";
 
 let WcvmInstance: IWcvm;
 let bootPromise: Promise<void> | undefined;
@@ -15,6 +16,7 @@ const bootWcvm = (): Promise<void> => {
 
   bootPromise = (async () => {
     WcvmInstance = boot({
+      preview: { pathPrefix: PREVIEW_PATH_PREFIX },
       // lazyDepth 4 matches DEFAULT_PROJECTS_DIR (/home/user/projects/<name> - home/user/projects
       // is 3 segments, so each project's own directory, the 4th, becomes its own lazy-restored
       // unit). Without this, boot restores every persisted project's full node_modules on every

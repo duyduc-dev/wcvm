@@ -1,4 +1,5 @@
 import { getWcvmInstance } from "@/lib/wcvm";
+import { PREVIEW_SEGMENT } from "@/lib/wcvm/previewPrefix";
 import { collectText } from "./processUtils";
 import { tryCloneFromCache } from "./templateCache";
 import { pinVitePackage } from "./vitePins";
@@ -17,7 +18,7 @@ export interface TanstackRouterTemplateCreationResult {
 // iframe's own URL directly): the ORIGINAL version of this comment claimed wcvm's preview needs
 // no base/basepath handling. That's true for every OTHER
 // template here, but wrong for a CLIENT-SIDE ROUTER specifically: wcvm's own preview relay DOES
-// serve each project under a real URL prefix, `/__wcvm_preview__/<port>/` (see PLAN.md's
+// serve each project under a real URL prefix, `/__studio_preview__/<port>/` (see PLAN.md's
 // "absolute-path routing") - the iframe's own `src` IS that prefixed URL, so
 // `window.location.pathname` inside it genuinely starts with it. TanStack Router matches routes
 // against that real pathname, so without a matching `basepath`, the app's own root route never
@@ -47,14 +48,14 @@ import { createRoot } from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
-// wcvm's preview relay serves this project under a /__wcvm_preview__/<port>/ prefix - the router
+// wcvm's preview relay serves this project under a /__studio_preview__/<port>/ prefix - the router
 // needs to know about it, since it matches routes against the real window.location.pathname,
 // which includes that prefix inside the preview iframe. The port isn't known ahead of time (you
 // start the dev server yourself, on whatever port Vite picks), so this is computed at runtime,
 // not a build-time Vite "base" config. Outside wcvm's preview (e.g. a plain "vite preview"), this
 // is just "/", Vite's own default.
 const segments = window.location.pathname.split("/").filter(Boolean);
-const basepath = segments[0] === "__wcvm_preview__" && segments[1] ? "/" + segments[0] + "/" + segments[1] : "/";
+const basepath = segments[0] === "${PREVIEW_SEGMENT}" && segments[1] ? "/" + segments[0] + "/" + segments[1] : "/";
 
 // The @tanstack/router-plugin Vite plugin generates ./routeTree.gen.ts on dev start.
 const router = createRouter({

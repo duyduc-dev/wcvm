@@ -9,7 +9,7 @@ import { VITE_PIN, WASM_OVERRIDES } from "./vitePins";
 // - `modulePrefix`/import paths use the fixed name "ember-app" instead of the project's own name
 //   (the package.json "name" is fixed to match - see buildEmberPackageJson), so the project's own
 //   name can never break the app.
-// - `locationType: "hash"`: the preview relay serves the app under /__wcvm_preview__/<port>/, which
+// - `locationType: "hash"`: the preview relay serves the app under /__studio_preview__/<port>/, which
 //   Ember's history router would see as an unknown route (UnrecognizedURLError). Same root cause
 //   as tanstackRouterTemplateProject.ts's basepath fix, but a hash location needs no prefix at all.
 // - `vite` pinned like every other template (vitePins.ts); esbuild/rollup swapped for their wasm

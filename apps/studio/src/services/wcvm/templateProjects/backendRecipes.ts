@@ -14,7 +14,7 @@ export type BackendKind = "express" | "express-ts" | "nestjs";
 
 /** A small page every backend serves at `/`, so the otherwise headless server has something to
  * look at in the preview. It calls `GET api/hello` - RELATIVE, so it resolves under the preview
- * relay's `/__wcvm_preview__/<port>/` prefix as well as on a plain host. */
+ * relay's `/__studio_preview__/<port>/` prefix as well as on a plain host. */
 const demoHtml = (name: string): string => `<!doctype html>
 <html lang="en">
   <head>

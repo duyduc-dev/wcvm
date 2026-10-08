@@ -5,7 +5,7 @@ import { VITE_PIN, WASM_OVERRIDES } from "./vitePins";
 // tooling (vitest/jsdom/prettier and the `test` target - nothing a browser sandbox runs) and with
 // three deliberate edits:
 // - `withHashLocation()` in app.config.ts: the preview relay serves the app under
-//   /__wcvm_preview__/<port>/, which Angular's path router sees as an unknown route (NG04002).
+//   /__studio_preview__/<port>/, which Angular's path router sees as an unknown route (NG04002).
 // - an SVG favicon instead of the binary favicon.ico (this recipe is text-only).
 // - `@angular/*` pinned to exactly 22.2.0 (what this was verified against).
 //
@@ -528,7 +528,7 @@ import { routes } from './app.routes';
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
-    // Hash routing: the preview relay serves the app under /__wcvm_preview__/<port>/, which a
+    // Hash routing: the preview relay serves the app under /__studio_preview__/<port>/, which a
     // path-based router would see as an unknown route (NG04002).
     provideRouter(routes, withHashLocation())
   ]

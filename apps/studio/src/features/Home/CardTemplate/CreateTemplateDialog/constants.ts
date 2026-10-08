@@ -168,7 +168,7 @@ export const FRAMEWORK_OPTIONS: IFrameworkOption[] = [
     // a cyclic import, hit by a genuine 3-module cycle inside @tanstack/router-core), plus a
     // preview-relay basepath issue specific to this being the first CLIENT-SIDE-ROUTED template
     // (TanStack Router matches routes against the real `window.location.pathname`, which includes
-    // wcvm's own `/__wcvm_preview__/<port>/` prefix - see this template's own MAIN_TSX). Verified
+    // wcvm's own `/__studio_preview__/<port>/` prefix - see this template's own MAIN_TSX). Verified
     // end to end in real Chromium against the real npm registry: install, dev server start,
     // real route rendering, and real client-side navigation between routes.
     id: "tanstack-router",
