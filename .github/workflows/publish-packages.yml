@@ -1,0 +1,109 @@
+# Publishes an npm package when a release tag is pushed (see PUBLISHING.md).
+#
+#   git tag v0.3.3     && git push origin v0.3.3        ->  publishes `wcvm`      (packages/core)
+#   git tag sdk-v0.1.2 && git push origin sdk-v0.1.2    ->  publishes `@wcvm/sdk` (packages/sdk)
+#
+# The tag must equal the version in that package's package.json, or the run stops before publishing.
+# Releases go out under the `next` dist-tag; promote one with `npm dist-tag add <name>@<version> latest`
+# once you are happy with it.
+#
+# Needs one repository secret: NPM_TOKEN, an npm "Automation" token (or a granular token with publish
+# rights on both packages) that does not ask for a one-time code.
+name: Publish packages
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "sdk-v*"
+
+permissions:
+  contents: read
+  id-token: write # lets npm attach a provenance statement to the published package
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Work out which package this tag is for
+        id: pkg
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            sdk-v*) echo "dir=packages/sdk"  >> "$GITHUB_OUTPUT"; echo "version=${TAG#sdk-v}" >> "$GITHUB_OUTPUT"; echo "kind=sdk"  >> "$GITHUB_OUTPUT" ;;
+            v*)     echo "dir=packages/core" >> "$GITHUB_OUTPUT"; echo "version=${TAG#v}"     >> "$GITHUB_OUTPUT"; echo "kind=core" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unexpected tag $TAG" >&2; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # the version comes from "packageManager" in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches package.json and is not already published
+        id: guard
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          WANT: ${{ steps.pkg.outputs.version }}
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./package.json').name")"
+          have="$(node -p "require('./package.json').version")"
+          if [ "$have" != "$WANT" ]; then
+            echo "::error::tag says $WANT but $name's package.json says $have"; exit 1
+          fi
+          if npm view "$name@$have" version >/dev/null 2>&1; then
+            echo "::warning::$name@$have is already on npm; nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      # --- wcvm (core): the full checks from PUBLISHING.md ---------------------------------------
+      - name: Typecheck (core)
+        if: steps.pkg.outputs.kind == 'core' && steps.guard.outputs.skip != 'true'
+        working-directory: packages/core
+        run: npx tsc --noEmit -p .
+      - name: Unit tests (core)
+        if: steps.pkg.outputs.kind == 'core' && steps.guard.outputs.skip != 'true'
+        working-directory: packages/core
+        run: npx vitest run
+      - name: Build (core)
+        if: steps.pkg.outputs.kind == 'core' && steps.guard.outputs.skip != 'true'
+        run: pnpm --filter wcvm build
+      - name: Real-Chromium end-to-end tests (core)
+        if: steps.pkg.outputs.kind == 'core' && steps.guard.outputs.skip != 'true'
+        working-directory: examples/playground
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright test
+
+      # --- @wcvm/sdk ------------------------------------------------------------------------------
+      - name: Typecheck and build (sdk)
+        if: steps.pkg.outputs.kind == 'sdk' && steps.guard.outputs.skip != 'true'
+        working-directory: packages/sdk
+        run: |
+          npx tsc --noEmit -p .
+          pnpm build
+
+      - name: Show what would be published
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        run: npm pack --dry-run
+
+      - name: Publish
+        if: steps.guard.outputs.skip != 'true'
+        working-directory: ${{ steps.pkg.outputs.dir }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag next --provenance

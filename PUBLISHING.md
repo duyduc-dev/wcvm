@@ -3,6 +3,31 @@
 The public package is `packages/core` (name `wcvm`). Only the built `dist/`, `README.md`, `LICENSE`
 and the third-party notices are published.
 
+## Publishing from GitHub Actions
+
+`.github/workflows/publish-packages.yml` publishes when you push a release tag, so nobody needs a local npm login:
+
+| Tag | Publishes | Checks it runs first |
+|---|---|---|
+| `v<version>` (e.g. `v0.3.3`) | `wcvm` (`packages/core`) | `tsc`, Vitest, build, the Playwright suite in real Chromium |
+| `sdk-v<version>` (e.g. `sdk-v0.1.2`) | `@wcvm/sdk` (`packages/sdk`) | `tsc`, build |
+
+Steps:
+
+1. Bump `version` in the package's `package.json`, commit, push `main`.
+2. `git tag v0.3.3 && git push origin v0.3.3` (or `sdk-v0.1.2`).
+
+The run stops before publishing if the tag differs from `package.json`'s version, and does nothing if that version is already on npm.
+It publishes under the **`next`** dist-tag with a provenance statement; promote it yourself once you are happy:
+`npm dist-tag add wcvm@<version> latest`.
+
+One-time setup: add a repository secret **`NPM_TOKEN`** (Settings -> Secrets and variables -> Actions -> Repository secrets): an npm
+*Automation* token, or a granular token with read/write on `wcvm` and `@wcvm/sdk`, so no one-time code is requested. If you would rather
+not store a token, npm's "trusted publishing" (npmjs.com -> package -> Settings -> Trusted Publisher -> this repo and
+`publish-packages.yml`) works with this workflow too; then drop `NODE_AUTH_TOKEN` from the publish step.
+
+For `@wcvm/sdk`, deploy Studio first if the wire protocol changed (see below). The manual steps in the rest of this file still work.
+
 ## Before publishing
 
 Work from a clean, pushed `main`. Pick an unused SemVer version in `packages/core/package.json`
