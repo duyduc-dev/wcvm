@@ -1,6 +1,6 @@
 {
   "name": "wcvm",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "A WebContainer-style Node.js sandbox that runs entirely in the browser, in Web Workers, with no backend.",
   "keywords": [
     "webcontainer",
