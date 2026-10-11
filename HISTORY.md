@@ -1861,3 +1861,12 @@ and requests ITSELF"), which fails on the old kernel.
 
 Same round: `registerKernelWorker` took a `name` option, which made the `new Worker(new URL(...), { name })` options non-static, and Vite 5
 (VitePress's) refuses to bundle that ("unable to parse the worker options as the value is not static"). The options are now a literal.
+
+## Safari: no `Symbol.dispose` (2026-10-11)
+
+`npm create vite` failed in Safari with `description@[native code]` out of `assignFunctionName` in `readline`'s `Interface`. Safari has
+no `Symbol.dispose`/`Symbol.asyncDispose`, so the `SymbolDispose` primordial was `undefined`, and Node's
+`assignFunctionName(SymbolDispose, ...)` reads the symbol's description, which throws on `undefined`. Chromium has both symbols, so
+nothing earlier caught it. Fix: `primordials.ts`'s `ensureDisposeSymbols()` defines them with `Symbol.for("nodejs.dispose")` /
+`Symbol.for("nodejs.asyncDispose")` (what Node itself uses) before Node's primordials script runs. Not testable in Vitest or Chromium:
+only a real Safari shows it, so check a new Node `lib/` feature against Safari's missing globals when one is added.
